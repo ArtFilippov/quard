@@ -1,0 +1,21 @@
+[project]
+name = "eryx"
+version = "1.0.0"
+description = "Pinned native Python analysis for uv/src projects"
+requires-python = ">=3.12"
+license = "MIT"
+
+[dependency-groups]
+dev = [
+  "pylint==4.0.8",
+  "clean-architecture-linter-plugin==1.2.2",
+  "pyright[nodejs]==1.1.414",
+  "tach==0.35.1",
+  "pydoclint==0.9.1",
+  "tomlkit==0.13.3",
+  "packaging==25.0",
+  "jsonschema==4.26.0",
+]
+
+[tool.uv]
+package = false

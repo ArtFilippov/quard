@@ -1,0 +1,16 @@
+{
+  "eryx_version": "1.0.0",
+  "python_minimum": "3.12",
+  "dependencies": {
+    "pylint": "4.0.8",
+    "clean-architecture-linter-plugin": "1.2.2",
+    "pyright": "1.1.414",
+    "tach": "0.35.1",
+    "pydoclint": "0.9.1",
+    "tomlkit": "0.13.3",
+    "packaging": "25.0"
+  },
+  "extras": {"pyright": ["nodejs"]},
+  "upstream_release_checked": "2026-09-21",
+  "note": "Exact top-level pins; uv.lock resolves and fixes transitive dependencies. No third-party wheels are embedded."
+}

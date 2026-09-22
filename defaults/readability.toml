@@ -1,0 +1,35 @@
+# Edit .eryx/readability.toml, then run: uv run --locked --group dev python eryx/apply.py
+# Length means Pylint's own metrics, NOT an AST-independent line count.
+[production]
+max_line_length = 100
+max_module_lines = 400
+max_statements = 30
+max_complexity = 8
+max_branches = 8
+max_nested_blocks = 4
+max_locals = 10
+max_returns = 4
+max_bool_expr = 4
+max_args = 5
+max_positional_arguments = 4
+max_attributes = 7
+max_public_methods = 12
+max_parents = 3
+min_public_methods = 2
+min_similarity_lines = 4
+max_try_statements = 1
+
+# Test-only overrides. Missing keys inherit production values.
+[tests]
+max_module_lines = 800
+max_statements = 60
+max_complexity = 10
+max_branches = 10
+max_nested_blocks = 4
+max_locals = 20
+max_returns = 6
+max_args = 10
+max_positional_arguments = 10
+max_public_methods = 30
+min_public_methods = 0
+max_try_statements = 3

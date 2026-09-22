@@ -1,0 +1,10 @@
+# Exclusions are directory NAMES, not arbitrary regexes.
+# Review migrations: hand-written migrations may deserve separate checks.
+exclude_directory_names = [
+  ".git", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+  ".ruff_cache", ".tox", ".nox", ".eryx", "node_modules", "build", "dist",
+  "vendor", "vendored", "_vendor", "generated", "_generated", "migrations",
+]
+# Test code is recognized by these directory names beneath src/, or tests/.
+test_directory_names = ["tests", "test"]
+# Also check root/tests/ when it exists. Other root scripts are outside src policy.
