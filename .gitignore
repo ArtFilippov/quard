@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.eryx/reports/
+.eryx/logs/
+.eryx/cache/
+.tach/
