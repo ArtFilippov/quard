@@ -26,8 +26,11 @@ not counted as verified. Reports distinguish selected `secret_inputs`, confirmed
 `secret_skipped_count`. An independent Presidio job scans the same effective file
 scope in both English and Russian (including country-specific identifiers, dates,
 URLs and IP addresses), using pinned local `en_core_web_sm` and `ru_core_news_sm`
-models. It reports entity type, relative path, physical line/column, confidence
-score and span length without matched values. `presidio_inputs`, `presidio_scanned` /
+models. It also reports `LOCAL_PATH_IDENTIFIER` for the account component of
+conventional home, Users and scratch directories, and `REMOTE_ACCOUNT` for
+user@host operands in SSH, SCP and SFTP commands. It reports entity type,
+relative path, physical line/column, confidence score and span length without
+matched values. `presidio_inputs`, `presidio_scanned` /
 `presidio_count`, `presidio_skipped` / `presidio_skipped_count` and
 `presidio_unconfirmed` separately describe selected, confirmed text, unsupported
 binary and unconfirmed inputs. Missing resources, partial coverage and zero

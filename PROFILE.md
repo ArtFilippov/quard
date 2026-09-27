@@ -39,7 +39,7 @@ The installer verifies an intentional secret in an isolated fixture. An independ
 Presidio job checks both languages in the pinned analyzer 2.2.360 with pinned local
 `en_core_web_sm` and `ru_core_news_sm` 3.8.0 models and no downloads during a check.
 The expected active inventory is checked on both installation and each scan: exactly
-16 recognizers and the following 22 entity types (see `_presidio_policy.py` for the
+18 English recognizers and 24 entity types (see `_presidio_policy.py` for the
 exact per-recognizer mapping, including the spaCy NER mapping):
 
 | Recognizers | Standard English entities |
@@ -49,6 +49,7 @@ exact per-recognizer mapping, including the spaCy NER mapping):
 | Credit card, crypto, IBAN, medical license | CREDIT_CARD, CRYPTO, IBAN_CODE, MEDICAL_LICENSE |
 | UK NHS | UK_NHS |
 | US bank, driver license, ITIN, passport, SSN | US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN |
+| Contextual local path / remote account | LOCAL_PATH_IDENTIFIER, REMOTE_ACCOUNT |
 
 All applicable recognizers run for each selected file, with no Eryx entity allowlist,
 minimum score cutoff, baseline or value suppression. This inventory includes the
@@ -61,6 +62,14 @@ name, contact, date, URL, network and country-specific identifiers as well as cl
 input. `codestyle` retains
 the `src/` layout and architecture requirements.
 
+`LOCAL_PATH_IDENTIFIER` marks only the account component in `/home/<account>`,
+`/Users/<account>`, `/scratch/<account>` and `/mnt/scratch/<account>`;
+common shared directory names are excluded. `REMOTE_ACCOUNT` marks only the
+account in `user@host` operands of SSH, SCP and SFTP commands (SCP requires
+the remote `host:path` form). Other absolute paths and ordinary commands do
+not become contextual findings. The installer probes both contextual types and
+clean counterexamples with synthetic data.
+
 The Russian inventory contains the eight shared Presidio pattern recognizers
 (CRYPTO, DATE_TIME, EMAIL_ADDRESS, IBAN_CODE, IP_ADDRESS, MEDICAL_LICENSE,
 PHONE_NUMBER, URL), the seven English country-specific/credit-card recognizers
@@ -69,8 +78,8 @@ US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN), Russian spaCy
 NER (PERSON, LOCATION, ORGANIZATION), a Russian month-name date pattern and
 three Russian domestic identifier patterns: RU_INN (10/12 digits), RU_SNILS
 (3-3-3-2 digits), RU_PASSPORT (4 + 6 digits).
-All 20 Russian recognizers and their 21 entity types are verified at install and
-check time alongside the 16 English recognizers. The Russian model's only NER
+All 22 Russian recognizers and their 23 entity types are verified at install and
+check time alongside the 18 English recognizers. The Russian model's only NER
 labels are PER, LOC and ORG; dates, nationality, age, ID, email and phone are not
 claimed as Russian NER categories. Dates and contact details instead use pattern
 recognizers. Identifier patterns indicate *potential* identifiers, not checksum

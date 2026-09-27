@@ -1,6 +1,8 @@
 """Pinned English/Russian Presidio 2.2.360 and spaCy 3.8.0 inventory."""
 from __future__ import annotations
 
+from _contextual_recognizers import add_contextual_recognizers
+
 
 # Exact active registry, including the spaCy NER label mapping. A changed default
 # registry must be reviewed rather than quietly narrowing or changing the policy.
@@ -11,9 +13,11 @@ ENGLISH_RECOGNIZERS = {
     "EmailRecognizer": ("EMAIL_ADDRESS",),
     "IbanRecognizer": ("IBAN_CODE",),
     "IpRecognizer": ("IP_ADDRESS",),
+    "LocalPathRecognizer": ("LOCAL_PATH_IDENTIFIER",),
     "MedicalLicenseRecognizer": ("MEDICAL_LICENSE",),
     "NhsRecognizer": ("UK_NHS",),
     "PhoneRecognizer": ("PHONE_NUMBER",),
+    "RemoteAccountRecognizer": ("REMOTE_ACCOUNT",),
     "SpacyRecognizer": ("AGE", "DATE_TIME", "EMAIL", "ID", "LOCATION", "NRP",
                         "ORGANIZATION", "PERSON", "PHONE_NUMBER"),
     "UrlRecognizer": ("URL",),
@@ -72,6 +76,7 @@ def add_russian_recognizers(engine) -> None:
         engine.registry.add_recognizer(PatternRecognizer(
             supported_entity=entity, name=name, supported_language="ru",
             patterns=[Pattern(name, regex, 0.3)], context=context))
+    add_contextual_recognizers(engine)
 
 
 class PresidioPolicyError(RuntimeError):
@@ -81,7 +86,9 @@ class PresidioPolicyError(RuntimeError):
 def verify_inventory(engine) -> None:
     """Fail closed on missing, additional or inactive recognizers and NER labels."""
     expected = {(name, name, "en", tuple(entities)) for name, entities in ENGLISH_RECOGNIZERS.items()}
-    expected |= {("PatternRecognizer" if name.startswith("Ru") else name, name, "ru", tuple(entities))
+    expected |= {("PatternRecognizer" if name in {"RuInnRecognizer", "RuSnilsRecognizer",
+                                                  "RuPassportRecognizer", "RuDateRecognizer"} else name,
+                  name, "ru", tuple(entities))
                  for name, entities in RUSSIAN_RECOGNIZERS.items()}
 
     def inventory(recognizers):

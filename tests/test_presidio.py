@@ -83,6 +83,71 @@ class PresidioTests(unittest.TestCase):
                           "123456789"):
                 self.assertNotIn(value, content, path)
 
+    def test_real_contextual_identifiers_report_only_account_positions(self):
+        lines = [
+            'root = "/home/mira_k/work"',
+            'cache = "/scratch/Соколова/results"',
+            'input = "/Users/Alex-7/image.png"',
+            'ssh -p 2222 build_8@compute.example',
+            'scp ./file.py otto@cluster.example:/work/file.py',
+            'scp nina@cluster.example:results.txt ./results.txt',
+            'sftp -P 2222 ivan@host.example',
+            'ordinary = "/usr/local/share"',
+            'temporary = "/tmp/build_8/file"',
+            'shared = "/home/shared/data"',
+            'site = "https://host.example/home/person/page"',
+            'echo dev@host.example',
+            'ssh host.example',
+            'scp ./local.txt ./copy.txt',
+            'sftp host.example',
+            'ssh host.example && echo visitor@host.example',
+        ]
+        source = self.root / "review/context.txt"
+        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        binary = self.root / "review/image.png"
+        binary.write_bytes(b"\x89PNG\0")
+        before = source.read_bytes()
+        report = run_checks(self.root)
+        presidio = next(tool for tool in report["tools"] if tool["name"] == "presidio")
+        self.assertEqual((report["exit_code"], presidio["status"], presidio["exit_code"]),
+                         (1, "violations", 1), report)
+        expected = [("LOCAL_PATH_IDENTIFIER", 1, "mira_k"),
+                    ("LOCAL_PATH_IDENTIFIER", 2, "Соколова"),
+                    ("LOCAL_PATH_IDENTIFIER", 3, "Alex-7"),
+                    ("REMOTE_ACCOUNT", 4, "build_8"),
+                    ("REMOTE_ACCOUNT", 5, "otto"),
+                    ("REMOTE_ACCOUNT", 6, "nina"),
+                    ("REMOTE_ACCOUNT", 7, "ivan")]
+        actual = {(d["rule"], d["line"], d["column"], d["span_length"])
+                  for d in report["diagnostics"] if d["tool"] == "presidio" and
+                  d["rule"] in {"LOCAL_PATH_IDENTIFIER", "REMOTE_ACCOUNT"}}
+        self.assertEqual(actual, {(entity, line, lines[line - 1].index(value) + 1, len(value))
+                                  for entity, line, value in expected})
+        self.assertEqual(report["coverage"]["presidio_scanned"],
+                         ["review/clean.txt", "review/context.txt"])
+        self.assertEqual(report["coverage"]["presidio_skipped"], ["review/image.png"])
+        self.assertEqual(report["coverage"]["presidio_unconfirmed"], [])
+        self.assertEqual(source.read_bytes(), before)
+        archived = self.root / Path(report["report_path"]).parent
+        for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+            content = path.read_text(encoding="utf-8")
+            for _, _, value in expected:
+                self.assertNotIn(value, content, path)
+
+    def test_contextual_inventory_is_active_in_each_language(self):
+        engine = analyzer()
+        for language in ("en", "ru"):
+            for name in ("LocalPathRecognizer", "RemoteAccountRecognizer"):
+                recognizer = next(r for r in engine.registry.recognizers
+                                  if r.name == name and r.supported_language == language)
+                engine.registry.recognizers.remove(recognizer)
+                with self.assertRaises(PresidioPolicyError):
+                    verify_inventory(engine)
+                engine.registry.recognizers.append(recognizer)
+        with patch.object(engine.registry, "get_recognizers", return_value=[]):
+            with self.assertRaises(PresidioPolicyError):
+                verify_inventory(engine)
+
     def test_real_inventory_rejects_missing_extra_and_disabled_recognizers(self):
         engine = analyzer()
         self.assertEqual(set(engine.get_supported_entities(language="en")), ENGLISH_ENTITIES)
