@@ -41,7 +41,9 @@ ordinary install/check/apply/accept writes inside the consumer; verify the
 submodule remains clean.
 
 Develop directly in a consumer submodule or separate clone: branch first if HEAD
-is detached, reproduce, fix, add an autonomous regression, test, commit/push and
-open a PR **in Eryx** through `gh`. After CI/review/merge, pin the merged SHA in a
-**separate consumer PR**, with integration updates and a link to the tool PR.
-Never combine the two repository histories or publish an unreachable gitlink.
+is detached, reproduce, fix, add an autonomous regression and test. Commit Eryx
+changes in Eryx. A consumer may commit a local provisional gitlink to that commit
+before it is merged; record that publication and final integration are pending.
+Publish and review the tool changes in a PR **in Eryx** through `gh`. Once merged,
+pin the reachable merged SHA in a **separate consumer change**, rerun integration
+checks and link the tool PR. Keep the two repository histories separate.

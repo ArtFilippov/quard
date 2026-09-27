@@ -204,12 +204,15 @@ consumer in its integration PR after verifying migration. See [ORIGIN.md](ORIGIN
 3. Run Eryx tests and the consumer's checks/runtime tests. From the consumer:
    `uv run --locked --group dev python -B -m unittest discover -s eryx/tests`.
    Tests also need `jsonschema`, supplied by Eryx's own dev group.
-4. Commit/push the tool branch, then use `gh pr create --repo ArtFilippov/eryx`.
-   Include reproduction and verification. Pass CI and review, then merge this PR.
-5. Create a consumer branch **after** the tool PR merges. Fetch Eryx, select the
-   exact merged SHA, reinstall if configs/dependencies changed, and run checks.
-6. Open a **separate consumer PR** with the gitlink and integration changes,
-   linking the Eryx PR. Never point a consumer update at an unpublished commit.
+4. Commit the tool branch in Eryx. A consumer can commit a **provisional local
+   gitlink** to that SHA before merge; label publication/final integration pending.
+   The consumer and Eryx remain separate repositories. Do not describe this
+   provisional pin as the reviewed or merged revision.
+5. Publish and review the tool branch with `gh pr create --repo ArtFilippov/eryx`.
+   Include reproduction and verification; pass CI and review, then merge the PR.
+6. Fetch Eryx and pin the exact reachable merged SHA in a separate consumer
+   integration change. Reinstall if configs/dependencies changed, rerun checks,
+   and link the Eryx PR in the consumer PR.
 
 Standalone development:
 
