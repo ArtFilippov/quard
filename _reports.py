@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from _presidio_policy import ENGLISH_ENTITIES
+from _presidio_policy import ALL_ENTITIES
 
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
@@ -235,14 +235,18 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
         if not isinstance(data["findings"], list):
             raise ValueError("Invalid findings")
         for entry in data["findings"]:
-            if (not isinstance(entry, dict) or set(entry) != {"path", "line", "entity", "score"} or
+            if (not isinstance(entry, dict) or set(entry) !=
+                    {"path", "line", "column", "span_length", "entity", "score"} or
                     entry["path"] not in data["scanned"] or type(entry["line"]) is not int or
-                    entry["line"] < 1 or entry["entity"] not in ENGLISH_ENTITIES or
+                    entry["line"] < 1 or type(entry["column"]) is not int or entry["column"] < 1 or
+                    type(entry["span_length"]) is not int or entry["span_length"] < 1 or
+                    entry["entity"] not in ALL_ENTITIES or
                     type(entry["score"]) not in (int, float) or not 0 <= entry["score"] <= 1):
                 raise ValueError("Invalid finding")
             items.append(diagnostic("presidio", entry["entity"],
                                     f"Potential {entry['entity']} detected (score {entry['score']:.4f}).",
-                                    path=entry["path"], line=entry["line"], score=entry["score"]))
+                                    path=entry["path"], line=entry["line"], column=entry["column"],
+                                    score=entry["score"], span_length=entry["span_length"]))
         if (set(data["scanned"] + data["skipped"] + data["failed"]) == set(expected) and
                 not data["failed"] and data["scanned"] and "error" not in data and
                 result.get("exit_code") == (1 if items else 0) and not result.get("error") and
@@ -254,7 +258,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
         pass
     if error:
         items.append(diagnostic("presidio", error,
-                                "Presidio could not confirm the selected text scan; check the pinned English model, recognizer inventory and worker status.",
+                                "Presidio could not confirm the selected text scan; check the pinned English/Russian models, recognizer inventory and worker status.",
                                 is_infrastructure_error=True))
     return {"status": "error" if error else ("violations" if items else "passed"),
             "error": error, "diagnostics": items, "coverage": coverage}
@@ -265,9 +269,12 @@ def sorted_diagnostics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen = set()
     unique = []
     for item in items:
-        encoded = json.dumps([item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"]], ensure_ascii=False)
+        identity = [item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"]]
+        if "span_length" in item:
+            identity.append(item["span_length"])
+        encoded = json.dumps(identity, ensure_ascii=False)
         item["fingerprint"] = hashlib.sha256(encoded.encode()).hexdigest()[:24]
-        key = (item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"])
+        key = tuple(identity)
         if key not in seen:
             seen.add(key)
             unique.append(item)

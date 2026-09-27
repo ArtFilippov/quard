@@ -10,7 +10,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
-from _presidio_policy import ENGLISH_ENTITIES, PresidioPolicyError, verify_english_inventory
+from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
 
 
 def analyzer():
@@ -18,16 +18,21 @@ def analyzer():
     from presidio_analyzer import AnalyzerEngine
     from presidio_analyzer.nlp_engine import NlpEngineProvider
 
-    if metadata.version("presidio-analyzer") != "2.2.360" or metadata.version("en-core-web-sm") != "3.8.0":
+    if (metadata.version("presidio-analyzer") != "2.2.360" or
+            metadata.version("en-core-web-sm") != "3.8.0" or
+            metadata.version("ru-core-news-sm") != "3.8.0"):
         raise RuntimeError("Unexpected Presidio installation")
     engine = NlpEngineProvider(nlp_configuration={
-        "nlp_engine_name": "spacy", "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+        "nlp_engine_name": "spacy", "models": [
+            {"lang_code": "en", "model_name": "en_core_web_sm"},
+            {"lang_code": "ru", "model_name": "ru_core_news_sm"}],
     }).create_engine()
     engine.load()
-    if not engine.is_loaded():
-        raise RuntimeError("English NLP model unavailable")
-    analyzer_engine = AnalyzerEngine(nlp_engine=engine, supported_languages=["en"])
-    verify_english_inventory(analyzer_engine)
+    if not engine.is_loaded() or set(engine.nlp) != {"en", "ru"}:
+        raise RuntimeError("Required NLP models unavailable")
+    analyzer_engine = AnalyzerEngine(nlp_engine=engine, supported_languages=["en", "ru"])
+    add_russian_recognizers(analyzer_engine)
+    verify_inventory(analyzer_engine)
     return analyzer_engine
 
 
@@ -60,13 +65,22 @@ def scan(paths: list[str]) -> tuple[dict, int]:
                     continue
                 raise
             starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
-            findings = engine.analyze(text=text, language="en")
-            for item in findings:
-                if (item.entity_type not in ENGLISH_ENTITIES or
-                        not 0 <= item.start < item.end <= len(text)):
-                    raise ValueError("Invalid recognition position")
-                report["findings"].append({"path": name, "line": bisect_right(starts, item.start),
-                                            "entity": item.entity_type, "score": round(float(item.score), 4)})
+            observations = set()
+            for language in ("en", "ru"):
+                for item in engine.analyze(text=text, language=language):
+                    if (item.entity_type not in ALL_ENTITIES or
+                            not 0 <= item.start < item.end <= len(text)):
+                        raise ValueError("Invalid recognition position")
+                    # The two language passes can produce the same observation.
+                    # Keep different spans and entity types, even on the same line.
+                    key = (item.start, item.end, item.entity_type)
+                    if key not in observations:
+                        observations.add(key)
+                        line = bisect_right(starts, item.start)
+                        report["findings"].append({"path": name, "line": line,
+                                                    "column": item.start - starts[line - 1] + 1,
+                                                    "span_length": item.end - item.start,
+                                                    "entity": item.entity_type, "score": round(float(item.score), 4)})
             report["scanned"].append(name)
         except Exception:
             # No source text, third-party messages or matched strings leave this worker.

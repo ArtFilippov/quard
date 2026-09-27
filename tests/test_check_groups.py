@@ -67,8 +67,10 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertIn("detect-secrets==1.5.0", specs)
         self.assertTrue(any(spec.startswith("presidio-analyzer==") for spec in specs))
         self.assertTrue(any(spec.startswith("en-core-web-sm @ https://") for spec in specs))
+        self.assertTrue(any(spec.startswith("ru-core-news-sm @ https://") for spec in specs))
         self.assertFalse(any(spec.startswith("tach==") for spec in specs))
-        self.assertFalse(any(spec.startswith("presidio-analyzer==") or spec.startswith("en-core-web-sm @")
+        self.assertFalse(any(spec.startswith("presidio-analyzer==") or spec.startswith("en-core-web-sm @") or
+                             spec.startswith("ru-core-news-sm @")
                              for spec in dependency_specs(ERYX, ["codestyle"])))
 
     def test_codestyle_and_both_keep_native_jobs_and_do_not_duplicate_notebooks(self):

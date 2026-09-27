@@ -17,6 +17,8 @@ sys.path.insert(0, str(ERYX))
 from test_migration import managed_bytes
 
 
+@unittest.skipUnless(os.environ.get("ERYX_RUN_LIFECYCLE") == "1",
+                     "Real installation tests are opt-in: set ERYX_RUN_LIFECYCLE=1")
 class LifecycleTests(unittest.TestCase):
     def run_command(self, argv, cwd, expected=0):
         env = os.environ.copy()
@@ -146,8 +148,9 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(installed["smoke_tests"]["pylint_secret"], "detected")
             self.assertEqual(installed["smoke_tests"]["presidio_person"], "detected")
             self.assertEqual(installed["smoke_tests"]["presidio_email"], "detected")
+            self.assertEqual(installed["smoke_tests"]["presidio_russian"], "detected")
             self.assertEqual(set(installed["versions"]), {"pylint", "nbstripout", "detect-secrets", "tomlkit", "packaging",
-                                                           "presidio-analyzer", "en-core-web-sm"})
+                                                           "presidio-analyzer", "en-core-web-sm", "ru-core-news-sm"})
             self.assertFalse(installed["architecture_initialization_required"])
             self.assertFalse((project / "pyrightconfig.json").exists())
             self.assertFalse((project / "tach.toml").exists())

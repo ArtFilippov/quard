@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _reports import normalize_presidio
-from _presidio_policy import ENGLISH_ENTITIES, PresidioPolicyError, verify_english_inventory
+from _reports import normalize_presidio, sorted_diagnostics
+from _presidio_policy import ENGLISH_ENTITIES, RUSSIAN_ENTITIES, PresidioPolicyError, verify_inventory
 from _presidio_worker import analyzer, scan
 from check import execute_job, run_checks
 from test_infrastructure import create_repo, native_result
@@ -88,22 +88,88 @@ class PresidioTests(unittest.TestCase):
         self.assertEqual(set(engine.get_supported_entities(language="en")), ENGLISH_ENTITIES)
         removed = engine.registry.recognizers.pop()
         with self.assertRaises(PresidioPolicyError):
-            verify_english_inventory(engine)
+            verify_inventory(engine)
         engine.registry.recognizers.append(removed)
         engine.registry.recognizers.append(removed)
         with self.assertRaises(PresidioPolicyError):
-            verify_english_inventory(engine)
+            verify_inventory(engine)
         engine.registry.recognizers.pop()
         with patch.object(engine.registry, "get_recognizers",
                           return_value=engine.registry.recognizers[:-1]):
             with self.assertRaises(PresidioPolicyError):
-                verify_english_inventory(engine)
+                verify_inventory(engine)
         with patch.object(engine.nlp_engine, "get_supported_entities", return_value=["PERSON"]):
             with self.assertRaises(PresidioPolicyError):
-                verify_english_inventory(engine)
+                verify_inventory(engine)
         engine.default_score_threshold = 0.5
         with self.assertRaises(PresidioPolicyError):
-            verify_english_inventory(engine)
+            verify_inventory(engine)
+
+    def test_real_russian_and_english_findings_share_selected_text(self):
+        values = ["Иван Петров", "ivan.petrov@example.com", "7707083893",
+                  "112-233-445 95", "4510 123456", "219-09-9999", "192.168.1.15",
+                  "12 марта 1992 года", "+7 916 123-45-67"]
+        source = self.root / "review/bilingual.txt"
+        source.write_text("\n".join((
+            f"Контакт: {values[0]}", f"Почта: {values[1]}", f"ИНН {values[2]}",
+            f"СНИЛС {values[3]}", f"Паспорт {values[4]}",
+            f"US SSN {values[5]}", f"Сервер {values[6]}",
+            f"Родился {values[7]}", f"Телефон {values[8]}",
+            "Contact: Dr. John Smith", "Email: john.smith@example.com")) + "\n", encoding="utf-8")
+        before = source.read_bytes()
+        report = run_checks(self.root)
+        findings = {(d["rule"], d["line"]) for d in report["diagnostics"] if d["tool"] == "presidio"}
+        self.assertEqual(report["exit_code"], 1, report)
+        self.assertTrue({("PERSON", 1), ("EMAIL_ADDRESS", 2), ("RU_INN", 3),
+                         ("RU_SNILS", 4), ("RU_PASSPORT", 5), ("US_SSN", 6),
+                         ("IP_ADDRESS", 7), ("DATE_TIME", 8), ("PHONE_NUMBER", 9),
+                         ("PERSON", 10), ("EMAIL_ADDRESS", 11)} <= findings, report)
+        self.assertEqual(report["coverage"]["presidio_unconfirmed"], [])
+        self.assertEqual(source.read_bytes(), before)
+        archived = self.root / Path(report["report_path"]).parent
+        for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+            content = path.read_text(encoding="utf-8")
+            for value in values + ["John Smith", "john.smith@example.com"]:
+                self.assertNotIn(value, content, path)
+
+    def test_russian_inventory_and_missing_mapping_fail_closed(self):
+        engine = analyzer()
+        self.assertEqual(set(engine.get_supported_entities(language="ru")), RUSSIAN_ENTITIES)
+        ru = next(r for r in engine.registry.recognizers if r.name == "RuInnRecognizer")
+        engine.registry.recognizers.remove(ru)
+        with self.assertRaises(PresidioPolicyError):
+            verify_inventory(engine)
+        engine.registry.recognizers.append(ru)
+        mapping = engine.nlp_engine.ner_model_configuration.model_to_presidio_entity_mapping
+        with patch.dict(mapping, {"PER": "LOCATION"}):
+            with self.assertRaises(PresidioPolicyError):
+                verify_inventory(engine)
+        with patch("_presidio_worker.metadata.version", side_effect=lambda name: "0" if name == "ru-core-news-sm" else
+                   {"presidio-analyzer": "2.2.360", "en-core-web-sm": "3.8.0"}[name]):
+            result, code = scan([str(self.root / "review/clean.txt")])
+        self.assertEqual((code, result["error"], result["scanned"]),
+                         (2, "PRESIDIO_MODEL_UNAVAILABLE", []))
+
+    def test_same_line_repeated_entities_keep_distinct_columns(self):
+        source = self.root / "review/repeated.txt"
+        source.write_text("ivan@example.com и anna@example.com\n", encoding="utf-8")
+        report = run_checks(self.root)
+        emails = [d for d in report["diagnostics"] if d["tool"] == "presidio" and
+                  d["rule"] == "EMAIL_ADDRESS" and d["path"] == "review/repeated.txt"]
+        self.assertEqual([d["column"] for d in emails], [1, 20], report)
+
+    def test_same_start_different_spans_are_not_collapsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "native.json"
+            output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "failed": [],
+                                          "findings": [{"path": "review/clean.txt", "line": 1,
+                                                        "column": 1, "span_length": length,
+                                                        "entity": "PERSON", "score": 0.85}
+                                                       for length in (4, 8)]}), encoding="utf-8")
+            result = normalize_presidio({"exit_code": 1}, self.root, output, ["review/clean.txt"])
+        findings = sorted_diagnostics(result["diagnostics"])
+        self.assertEqual(result["status"], "violations")
+        self.assertEqual([d["span_length"] for d in findings], [4, 8])
 
     def test_binary_headers_are_skipped_without_claiming_text_coverage(self):
         (self.root / "review/photo.png").write_bytes(b"\x89PNG\r\n\0")

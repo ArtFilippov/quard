@@ -24,10 +24,10 @@ the file and line but not the secret value. Zero notebooks are explicitly report
 not counted as verified. Reports distinguish selected `secret_inputs`, confirmed
 `secret_scanned` / `secret_count`, and unsupported binary `secret_skipped` /
 `secret_skipped_count`. An independent Presidio job scans the same effective file
-scope for the complete pinned standard English recognizer inventory (including
-country-specific identifiers, dates, URLs and IP addresses), using the pinned local
-`en_core_web_sm` model. It reports entity type, relative path, physical line and
-confidence score without matched values. `presidio_inputs`, `presidio_scanned` /
+scope in both English and Russian (including country-specific identifiers, dates,
+URLs and IP addresses), using pinned local `en_core_web_sm` and `ru_core_news_sm`
+models. It reports entity type, relative path, physical line/column, confidence
+score and span length without matched values. `presidio_inputs`, `presidio_scanned` /
 `presidio_count`, `presidio_skipped` / `presidio_skipped_count` and
 `presidio_unconfirmed` separately describe selected, confirmed text, unsupported
 binary and unconfirmed inputs. Missing resources, partial coverage and zero
@@ -189,11 +189,14 @@ Standalone development:
 ```bash
 uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
+# Only when explicitly requested, run the slower real install/reinstall tests:
+ERYX_RUN_LIFECYCLE=1 uv run --locked --group dev python -B -m unittest discover -s tests -p test_lifecycle.py -v
 ```
 
-CI runs offline orchestration tests, real compatibility regressions and real uv
-installation/native smoke tests on isolated public fixtures; access to `tai` is not
-needed. Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
+The default suite skips the slow `LifecycleTests`; run them only on an explicit
+request. Offline orchestration and real compatibility regressions still run by
+default; access to `tai` is not needed. Eryx's lockfile fixes its test environment;
+consumer lockfiles fix theirs.
 
 Profile/limits: [PROFILE.md](PROFILE.md). Compatibility rationale and provenance:
 [COMPATIBILITY.md](COMPATIBILITY.md). Agent instructions: [AGENTS.md](AGENTS.md).

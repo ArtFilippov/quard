@@ -33,10 +33,12 @@ uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
 ```
 
-This includes native regression and real installation/smoke tests. Test fixtures
-must not require access to a private consumer. Run the affected consumer's full
-static and relevant runtime checks too. Keep ordinary install/check/apply/accept
-writes inside the consumer; verify the submodule remains clean.
+The default suite skips `LifecycleTests`. Run them only when the user explicitly
+requests them; setting `ERYX_RUN_LIFECYCLE=1` opts in. Do not run them as a routine
+post-change check. Test fixtures must not require access to a private consumer.
+Run the affected consumer's full static and relevant runtime checks too. Keep
+ordinary install/check/apply/accept writes inside the consumer; verify the
+submodule remains clean.
 
 Develop directly in a consumer submodule or separate clone: branch first if HEAD
 is detached, reproduce, fix, add an autonomous regression, test, commit/push and

@@ -36,8 +36,8 @@ without the native code-style or architecture analyzers. Secret coverage records
 confirmed text-file scans separately from unsupported binary files and selected
 inputs. Unreadable text, partial scans and zero text-file coverage are errors.
 The installer verifies an intentional secret in an isolated fixture. An independent
-Presidio job checks all standard English entities in the pinned analyzer 2.2.360
-with the pinned local `en_core_web_sm` 3.8.0 model and no downloads during a check.
+Presidio job checks both languages in the pinned analyzer 2.2.360 with pinned local
+`en_core_web_sm` and `ru_core_news_sm` 3.8.0 models and no downloads during a check.
 The expected active inventory is checked on both installation and each scan: exactly
 16 recognizers and the following 22 entity types (see `_presidio_policy.py` for the
 exact per-recognizer mapping, including the spaCy NER mapping):
@@ -60,6 +60,22 @@ records only entity types and physical locations (and scores). The installer pro
 name, contact, date, URL, network and country-specific identifiers as well as clean
 input. `codestyle` retains
 the `src/` layout and architecture requirements.
+
+The Russian inventory contains the eight shared Presidio pattern recognizers
+(CRYPTO, DATE_TIME, EMAIL_ADDRESS, IBAN_CODE, IP_ADDRESS, MEDICAL_LICENSE,
+PHONE_NUMBER, URL), the seven English country-specific/credit-card recognizers
+also applicable to identifiers in Russian prose (CREDIT_CARD, UK_NHS,
+US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN), Russian spaCy
+NER (PERSON, LOCATION, ORGANIZATION), a Russian month-name date pattern and
+three Russian domestic identifier patterns: RU_INN (10/12 digits), RU_SNILS
+(3-3-3-2 digits), RU_PASSPORT (4 + 6 digits).
+All 20 Russian recognizers and their 21 entity types are verified at install and
+check time alongside the 16 English recognizers. The Russian model's only NER
+labels are PER, LOC and ORG; dates, nationality, age, ID, email and phone are not
+claimed as Russian NER categories. Dates and contact details instead use pattern
+recognizers. Identifier patterns indicate *potential* identifiers, not checksum
+validation. Findings from both passes are deduplicated by span and entity type;
+physical columns and span lengths keep distinct observations on the same line.
 
 ## Readability
 
