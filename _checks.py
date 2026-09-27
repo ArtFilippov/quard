@@ -8,13 +8,14 @@ from typing import Any
 
 from _common import EryxError, load_toml, tool_dir
 
-ANONYMITY_DEPENDENCIES = frozenset({"pylint", "nbstripout", "tomlkit", "packaging"})
+ANONYMITY_DEPENDENCIES = frozenset({"pylint", "nbstripout", "detect-secrets", "tomlkit", "packaging"})
 IGNORED_DIRECTORIES = frozenset({".git", ".eryx", ".venv", "venv", "__pycache__",
                                  ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
                                  ".nox", "node_modules", "build", "dist"})
-NOTEBOOK_PYLINT_CONFIG = ('[tool.pylint.main]\nload-plugins = ["_notebook_checker"]\n'
-                          '[tool.pylint.messages_control]\ndisable = ["all"]\n'
-                          'enable = ["unstripped-notebook", "notebook-verification-failed"]\n')
+ANONYMITY_PYLINT_CONFIG = ('[tool.pylint.main]\nload-plugins = ["_notebook_checker", "_secret_checker"]\n'
+                           '[tool.pylint.messages_control]\ndisable = ["all"]\n'
+                           'enable = ["unstripped-notebook", "notebook-verification-failed", '
+                           '"potential-secret", "secret-scan-failed"]\n')
 
 
 def read_checks(root: Path) -> dict[str, Any]:

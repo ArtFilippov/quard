@@ -69,8 +69,9 @@ def parse_pylint(text: str, root: Path) -> tuple[list[dict[str, Any]], str | Non
             line=entry.get("line") if isinstance(entry.get("line"), int) and entry["line"] > 0 else None, column=(entry["column"] + 1) if isinstance(entry.get("column"), int) else None,
             severity={"convention": "warning", "refactor": "warning", "fatal": "error"}.get(raw_type, raw_type),
             symbol=symbol, native_severity=raw_type,
-            is_infrastructure_error=rule == "F9802",
-            documentation_url=("https://pylint.readthedocs.io/en/stable/user_guide/messages/messages_overview.html"
+            is_infrastructure_error=rule in {"F9802", "F9804"},
+            documentation_url=("https://github.com/Yelp/detect-secrets" if rule in {"W9803", "F9804"}
+                               else "https://pylint.readthedocs.io/en/stable/user_guide/messages/messages_overview.html"
                                if not rule[1:3] in {"90", "91", "92", "93", "95", "96"}
                                else "https://github.com/noah-goodrich/pylint-clean-architecture/blob/main/RULES.md"),
         ))

@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from _common import (SCHEMA, EryxError, atomic_write, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
-from _checks import (ANONYMITY_DEPENDENCIES, NOTEBOOK_PYLINT_CONFIG, covered_files,
+from _checks import (ANONYMITY_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, covered_files,
                      in_working_directories, read_checks, selected_test_roots)
 from _policy import discover_files, discover_notebooks, limit_drift, pyright_config, read_scope
 from _reports import diagnostic, normalize, sorted_diagnostics
@@ -58,21 +58,23 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
     groups = groups or ["codestyle"]
     jobs = []
     if "codestyle" not in groups:
-        # A minimal, generated config makes the notebook checker independent of
+        # A minimal, generated config makes the anonymity checkers independent of
         # consumer Pylint/architecture settings. The empty input is never claimed as coverage.
         dummy = run_dir / "anonymity-input.py"
         atomic_write(dummy, "", root)
         config = run_dir / "anonymity-pylint.toml"
-        atomic_write(config, NOTEBOOK_PYLINT_CONFIG, root)
+        atomic_write(config, ANONYMITY_PYLINT_CONFIG, root)
         manifest = run_dir / "pylint-anonymity-files.json"
+        secret_manifest = run_dir / "pylint-secrets.json"
         notebook_manifest = run_dir / "pylint-notebooks.json"
         output = run_dir / "raw/pylint-anonymity.json"
         write_json(manifest, [str(dummy)], root)
+        write_json(secret_manifest, files["secret_inputs"], root)
         write_json(notebook_manifest, files["notebooks"], root)
         return [{"name": "pylint-anonymity", "tool": "pylint", "profile": "anonymity",
                  "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
                           "--config", str(config), "--output", str(output), "--notebooks", str(notebook_manifest),
-                          "--notebook-only"],
+                           "--secrets", str(secret_manifest), "--notebook-only"],
                  "json_file": output}]
     for profile in ("production", "tests"):
         python_files = [path for path in files[profile] if path.endswith(".py")]
@@ -87,6 +89,10 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
             notebook_manifest = run_dir / "pylint-notebooks.json"
             write_json(notebook_manifest, files.get("notebooks", []), root)
             notebook_args = ["--notebooks", str(notebook_manifest)]
+            if "anonymity" in groups:
+                secret_manifest = run_dir / "pylint-secrets.json"
+                write_json(secret_manifest, files["secret_inputs"], root)
+                notebook_args += ["--secrets", str(secret_manifest)]
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
                      "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"),
                               "--manifest", str(manifest), "--config", str(config), "--output", str(output),
@@ -153,6 +159,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         effective = covered_files(root, checks, scope["exclude_directory_names"])
         if not effective:
             raise EryxError("EMPTY_CHECK_SCOPE", "No files in selected working directories after exclusions.")
+        files["secret_inputs"] = effective if "anonymity" in checks["groups"] else []
         eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
         versions, problems = versions_fn(root)
         diagnostics.extend(problems)

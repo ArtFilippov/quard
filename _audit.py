@@ -17,7 +17,7 @@ import tomlkit
 
 from _common import (EryxError, atomic_write, capture, command_env, emit_event, error_exit,
                      load_toml, read_json, require_runtime, project_dir, tool_dir, write_json)
-from _checks import ANONYMITY_DEPENDENCIES, NOTEBOOK_PYLINT_CONFIG, read_checks
+from _checks import ANONYMITY_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, read_checks
 from _policy import configure
 from _reports import normalize
 from init_architecture import sync_clean_arch, tool_binary
@@ -43,6 +43,8 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
         raise EryxError("PYLINT_DISCOVERY_FAILED", "Required mccabe/broad_try_clause extensions were not discovered.")
     plugins = [name for name in extensions if name != "pylint.extensions.docparams"]
     plugins += ["clean_architecture_linter", "_notebook_checker"]
+    if "anonymity" in read_checks(root)["groups"]:
+        plugins.append("_secret_checker")
     env = command_env(root)
     env["PYTHONPATH"] = str(tool_dir()) + os.pathsep + env["PYTHONPATH"]
     result = probe(base + ["--load-plugins=" + ",".join(plugins), "--list-msgs"],
@@ -57,6 +59,8 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
     ids = sorted({message_id for _, message_id in pairs})
     if not {"R0915", "R1260", "W9001", "W9201", "W9301", "W9801", "F9802"}.issubset(ids):
         raise EryxError("INCOMPLETE_CHECKER_CATALOG", "Required standard/architecture checker IDs are missing; inspect the installed plugin release.")
+    if "anonymity" in read_checks(root)["groups"] and not {"W9803", "F9804"}.issubset(ids):
+        raise EryxError("INCOMPLETE_CHECKER_CATALOG", "Required secret checker IDs are missing; inspect the installed plugin release.")
     catalog = {"plugins": plugins, "message_ids": ids,
                "messages": [{"id": code, "symbol": symbol} for symbol, code in sorted(set(pairs), key=lambda pair: pair[1])],
                "excluded_extension": "pylint.extensions.docparams", "excluded_reason": "message-ID collisions with clean_architecture_linter"}
@@ -171,7 +175,7 @@ def smoke_anonymity(log_root: Path) -> dict[str, str]:
         (fixture / "input.py").write_text("", encoding="utf-8")
         write_json(fixture / "inputs.json", ["input.py"])
         write_json(fixture / "notebooks.json", [notebook.name])
-        atomic_write(fixture / "anonymity-pylint.toml", NOTEBOOK_PYLINT_CONFIG)
+        atomic_write(fixture / "anonymity-pylint.toml", ANONYMITY_PYLINT_CONFIG)
         output = fixture / "pylint.json"
         result = probe([sys.executable, str(tool_dir() / "_pylint_worker.py"),
                         "--manifest", str(fixture / "inputs.json"),
@@ -212,7 +216,8 @@ def audit(root: Path) -> dict[str, Any]:
             sync_clean_arch(root, load_toml(root / "tach.toml"))
         results = smoke_tests(root, log_root)
     else:
-        plugins, catalog, changed = ["_notebook_checker"], {"message_ids": ["W9801", "F9802"]}, []
+        plugins = ["_notebook_checker", "_secret_checker"]
+        catalog, changed = {"message_ids": ["W9801", "F9802", "W9803", "F9804"]}, []
         results = smoke_anonymity(log_root)
     report = {"status": "passed", "versions": versions, "plugins": plugins, "message_count": len(catalog["message_ids"]),
               "smoke_tests": results, "modified_files": changed}

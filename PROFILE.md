@@ -29,7 +29,9 @@ tooling, environments and caches); the production Pylint worker checks them once
 with `nbstripout --verify` without rewriting them. Coverage lists notebook paths
 and count. Eryx's own code is verified by its autonomous test suite.
 When `.eryx/checks.toml` is present, notebook discovery is limited to its
-`working_directories`. `anonymity` alone runs a notebook-only Pylint worker
+`working_directories`. `anonymity` scans selected files with pinned `detect-secrets`
+and reports potential-secret types and locations without values. It requires no
+secrets baseline or verification service. `anonymity` alone runs a minimal Pylint worker
 without the native code-style or architecture analyzers. `codestyle` retains
 the `src/` layout and architecture requirements.
 
@@ -115,7 +117,7 @@ Tach's public import surface and typing.Protocol are distinct contracts.
 
 ## Limitations
 
-No source rewriting, formatting, security scanning, runtime tests, community
+No source rewriting, formatting, dependency vulnerability scanning, runtime tests, community
 discovery, physical function-line metric, spellchecker or universal Protocol-only
 proof is part of `check.py`. Suppressions are governed by native analyzers,
 including unused-suppression diagnostics and required Tach reasons. Exclusions

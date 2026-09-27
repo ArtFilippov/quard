@@ -325,7 +325,10 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         tool.setdefault("pyright", pyright_config(scope, files, test_roots))
         tool.setdefault("pydoclint", pydoclint_config(scope))
         tool.setdefault("clean-arch", clean_config())
-        tool["pylint"].setdefault("main", {})["load-plugins"] = list(dict.fromkeys([*plugins, "_notebook_checker"]))
+        selected_plugins = [*plugins, "_notebook_checker"]
+        if "anonymity" in checks["groups"]:
+            selected_plugins.append("_secret_checker")
+        tool["pylint"].setdefault("main", {})["load-plugins"] = list(dict.fromkeys(selected_plugins))
         native_pyright = root / "pyrightconfig.json"
         if native_pyright.exists():
             for key, value in read_json(native_pyright).items():
@@ -336,6 +339,8 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     loaded = tool["pylint"].setdefault("main", {}).setdefault("load-plugins", [])
     if "_notebook_checker" not in loaded:
         loaded.append("_notebook_checker")
+    if "anonymity" in checks["groups"] and "_secret_checker" not in loaded:
+        loaded.append("_secret_checker")
     apply_limits(tool["pylint"], limits["production"])
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]

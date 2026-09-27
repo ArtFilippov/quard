@@ -69,6 +69,28 @@ class PylintOutputTest(unittest.TestCase):
             [("unspecified-encoding", 3), ("bad-open-mode", 6)],
         )
 
+    def test_combined_group_scans_secrets_in_production_worker(self):
+        with TemporaryDirectory(prefix="eryx-combined-anonymity-") as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            secret = "AKIAIOSFODNN7EXAMPLE"
+            source = root / "src/sample.py"
+            source.write_text(f"aws_access_key_id = '{secret}'\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                '[tool.pylint.main]\nload-plugins = ["_notebook_checker", "_secret_checker"]\n'
+                '[tool.pylint.messages_control]\ndisable = ["all"]\n'
+                'enable = ["potential-secret"]\n', encoding="utf-8")
+            run_dir = root / ".eryx/reports/first-run"
+            run_dir.mkdir(parents=True)
+            jobs = make_jobs(root, run_dir, {"production": ["src/sample.py"], "tests": [],
+                                            "notebooks": [], "secret_inputs": ["src/sample.py"]},
+                             architecture_ready=False, groups=["codestyle", "anonymity"])
+            result = execute_job(jobs[0], root, run_dir, timeout=30)
+            self.assertEqual(result["status"], "violations", result)
+            self.assertEqual([(d["rule"], d["path"], d["line"]) for d in result["diagnostics"]],
+                             [("W9803", "src/sample.py", 1)])
+            self.assertNotIn(secret, json.dumps(result))
+
 
 class NotebookPylintTest(unittest.TestCase):
     def test_invalid_notebook_is_an_infrastructure_error_with_its_path(self):

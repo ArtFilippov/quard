@@ -42,6 +42,7 @@ def main() -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--notebooks")
+    parser.add_argument("--secrets")
     parser.add_argument("--notebook-only", action="store_true")
     args = parser.parse_args()
     files = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
@@ -51,6 +52,9 @@ def main() -> int:
     if args.notebooks:
         from _notebook_checker import configure_notebooks
         configure_notebooks(json.loads(Path(args.notebooks).read_text(encoding="utf-8")))
+    if args.secrets:
+        from _secret_checker import configure_secrets
+        configure_secrets(json.loads(Path(args.secrets).read_text(encoding="utf-8")))
     if not args.notebook_only:
         patch_pathlib_alias_check()
         install_architecture_compat()

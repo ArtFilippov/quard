@@ -18,9 +18,10 @@ working_directories = ["review_target"]
 The only groups are `codestyle` and `anonymity`; list both to enable both.
 Directories must exist inside the consumer and cannot be symlinks. Directory
 exclusions in `.eryx/scope.toml` still apply; an empty effective file scope is an
-error. `anonymity` currently verifies notebooks with `nbstripout` via Pylint;
-zero notebooks are explicitly reported, not counted as verified. Additional
-anonymity checks are tracked separately. An anonymity-only consumer needs no
+error. `anonymity` verifies notebooks with `nbstripout` and scans selected files
+for potential secrets with `detect-secrets`, both through Pylint. Findings include
+the file and line but not the secret value. Zero notebooks are explicitly reported,
+not counted as verified. An anonymity-only consumer needs no
 `src/`, native code-analysis configuration or accepted architecture. Code-style
 analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
 include root test files. Other selected directories participate in notebook

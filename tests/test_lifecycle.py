@@ -125,7 +125,7 @@ class LifecycleTests(unittest.TestCase):
             installed = json.loads(self.run_command(["bash", str(ERYX / "install.sh"),
                                                       "--project", str(project), "--json"], project))
             self.assertEqual(installed["smoke_tests"]["pylint_notebook"], "detected")
-            self.assertEqual(set(installed["versions"]), {"pylint", "nbstripout", "tomlkit", "packaging"})
+            self.assertEqual(set(installed["versions"]), {"pylint", "nbstripout", "detect-secrets", "tomlkit", "packaging"})
             self.assertFalse(installed["architecture_initialization_required"])
             self.assertFalse((project / "pyrightconfig.json").exists())
             self.assertFalse((project / "tach.toml").exists())

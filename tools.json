@@ -9,7 +9,8 @@
     "pydoclint": "0.9.1",
     "tomlkit": "0.13.3",
     "packaging": "25.0",
-    "nbstripout": "0.9.1"
+    "nbstripout": "0.9.1",
+    "detect-secrets": "1.5.0"
   },
   "extras": {"pyright": ["nodejs"]},
   "upstream_release_checked": "2026-09-21",

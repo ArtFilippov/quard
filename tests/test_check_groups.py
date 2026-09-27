@@ -52,6 +52,7 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertNotIn("ARCHITECTURE_NOT_INITIALIZED", [item["rule"] for item in report["diagnostics"]])
         specs = dependency_specs(ERYX, ["anonymity"])
         self.assertTrue(any(spec.startswith("nbstripout==") for spec in specs))
+        self.assertIn("detect-secrets==1.5.0", specs)
         self.assertFalse(any(spec.startswith("tach==") for spec in specs))
 
     def test_codestyle_and_both_keep_native_jobs_and_do_not_duplicate_notebooks(self):
@@ -63,6 +64,30 @@ class CheckGroupsTests(unittest.TestCase):
                 self.assertEqual(len(report["tools"]), 6)
                 self.assertEqual(report["coverage"]["notebooks"], ["review/clean.ipynb"])
                 self.assertEqual(sum("--notebooks" in job["argv"] for job in report["tools"]), 1)
+                self.assertEqual(sum("--secrets" in job["argv"] for job in report["tools"]),
+                                 int("anonymity" in groups))
+
+    def test_real_secret_scanner_reports_location_without_value_or_writing_input(self):
+        self.configure(["anonymity"], ["review"])
+        (self.root / "review/clean.ipynb").unlink()
+        source = self.root / "review/settings.py"
+        source.write_text("label = 'safe'\n", encoding="utf-8")
+        before = source.read_bytes()
+        clean = run_checks(self.root)
+        self.assertEqual(clean["exit_code"], 0, clean)
+        self.assertEqual(clean["tools"][0]["status"], "passed", clean)
+        self.assertEqual(source.read_bytes(), before)
+
+        secret = "AKIAIOSFODNN7EXAMPLE"
+        source.write_text(f"label = 'safe'\naws_access_key_id = '{secret}'\n", encoding="utf-8")
+        before = source.read_bytes()
+        report = run_checks(self.root)
+        self.assertEqual(report["exit_code"], 1, report)
+        self.assertEqual(report["tools"][0]["status"], "violations", report)
+        self.assertEqual([(item["rule"], item["path"], item["line"])
+                          for item in report["diagnostics"]], [("W9803", "review/settings.py", 2)])
+        self.assertNotIn(secret, json.dumps(report))
+        self.assertEqual(source.read_bytes(), before)
 
     def test_project_root_selects_existing_codestyle_layout(self):
         self.configure(["codestyle"], ["."])
