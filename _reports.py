@@ -221,7 +221,8 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 {"scanned", "skipped", "findings", "failed", "error"}):
             raise ValueError("Invalid worker schema")
         if ("error" in data and data["error"] not in
-                {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}):
+                {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
+                 "PRESIDIO_SEED_CONFIG_ERROR", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}):
             raise ValueError("Invalid worker error")
         for key in ("scanned", "skipped", "failed"):
             if (not isinstance(data[key], list) or any(type(p) is not str for p in data[key]) or
@@ -254,7 +255,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 not result.get("stdout") and not result.get("stderr")):
             error = None
         elif data.get("error") in {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
-                                   "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}:
+                                   "PRESIDIO_SEED_CONFIG_ERROR", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}:
             error = data["error"]
     except (OSError, ValueError, KeyError, TypeError):
         coverage = {"scanned": [], "skipped": []}

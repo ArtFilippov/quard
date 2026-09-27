@@ -11,6 +11,14 @@ from presidio_analyzer import EntityRecognizer, RecognizerResult
 class IdentifierConfigError(ValueError):
     """Invalid identifier configuration; never include input values."""
 
+    code = "PRESIDIO_IDENTIFIER_CONFIG_ERROR"
+
+
+class SeedConfigError(IdentifierConfigError):
+    """Keep the existing seed-only configuration diagnostic stable."""
+
+    code = "PRESIDIO_SEED_CONFIG_ERROR"
+
 
 def read_identifiers(path: Path | None) -> tuple[tuple[str, ...], tuple[re.Pattern[str], ...]]:
     """Missing configuration is optional; present but invalid configuration fails."""
@@ -18,23 +26,33 @@ def read_identifiers(path: Path | None) -> tuple[tuple[str, ...], tuple[re.Patte
         return (), ()
     try:
         if path.is_symlink():
-            raise IdentifierConfigError("Invalid Presidio identifier configuration")
+            raise SeedConfigError("Invalid Presidio seed configuration")
         with path.open("rb") as stream:
             data = tomllib.load(stream)
     except FileNotFoundError:
         return (), ()
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        raise IdentifierConfigError("Invalid Presidio identifier configuration") from None
-    if not isinstance(data, dict) or not set(data) <= {"seeds", "patterns"}:
-        raise IdentifierConfigError("Invalid Presidio identifier configuration")
+        raise SeedConfigError("Invalid Presidio seed configuration") from None
+    if not isinstance(data, dict):
+        raise SeedConfigError("Invalid Presidio seed configuration")
+    if not set(data) <= {"seeds", "patterns"}:
+        error = IdentifierConfigError if "patterns" in data else SeedConfigError
+        raise error("Invalid Presidio identifier configuration")
     seeds, patterns = data.get("seeds", []), data.get("patterns", [])
-    if (type(seeds) is not list or type(patterns) is not list or
+    if (type(seeds) is not list or
             any(type(value) is not str or not value.strip() or
-                any(char in value for char in "\r\n\0") for value in seeds + patterns)):
+                any(char in value for char in "\r\n\0") for value in seeds)):
+        raise SeedConfigError("Invalid Presidio seed configuration")
+    if (type(patterns) is not list or
+            any(type(value) is not str or not value.strip() or
+                any(char in value for char in "\r\n\0") for value in patterns)):
         raise IdentifierConfigError("Invalid Presidio identifier configuration")
     try:
-        compiled = tuple(re.compile(value, re.IGNORECASE | re.ASCII) for value in patterns)
-    except re.error:
+        # ASCII-only expressions keep [a-z] within Latin letters; expressions
+        # containing Cyrillic literals retain Unicode case-insensitive matching.
+        compiled = tuple(re.compile(value, re.IGNORECASE | (re.ASCII if value.isascii() else 0))
+                         for value in patterns)
+    except (re.error, RecursionError, OverflowError, ValueError):
         raise IdentifierConfigError("Invalid Presidio identifier configuration") from None
     return tuple(seeds), compiled
 

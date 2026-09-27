@@ -73,8 +73,8 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
     report = {"scanned": [], "skipped": [], "findings": [], "failed": []}
     try:
         seeds, patterns = read_identifiers(config)
-    except IdentifierConfigError:
-        return report | {"error": "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}, 2
+    except IdentifierConfigError as exc:
+        return report | {"error": exc.code}, 2
     try:
         engine = analyzer(seeds, patterns) if seeds or patterns else analyzer()
     except PresidioPolicyError:

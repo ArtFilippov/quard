@@ -92,8 +92,10 @@ When configured, literal seeds in the consumer's `.eryx/presidio.toml` produce
 comments and compound names. Case folding is mapped back to original character offsets;
 variants and transliterations must be listed explicitly. Separately configured regex
 `patterns` produce `KNOWN_IDENTIFIER_PATTERN` with original positions and case-insensitive
-ASCII letter ranges. Invalid identifier configuration fails with a value-free
-`PRESIDIO_IDENTIFIER_CONFIG_ERROR`; missing or empty collections do not disable
+matching: ASCII-only expressions use ASCII character classes; expressions containing
+non-ASCII literals use Unicode regex rules. Invalid patterns fail with a value-free
+`PRESIDIO_IDENTIFIER_CONFIG_ERROR`; seed-only failures retain
+`PRESIDIO_SEED_CONFIG_ERROR`. Missing or empty collections do not disable
 general-purpose recognition.
 
 Each file is analyzed whole (no chunk-boundary omissions) with a 512 KiB raw-byte

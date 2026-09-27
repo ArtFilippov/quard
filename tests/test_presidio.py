@@ -171,9 +171,11 @@ class PresidioTests(unittest.TestCase):
     def test_real_patterns_and_literals_are_distinct_and_value_free(self):
         config = self.root / ".eryx/presidio.toml"
         expression = r"[0-9]{2}[a-z]_[a-z]{3}"
-        config.write_text('seeds = ["a.b"]\npatterns = ["' + expression + '"]\n', encoding="utf-8")
+        config.write_text('seeds = ["a.b"]\npatterns = ["' + expression + '", "сокол"]\n',
+                          encoding="utf-8")
         lines = ['# 12a_lia and 12A_LIA', 'default = "/models/12a_lia.pth"',
-                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12İ_lia"']
+                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12İ_lia"',
+                 'alias = "СОКОЛ"']
         source = self.root / "review/known.txt"
         source.write_text("\n".join(lines) + "\n", encoding="utf-8")
         before = source.read_bytes()
@@ -186,13 +188,14 @@ class PresidioTests(unittest.TestCase):
                     for line, text, value in ((1, lines[0], "12a_lia"), (2, lines[1], "12a_lia"),
                                               (3, lines[2], "12A_LIA"))}
         expected.add(("KNOWN_IDENTIFIER_PATTERN", 1, lines[0].index("12A_LIA") + 1, 7))
+        expected.add(("KNOWN_IDENTIFIER_PATTERN", 5, lines[4].index("СОКОЛ") + 1, 5))
         expected.add(("KNOWN_IDENTIFIER_SEED", 3, lines[2].index("a.b") + 1, 3))
         self.assertEqual(actual, expected)
         self.assertEqual(source.read_bytes(), before)
         archived = self.root / Path(report["report_path"]).parent
         for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
             contents = path.read_text(encoding="utf-8")
-            for value in (expression, "12a_lia", "12A_LIA", "a.b"):
+            for value in (expression, "12a_lia", "12A_LIA", "a.b", "сокол", "СОКОЛ"):
                 self.assertNotIn(value, contents, path)
         self.assertFalse(any(expression in " ".join(tool["argv"]) for tool in report["tools"]))
 
@@ -226,6 +229,7 @@ class PresidioTests(unittest.TestCase):
                         'seeds = [""]\n',
                         'patterns = ["private-marker", 5]\n',
                         'patterns = ["private-marker", "["]\n',
+                        'patterns = ["private-marker", "' + '(' * 600 + '"]\n',
                         'patterns = ["private-marker"]\nother = true\n',
                         'patterns = [" "]\n'):
             with self.subTest(invalid=invalid):
@@ -237,7 +241,9 @@ class PresidioTests(unittest.TestCase):
                                  (2, "error", 2), report)
                 self.assertEqual(secret["status"], "passed", report)
                 self.assertEqual(report["coverage"]["presidio_unconfirmed"], ["review/clean.txt"])
-                self.assertIn("PRESIDIO_IDENTIFIER_CONFIG_ERROR", {d["rule"] for d in report["diagnostics"]})
+                expected_error = ("PRESIDIO_IDENTIFIER_CONFIG_ERROR" if invalid.startswith("patterns") else
+                                  "PRESIDIO_SEED_CONFIG_ERROR")
+                self.assertIn(expected_error, {d["rule"] for d in report["diagnostics"]})
                 archived = self.root / Path(report["report_path"]).parent
                 for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
                     self.assertNotIn("private-marker", path.read_text(encoding="utf-8"))
