@@ -150,9 +150,24 @@ class TreeInventoryTests(unittest.TestCase):
         self.assertEqual(len({obj["object_id"] for obj in public if obj["path"] == failed["path"]}), 2)
 
     def test_path_replacement_requires_component_boundary(self):
-        self.assertEqual(safe_paths("review/foobar review/foo bar review/foo/child", self.root,
+        self.assertEqual(safe_paths("review/foobar review/foo bar review/foo:bar review/foo/child", self.root,
                                     {"review/foo": "review/[REDACTED]"}),
-                         "review/foobar review/foo bar review/[REDACTED]/child")
+                         "review/foobar review/foo bar review/foo:bar review/[REDACTED]/child")
+
+    def test_anchored_path_patterns_redact_only_the_original_object(self):
+        (self.root / ".eryx/presidio.toml").write_text(
+            'seeds = ["REDACTED"]\npatterns = ["^foo$"]\n', encoding="utf-8")
+        (self.root / "review/foo").write_text("plain text\n", encoding="utf-8")
+        (self.root / "review/foo:bar").write_text("plain text\n", encoding="utf-8")
+        report = run_checks(self.root)
+        objects = {obj["path"]: obj for obj in report["coverage"]["tree_objects"]}
+        self.assertIn("review/[REDACTED]", objects)
+        self.assertIn("review/foo:bar", objects)
+        self.assertEqual(objects["review/[REDACTED]"]["content"]["presidio"], "scanned")
+        self.assertIn("review/[REDACTED]", report["coverage"]["presidio_scanned"])
+        self.assertIn("review/foo:bar", report["coverage"]["presidio_scanned"])
+        self.assertEqual([d["path"] for d in report["diagnostics"] if d["rule"] ==
+                          "KNOWN_IDENTIFIER_PATTERN"], ["review/[REDACTED]"])
 
     def test_identifier_matching_does_not_change_machine_status(self):
         (self.root / ".eryx/presidio.toml").write_text('seeds = ["passed"]\n', encoding="utf-8")

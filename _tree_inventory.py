@@ -122,7 +122,7 @@ def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool
         spans = [(rule, begin + start, end + start)
                  for rule, begin, end in path_spans(inspected, seeds, patterns)]
         # Display paths also hide identifiers in selected-root names, if present.
-        display_spans = path_spans(relative, seeds, patterns)
+        display_spans = sorted(set(path_spans(relative, seeds, patterns)) | set(spans))
         display = ("/".join("[REDACTED]" for _ in relative.split("/")) if hide_all else
                    redact(relative, display_spans))
         object_id = hashlib.sha256((run_id + "\0" + relative).encode()).hexdigest()[:24]
@@ -154,18 +154,24 @@ def safe_paths(value: str, root: Path, displays: dict[str, str],
                seeds: tuple[str, ...] = (), patterns: tuple[re.Pattern[str], ...] = (),
                *, redact_matches: bool = False) -> str:
     """Replace raw path spellings in reports and archived worker output."""
+    value = value.replace(str(root), "<consumer-root>")
+    if redact_matches:
+        # Do not match inside our own display marker, including when a seed
+        # happens to be the word REDACTED.
+        markers = [(match.start(), match.end()) for match in re.finditer(r"\[REDACTED\]", value)]
+        spans = [span for span in path_spans(value, seeds, patterns)
+                 if not any(span[1] < end and span[2] > start for start, end in markers)]
+        value = redact(value, spans)
     for raw in sorted(displays, key=len, reverse=True):
         shown = displays[raw]
         if raw != shown:
             for source, target in ((str(root / raw), str(root / shown)), (raw, shown)):
                 # A complete path or component boundary is required: "foo" must
                 # not rewrite a distinct name such as "foobar".
-                boundary = r"(?=$|/|[\"',}:\]])"
+                boundary = r"(?=$|/|[\"',}\]])"
                 value = re.sub(re.escape(source) + boundary, lambda _: target, value)
                 escaped = json.dumps(source)[1:-1]
                 value = re.sub(re.escape(escaped) + boundary,
                                lambda _: json.dumps(target)[1:-1], value)
-    if redact_matches:
-        value = redact(value, path_spans(value, seeds, patterns))
     value = value.replace(json.dumps(str(root))[1:-1], "<consumer-root>")
     return value.replace(str(root), "<consumer-root>")
