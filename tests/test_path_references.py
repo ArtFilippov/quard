@@ -9,13 +9,96 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _path_references import references
+from _path_references import correlate, references
 from _reports import normalize_presidio
 from check import run_checks
 from test_infrastructure import create_repo
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_longest_component_suffix_is_case_sensitive_and_not_a_substring(self):
+        text = ('/old/assets/file.pth ./assets/file.pth assets/file.pth '
+                'wrong/file.pth ./assets/File.pth prefix/efile.pth')
+        tree = {'review/assets/file.pth': 'a' * 24,
+                'review/other/file.pth': 'b' * 24,
+                'review/assets/File.pth': 'c' * 24,
+                'review/prefixfile.pth': 'd' * 24}
+        records = list(correlate(text, [0], tree))
+        self.assertEqual([(r['suffix_components'], r['candidate_object_ids']) for r in records], [
+            (2, ['a' * 24]), (2, ['a' * 24]), (2, ['a' * 24]),
+            (1, ['a' * 24, 'b' * 24]), (2, ['c' * 24]), (0, [])])
+
+    def test_end_to_end_suffix_groups_and_value_free_archives(self):
+        import jsonschema
+
+        with tempfile.TemporaryDirectory(prefix="eryx-correlation-") as directory:
+            root = Path(directory)
+            create_repo(root)
+            (root / '.eryx/checks.toml').write_text(
+                'groups = ["anonymity"]\nworking_directories = ["review"]\n', encoding='utf-8')
+            (root / '.eryx/presidio.toml').write_text(
+                'seeds = ["SampleMarker"]\n', encoding='utf-8')
+            for folder in ('assets', 'alternate', 'SampleMarker', 'models'):
+                (root / 'review' / folder).mkdir(parents=True, exist_ok=True)
+            for path in ('assets/shared.pth', 'alternate/shared.pth',
+                         'SampleMarker/shared.pth', 'models/Unique.pth'):
+                (root / 'review' / path).write_bytes(b'/secret/unreadable')
+            text = ('default="/old/models/Unique.pth"\n'
+                    'out="assets/shared.pth"; again="assets/shared.pth"\n'
+                    'model="org/shared.pth"; not_found="missing/piece.pth"\n'
+                    'case="models/unique.pth"; relative="SampleMarker/shared.pth"\n')
+            source = root / 'review/config.txt'
+            source.write_text(text, encoding='utf-8')
+            before = {path: path.read_bytes() for path in (source, *(
+                root / 'review' / name for name in ('assets/shared.pth',
+                'alternate/shared.pth', 'SampleMarker/shared.pth', 'models/Unique.pth')))}
+
+            report = run_checks(root)
+            self.assertEqual(report['exit_code'], 1)
+            self.assertEqual(next(t['status'] for t in report['tools'] if t['name'] == 'presidio'),
+                             'violations')
+            coverage = report['coverage']
+            refs = coverage['path_references']
+            self.assertEqual([ref['outcome'] for ref in refs],
+                             ['unique', 'unique', 'unique', 'ambiguous', 'missing', 'missing', 'unique'])
+            self.assertEqual([ref['suffix_components'] for ref in refs], [2, 2, 2, 1, 0, 0, 2])
+            self.assertEqual([ref['line'] for ref in refs], [1, 2, 2, 3, 3, 4, 4])
+            self.assertEqual(len({ref['reference_id'] for ref in refs}), 7)
+            objects = {item['path']: item for item in coverage['tree_objects']}
+            self.assertEqual(refs[0]['candidate_object_ids'], [objects['review/models/Unique.pth']['object_id']])
+            self.assertEqual(refs[3]['candidate_object_ids'], sorted(
+                objects['review/' + path]['object_id'] for path in
+                ('assets/shared.pth', 'alternate/shared.pth', '[REDACTED]/shared.pth')))
+            self.assertEqual(refs[1]['candidate_object_ids'], refs[2]['candidate_object_ids'])
+            self.assertEqual(refs[6]['candidate_object_ids'],
+                             [objects['review/[REDACTED]/shared.pth']['object_id']])
+            diagnostics = report['diagnostics']
+            self.assertEqual(len([d for d in diagnostics if d['rule'] == 'AMBIGUOUS_PATH_REFERENCE']), 1)
+            self.assertEqual(len([d for d in diagnostics if d['rule'] == 'POSSIBLE_MISSING_PATH_REFERENCE']), 2)
+            self.assertEqual(len([d for d in diagnostics if d['rule'] == 'ABSOLUTE_PATH_REFERENCE']), 1)
+            self.assertEqual(len(coverage['path_groups']), coverage['tree_count'])
+            for group in coverage['path_groups']:
+                self.assertEqual(group['path'], next(obj['path'] for obj in coverage['tree_objects']
+                                                      if obj['object_id'] == group['object_id']))
+                self.assertTrue(set(group['reference_ids']) <= {ref['reference_id'] for ref in refs})
+                self.assertTrue(set(group['diagnostic_fingerprints']) <=
+                                {d['fingerprint'] for d in diagnostics})
+            target_group = next(group for group in coverage['path_groups'] if group['object_id'] ==
+                                objects['review/assets/shared.pth']['object_id'])
+            self.assertEqual(set(target_group['reference_ids']),
+                             {refs[1]['reference_id'], refs[2]['reference_id'], refs[3]['reference_id']})
+            self.assertTrue(any(d['rule'] == 'KNOWN_IDENTIFIER_SEED' and d.get('object_id') ==
+                                objects['review/[REDACTED]/shared.pth']['object_id'] for d in diagnostics))
+            jsonschema.validate(report, json.loads((Path(__file__).resolve().parents[1] /
+                                                    'report.schema.json').read_text()))
+            archive = root / Path(report['report_path']).parent
+            for artifact in [*archive.rglob('*.json'), *archive.rglob('*.log')]:
+                body = artifact.read_text(encoding='utf-8')
+                for value in ('SampleMarker', '/old/models/Unique.pth', 'org/shared.pth',
+                              'missing/piece.pth', '/secret/unreadable'):
+                    self.assertNotIn(value, body, artifact)
+            self.assertEqual(before, {path: path.read_bytes() for path in before})
+
     def test_partial_scan_keeps_confirmed_reference_and_its_diagnostic_link(self):
         with tempfile.TemporaryDirectory(prefix="eryx-partial-reference-") as directory:
             root = Path(directory)
@@ -54,6 +137,31 @@ class ReferenceTests(unittest.TestCase):
                     self.assertEqual(normalized["status"], "error")
                     self.assertEqual(normalized["references"], [])
                     self.assertNotIn("/private/a", json.dumps(normalized))
+
+    def test_invalid_correlation_ids_and_shapes_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'worker.json'
+            identity = 'a' * 24
+            base = {"scanned": ["review/input.txt"], "skipped": [], "excluded": [],
+                    "failed": [], "findings": []}
+            reference = {"path": "review/input.txt", "line": 1, "column": 1,
+                         "span_length": 15, "absolute": False, "suffix_components": 1,
+                         "candidate_object_ids": [identity]}
+            for changed in (reference | {"candidate_object_ids": ['b' * 24]},
+                            reference | {"candidate_object_ids": [identity, identity]},
+                            reference | {"suffix_components": 0},
+                            reference | {"candidate_object_ids": []},
+                            reference | {"suffix_components": True},
+                            reference | {"matched_text": 'private'},
+                            reference | {"candidate_object_ids": ['private']}):
+                with self.subTest(changed=changed):
+                    output.write_text(json.dumps(base | {"references": [changed]}), encoding='utf-8')
+                    normalized = normalize_presidio({"exit_code": 0}, root, output,
+                                                    base['scanned'], {identity})
+                    self.assertEqual(normalized['status'], 'error')
+                    self.assertEqual(normalized['references'], [])
+                    self.assertNotIn('private', json.dumps(normalized))
 
     def test_heuristic_positions_and_boundaries(self):
         text = ('default="/home/SampleMarker/output.pth"\n'

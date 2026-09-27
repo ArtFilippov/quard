@@ -14,7 +14,7 @@ sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
 from _content_policy import content_excluded
-from _path_references import references
+from _path_references import correlate, references
 from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
 from _presidio_seeds import IdentifierConfigError, read_identifiers
 
@@ -68,7 +68,8 @@ def analyzer(seeds: tuple[str, ...] = (), patterns: tuple[re.Pattern[str], ...] 
     return analyzer_engine
 
 
-def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
+def scan(paths: list[str], config: Path | None = None,
+         tree: dict[str, str] | None = None) -> tuple[dict, int]:
     """Return structured, value-free findings and confirmed coverage."""
     from detect_secrets.filters.heuristic import is_non_text_file
 
@@ -106,7 +107,8 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
                     continue
                 raise
             starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
-            candidates = [{"path": name, **entry} for entry in references(text, starts)]
+            candidates = [{"path": name, **entry} for entry in (
+                correlate(text, starts, tree) if tree is not None else references(text, starts))]
             observations = set()
             findings = []
             for language in ("en", "ru"):
@@ -135,7 +137,10 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
             report["failed"].append(name)
     return report, (2 if report["failed"] or not (report["scanned"] or
                                                     (report["excluded"] and not report["skipped"]))
-                    else 1 if report["findings"] or any(ref["absolute"] for ref in report["references"]) else 0)
+                    else 1 if report["findings"] or any(
+                        ref["absolute"] or (tree is not None and
+                            len(ref["candidate_object_ids"]) != 1)
+                        for ref in report["references"]) else 0)
 
 
 def main() -> int:
@@ -143,12 +148,19 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--tree", type=Path)
     args = parser.parse_args()
     try:
         paths = read_json(args.manifest)
         if not isinstance(paths, list) or any(type(path) is not str for path in paths):
             raise ValueError("Invalid input manifest")
-        report, code = scan(paths, args.config)
+        tree = read_json(args.tree) if args.tree else None
+        if tree is not None and (not isinstance(tree, dict) or
+                any(type(path) is not str or type(identity) is not str or
+                    not re.fullmatch(r"[0-9a-f]{24}", identity) for path, identity in tree.items()) or
+                len(tree) != len(set(tree.values()))):
+            raise ValueError("Invalid tree inventory")
+        report, code = scan(paths, args.config, tree)
         write_json(args.output, report)
         return code
     except Exception:

@@ -115,6 +115,13 @@ positions, spans and absolute flags, not reference text. Absolute candidates
 produce `ABSOLUTE_PATH_REFERENCE` diagnostics; relative candidates remain
 observable in `coverage.path_references`. This heuristic includes output paths
 and slash-containing model IDs, with no runtime or file-access semantics.
+Correlation uses the longest case-sensitive trailing component suffix against
+the complete tree inventory. Unique best matches link to object IDs; ties
+produce `AMBIGUOUS_PATH_REFERENCE` with all best IDs, and no match produces
+`POSSIBLE_MISSING_PATH_REFERENCE`. Absolute findings persist when linked.
+`coverage.path_groups` joins objects, occurrences and diagnostic fingerprints
+without disclosing reference values. These outcomes are heuristic aids for
+manual review, not confirmed reads or a rename/repair plan.
 
 ## Readability
 

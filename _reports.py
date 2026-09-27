@@ -210,7 +210,7 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
 
 
 def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
-                       expected: list[str]) -> dict[str, Any]:
+                       expected: list[str], tree_ids: set[str] | None = None) -> dict[str, Any]:
     """Accept only the worker's closed schema, never third-party prose or source text."""
     policy_excluded = [path for path in expected if content_excluded(path)]
     coverage: dict[str, list[str]] = {"scanned": [], "skipped": [], "excluded": policy_excluded}
@@ -256,12 +256,21 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
             raise ValueError("Invalid references")
         for entry in candidates:
             if (not isinstance(entry, dict) or set(entry) !=
-                    {"path", "line", "column", "span_length", "absolute"} or
+                     {"path", "line", "column", "span_length", "absolute",
+                      "suffix_components", "candidate_object_ids"} or
                     type(entry["path"]) is not str or entry["path"] not in data["scanned"] or
                     type(entry["line"]) is not int or entry["line"] < 1 or
                     type(entry["column"]) is not int or entry["column"] < 1 or
                     type(entry["span_length"]) is not int or entry["span_length"] < 2 or
-                    type(entry["absolute"]) is not bool):
+                     type(entry["absolute"]) is not bool or
+                     type(entry["suffix_components"]) is not int or entry["suffix_components"] < 0 or
+                     not isinstance(entry["candidate_object_ids"], list) or
+                     any(type(identity) is not str or not re.fullmatch(r"[0-9a-f]{24}", identity)
+                         for identity in entry["candidate_object_ids"]) or
+                     entry["candidate_object_ids"] != sorted(set(entry["candidate_object_ids"])) or
+                     (tree_ids is not None and not set(entry["candidate_object_ids"]) <= tree_ids) or
+                     (entry["suffix_components"] == 0) != (not entry["candidate_object_ids"]) or
+                     entry["suffix_components"] > entry["span_length"]):
                 raise ValueError("Invalid reference")
         if len({(e["path"], e["line"], e["column"], e["span_length"])
                 for e in candidates}) != len(candidates):
@@ -270,6 +279,15 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
             if entry["absolute"]:
                 items.append(diagnostic("presidio", "ABSOLUTE_PATH_REFERENCE",
                                         "Possible absolute path reference in scanned text.",
+                                        path=entry["path"], line=entry["line"],
+                                         column=entry["column"], span_length=entry["span_length"]))
+            if len(entry["candidate_object_ids"]) != 1:
+                rule = ("AMBIGUOUS_PATH_REFERENCE" if entry["candidate_object_ids"] else
+                        "POSSIBLE_MISSING_PATH_REFERENCE")
+                items.append(diagnostic("presidio", rule,
+                                        "Multiple tree objects share the longest matching path suffix."
+                                        if entry["candidate_object_ids"] else
+                                        "Possible external or missing path reference in scanned text.",
                                         path=entry["path"], line=entry["line"],
                                         column=entry["column"], span_length=entry["span_length"]))
         if ("error" not in data and result.get("exit_code") in (0, 1, 2) and

@@ -88,13 +88,17 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
         jobs.extend(make_codestyle_jobs(root, run_dir, files, architecture_ready, groups))
     if "anonymity" in groups:
         manifest = run_dir / "presidio-files.json"
+        tree_manifest = run_dir / "presidio-tree.json"
         output = run_dir / "raw/presidio.json"
         write_json(manifest, files["presidio_inputs"], root)
+        tree = files.get("_tree_ids", {})
+        write_json(tree_manifest, tree, root)
         jobs.append({"name": "presidio", "tool": "presidio", "argv":
-                     [sys.executable, str(tool_dir() / "_presidio_worker.py"),
-                      "--manifest", str(manifest), "--output", str(output),
-                      "--config", str(root / ".eryx/presidio.toml")],
-                     "json_file": output, "presidio_inputs": files["presidio_inputs"]})
+                      [sys.executable, str(tool_dir() / "_presidio_worker.py"),
+                       "--manifest", str(manifest), "--output", str(output),
+                       "--config", str(root / ".eryx/presidio.toml"), "--tree", str(tree_manifest)],
+                      "json_file": output, "presidio_inputs": files["presidio_inputs"],
+                      "tree_ids": set(tree.values())})
     return jobs
 
 
@@ -161,7 +165,8 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
         path = run_dir / "raw" / f"{job['name']}.{stream}.log"
         atomic_write(path, result.get(stream, ""), root)
         logs[stream] = path.relative_to(root).as_posix()
-    normalized = (normalize_presidio(result, root, job["json_file"], job["presidio_inputs"])
+    normalized = (normalize_presidio(result, root, job["json_file"], job["presidio_inputs"],
+                                     job.get("tree_ids"))
                   if "presidio_inputs" in job else normalize(job["tool"], result, root, job.get("json_file")))
     if "presidio_inputs" in job and job["json_file"].exists():
         # Never archive unvalidated worker output: a malformed payload may contain
@@ -269,6 +274,10 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                 diagnostics.append(diagnostic("tree", exc.code,
                                               "Tree identifiers could not be checked: invalid identifier configuration.",
                                               is_infrastructure_error=True))
+            known_ids = {obj["object_id"] for obj in files["tree_objects"]}
+            files["_tree_ids"] = {raw: identity for raw in displays
+                                  if (identity := hashlib.sha256(
+                                      (run_id + "\0" + raw).encode()).hexdigest()[:24]) in known_ids}
         scope = read_scope(root)
         effective = covered_files(root, checks, scope["exclude_directory_names"])
         if not effective:
@@ -377,9 +386,11 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"), message,
                                       is_infrastructure_error=True))
     if "anonymity" in files["groups"]:
+        tree_manifest = run_dir / "presidio-tree.json"
+        if tree_manifest.exists():
+            tree_manifest.unlink()
         by_id = {obj["object_id"]: obj for obj in files["tree_objects"]}
-        object_ids = {raw: identity for raw in displays
-                       if (identity := hashlib.sha256((run_id + "\0" + raw).encode()).hexdigest()[:24]) in by_id}
+        object_ids = files.pop("_tree_ids", {})
         safe_references = []
         for entry in references:
             source_id = object_ids.get(entry["path"])
@@ -392,11 +403,18 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                                            str(entry["line"]) + ":" + str(entry["column"]) + ":" +
                                            str(entry["span_length"])).encode()).hexdigest()[:24]
             safe_references.append({"reference_id": reference_id, "source_object_id": source_id,
-                                    "path": displays[entry["path"]], "line": entry["line"],
-                                    "column": entry["column"], "span_length": entry["span_length"],
-                                    "absolute": entry["absolute"]})
+                                     "path": displays[entry["path"]], "line": entry["line"],
+                                     "column": entry["column"], "span_length": entry["span_length"],
+                                     "absolute": entry["absolute"],
+                                     "suffix_components": entry["suffix_components"],
+                                     "candidate_object_ids": entry["candidate_object_ids"],
+                                     "outcome": ("missing" if not entry["candidate_object_ids"] else
+                                                 "unique" if len(entry["candidate_object_ids"]) == 1 else
+                                                 "ambiguous")})
             for item in diagnostics:
-                if (item["tool"] == "presidio" and item["rule"] == "ABSOLUTE_PATH_REFERENCE" and
+                if (item["tool"] == "presidio" and item["rule"] in
+                        {"ABSOLUTE_PATH_REFERENCE", "AMBIGUOUS_PATH_REFERENCE",
+                         "POSSIBLE_MISSING_PATH_REFERENCE"} and
                         item["path"] == entry["path"] and item["line"] == entry["line"] and
                         item["column"] == entry["column"] and
                         item["span_length"] == entry["span_length"]):
@@ -445,6 +463,30 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         results = sanitized(results)
         diagnostics = sanitized(diagnostics)
     diagnostics = sorted_diagnostics(diagnostics)
+    if "anonymity" in files["groups"]:
+        grouped_refs: dict[str, list[dict[str, Any]]] = {}
+        for ref in files["path_references"]:
+            for identity in {ref["source_object_id"], *ref["candidate_object_ids"]}:
+                grouped_refs.setdefault(identity, []).append(ref)
+        object_findings: dict[str, list[str]] = {}
+        reference_findings: dict[str, list[str]] = {}
+        for item in diagnostics:
+            if item.get("object_id"):
+                object_findings.setdefault(item["object_id"], []).append(item["fingerprint"])
+            if item.get("reference_id"):
+                reference_findings.setdefault(item["reference_id"], []).append(item["fingerprint"])
+        groups = []
+        for obj in files["tree_objects"]:
+            identity = obj["object_id"]
+            linked = grouped_refs.get(identity, [])
+            findings = list(dict.fromkeys(object_findings.get(identity, []) +
+                                          [fingerprint for ref in linked for fingerprint in
+                                           reference_findings.get(ref["reference_id"], [])]))
+            groups.append({"group_id": hashlib.sha256((run_id + "\0group\0" + identity).encode()).hexdigest()[:24],
+                           "object_id": identity, "path": obj["path"],
+                           "reference_ids": [ref["reference_id"] for ref in linked],
+                           "diagnostic_fingerprints": findings})
+        files["path_groups"] = groups
     has_error = any(item.get("is_infrastructure_error") for item in diagnostics) or any(result["status"] == "error" for result in results)
     code = 2 if has_error else (1 if diagnostics else 0)
     counts = Counter(item["tool"] for item in diagnostics)
@@ -475,6 +517,12 @@ def display(report: dict[str, Any], json_output: bool, limit: int) -> None:
         return
     summary = report["summary"]
     print(f"{report['status'].upper()}: {summary['diagnostics']} diagnostics; exit={report['exit_code']}; {report['duration_seconds']}s")
+    coverage = report.get("coverage", {})
+    if "path_reference_count" in coverage and "anonymity" in coverage.get("groups", []):
+        outcomes = Counter(ref["outcome"] for ref in coverage["path_references"])
+        print(f"PATH REFERENCES: {coverage['path_reference_count']} candidates; "
+              f"{outcomes['unique']} unique, {outcomes['ambiguous']} ambiguous, {outcomes['missing']} possible missing/external; "
+              f"{len(coverage.get('path_groups', []))} object groups")
     for item in report["diagnostics"][:limit]:
         location = item.get("path") or "<system>"
         if item.get("line") is not None:

@@ -105,6 +105,18 @@ and remote-command operands are avoided where recognizable; unusual quoting,
 spaces, escapes and other path grammars can be missed. Candidate text is never
 included in reports or archived logs; an absolute reference is a potential
 portability concern, not evidence of a runtime read.
+Each candidate is compared to inventoried tree paths by the greatest number of
+equal trailing **components**, with filesystem-case-sensitive spelling. A unique
+nonempty best suffix links to an opaque tree object ID (including path-only
+archives/checkpoints); tied best suffixes produce `AMBIGUOUS_PATH_REFERENCE`
+with every tied ID retained. No common trailing component produces
+`POSSIBLE_MISSING_PATH_REFERENCE` (a possible external or missing dependency,
+not a proven file read). An absolute candidate remains a finding even when linked.
+`path_references[*]` records the outcome, suffix length and candidate IDs;
+`path_groups` relates every tree object to source and linked reference IDs and
+individual diagnostic fingerprints. Redacted display paths are for humans,
+never matching keys. Every diagnostic affects the normal check status; no repair
+is attempted.
 When code-style and anonymity groups run together, pydoclint receives selected
 document roots through a consumer-owned manifest rather than path-bearing process
 arguments.

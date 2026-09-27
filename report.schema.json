@@ -22,13 +22,22 @@
           "secret": {"enum": ["scanned", "skipped", "excluded_by_policy", "unconfirmed", "selected", "not_selected"]}}}
       }}, "uniqueItems": true},
       "tree_count": {"type": "integer", "minimum": 0},
-      "path_references": {"type": "array", "items": {"type": "object", "required": ["reference_id", "source_object_id", "path", "line", "column", "span_length", "absolute"], "properties": {
+       "path_references": {"type": "array", "items": {"type": "object", "required": ["reference_id", "source_object_id", "path", "line", "column", "span_length", "absolute", "outcome", "suffix_components", "candidate_object_ids"], "properties": {
         "reference_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
         "source_object_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
         "path": {"type": "string"}, "line": {"type": "integer", "minimum": 1},
         "column": {"type": "integer", "minimum": 1}, "span_length": {"type": "integer", "minimum": 2},
-        "absolute": {"type": "boolean"}}}},
-      "path_reference_count": {"type": "integer", "minimum": 0},
+         "absolute": {"type": "boolean"},
+         "outcome": {"enum": ["unique", "ambiguous", "missing"]},
+         "suffix_components": {"type": "integer", "minimum": 0},
+          "candidate_object_ids": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{24}$"}}}}},
+       "path_reference_count": {"type": "integer", "minimum": 0},
+       "path_groups": {"type": "array", "items": {"type": "object", "required": ["group_id", "object_id", "path", "reference_ids", "diagnostic_fingerprints"], "properties": {
+         "group_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+         "object_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+         "path": {"type": "string"},
+         "reference_ids": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{24}$"}},
+          "diagnostic_fingerprints": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{24}$"}}}}},
       "tree_incomplete_count": {"type": "integer", "minimum": 0},
       "presidio_inputs": {"type": "array", "items": {"type": "string"}},
       "presidio_scanned": {"type": "array", "items": {"type": "string"}},
