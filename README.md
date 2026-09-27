@@ -204,15 +204,20 @@ consumer in its integration PR after verifying migration. See [ORIGIN.md](ORIGIN
 3. Run Eryx tests and the consumer's checks/runtime tests. From the consumer:
    `uv run --locked --group dev python -B -m unittest discover -s eryx/tests`.
    Tests also need `jsonschema`, supplied by Eryx's own dev group.
-4. Commit the tool branch in Eryx. A consumer can commit a **provisional local
-   gitlink** to that SHA before merge; label publication/final integration pending.
-   The consumer and Eryx remain separate repositories. Do not describe this
-   provisional pin as the reviewed or merged revision.
-5. Publish and review the tool branch with `gh pr create --repo ArtFilippov/eryx`.
-   Include reproduction and verification; pass CI and review, then merge the PR.
-6. Fetch Eryx and pin the exact reachable merged SHA in a separate consumer
-   integration change. Reinstall if configs/dependencies changed, rerun checks,
-   and link the Eryx PR in the consumer PR.
+4. Commit the tool branch in Eryx. After testing the actual local revision
+   (including a local merge result, if applicable), pin its exact SHA in a
+   separate consumer change and run the consumer checks immediately. Reinstall
+   if configs/dependencies changed. Record the running SHA, gitlink, checkout
+   state and test outcomes. The consumer and Eryx remain separate repositories.
+5. Publish the tool changes in an Eryx PR with `gh pr create --repo ArtFilippov/eryx`
+   (or update the existing PR). Include reproduction and verification; record
+   the PR link, or publication pending until it exists. Local integration and
+   completion depend on implementation and verification, not external PR review
+   or merge. Distinguish publication, review and merge in status reports.
+6. After upstream merge, fetch Eryx and synchronize the consumer gitlink to the
+   reachable merged SHA in a separate follow-up. Rerun affected checks and link
+   the Eryx PR. A tested local pin is locally integrated, not a claim of upstream
+   merge.
 
 Standalone development:
 

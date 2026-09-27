@@ -42,8 +42,12 @@ submodule remains clean.
 
 Develop directly in a consumer submodule or separate clone: branch first if HEAD
 is detached, reproduce, fix, add an autonomous regression and test. Commit Eryx
-changes in Eryx. A consumer may commit a local provisional gitlink to that commit
-before it is merged; record that publication and final integration are pending.
-Publish and review the tool changes in a PR **in Eryx** through `gh`. Once merged,
-pin the reachable merged SHA in a **separate consumer change**, rerun integration
-checks and link the tool PR. Keep the two repository histories separate.
+changes in Eryx. After testing the actual local revision (including a local merge
+result, if used), the consumer may pin its SHA in a separate consumer change and
+run integration checks immediately. Record the exact Eryx SHA, checkout state,
+test outcomes, and PR link (or publication pending). Local completion depends on
+implementation and verification, not external review or merge. Publish tool changes
+in an Eryx PR through `gh`; track publication, review and merge separately. Once
+upstream merges, synchronize the consumer gitlink to the reachable merged SHA in
+a separate follow-up, rerun affected checks, and link the PR. Keep the two
+repository histories separate.
