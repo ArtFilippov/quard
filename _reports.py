@@ -221,7 +221,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 {"scanned", "skipped", "findings", "failed", "error"}):
             raise ValueError("Invalid worker schema")
         if ("error" in data and data["error"] not in
-                {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH"}):
+                {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH", "PRESIDIO_SEED_CONFIG_ERROR"}):
             raise ValueError("Invalid worker error")
         for key in ("scanned", "skipped", "failed"):
             if (not isinstance(data[key], list) or any(type(p) is not str for p in data[key]) or
@@ -253,7 +253,8 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 result.get("exit_code") == (1 if items else 0) and not result.get("error") and
                 not result.get("stdout") and not result.get("stderr")):
             error = None
-        elif data.get("error") in {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH"}:
+        elif data.get("error") in {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
+                                   "PRESIDIO_SEED_CONFIG_ERROR"}:
             error = data["error"]
     except (OSError, ValueError, KeyError, TypeError):
         coverage = {"scanned": [], "skipped": []}
@@ -262,7 +263,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
         items = []
     if error:
         items.append(diagnostic("presidio", error,
-                                "Presidio could not confirm the selected text scan; check the pinned English/Russian models, recognizer inventory and worker status.",
+                                "Presidio could not confirm the selected text scan; check seed configuration, pinned models, recognizer inventory and worker status.",
                                 is_infrastructure_error=True))
     return {"status": "error" if error else ("violations" if items else "passed"),
             "error": error, "diagnostics": items, "coverage": coverage}

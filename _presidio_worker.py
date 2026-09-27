@@ -13,6 +13,7 @@ sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
 from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
+from _presidio_seeds import SeedConfigError, read_seeds
 
 MAX_TEXT_BYTES = 512 * 1024
 
@@ -41,7 +42,7 @@ def unchanged(name: str, signature: tuple) -> bool:
     return file_signature(Path(name).stat(follow_symlinks=False)) == signature
 
 
-def analyzer():
+def analyzer(seeds: tuple[str, ...] = ()):
     """Load pinned local resources only; never download models during a check."""
     from presidio_analyzer import AnalyzerEngine
     from presidio_analyzer.nlp_engine import NlpEngineProvider
@@ -59,18 +60,22 @@ def analyzer():
     if not engine.is_loaded() or set(engine.nlp) != {"en", "ru"}:
         raise RuntimeError("Required NLP models unavailable")
     analyzer_engine = AnalyzerEngine(nlp_engine=engine, supported_languages=["en", "ru"])
-    add_russian_recognizers(analyzer_engine)
+    add_russian_recognizers(analyzer_engine, seeds)
     verify_inventory(analyzer_engine)
     return analyzer_engine
 
 
-def scan(paths: list[str]) -> tuple[dict, int]:
+def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
     """Return structured, value-free findings and confirmed coverage."""
     from detect_secrets.filters.heuristic import is_non_text_file
 
     report = {"scanned": [], "skipped": [], "findings": [], "failed": []}
     try:
-        engine = analyzer()
+        seeds = read_seeds(config)
+    except SeedConfigError:
+        return report | {"error": "PRESIDIO_SEED_CONFIG_ERROR"}, 2
+    try:
+        engine = analyzer(seeds) if seeds else analyzer()
     except PresidioPolicyError:
         return report | {"error": "PRESIDIO_POLICY_MISMATCH"}, 2
     except Exception:
@@ -126,12 +131,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--config", type=Path)
     args = parser.parse_args()
     try:
         paths = read_json(args.manifest)
         if not isinstance(paths, list) or any(type(path) is not str for path in paths):
             raise ValueError("Invalid input manifest")
-        report, code = scan(paths)
+        report, code = scan(paths, args.config)
         write_json(args.output, report)
         return code
     except Exception:

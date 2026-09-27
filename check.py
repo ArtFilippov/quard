@@ -88,7 +88,8 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
         write_json(manifest, files["presidio_inputs"], root)
         jobs.append({"name": "presidio", "tool": "presidio", "argv":
                      [sys.executable, str(tool_dir() / "_presidio_worker.py"),
-                      "--manifest", str(manifest), "--output", str(output)],
+                      "--manifest", str(manifest), "--output", str(output),
+                      "--config", str(root / ".eryx/presidio.toml")],
                      "json_file": output, "presidio_inputs": files["presidio_inputs"]})
     return jobs
 

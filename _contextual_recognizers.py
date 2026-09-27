@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from _presidio_seeds import SeedRecognizer
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 
 
@@ -58,8 +59,9 @@ class RemoteAccountRecognizer(EntityRecognizer):
         return results
 
 
-def add_contextual_recognizers(engine) -> None:
+def add_contextual_recognizers(engine, seeds: tuple[str, ...] = ()) -> None:
     """Register the same context rules for both independent language passes."""
     for language in ("en", "ru"):
         engine.registry.add_recognizer(LocalPathRecognizer(language))
         engine.registry.add_recognizer(RemoteAccountRecognizer(language))
+        engine.registry.add_recognizer(SeedRecognizer(language, seeds))

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _reports import normalize_presidio, sorted_diagnostics
 from _presidio_policy import ENGLISH_ENTITIES, RUSSIAN_ENTITIES, PresidioPolicyError, verify_inventory
 from _presidio_worker import MAX_TEXT_BYTES, analyzer, scan
+from _presidio_seeds import seed_spans
 from check import execute_job, run_checks
 from test_infrastructure import create_repo, native_result
 
@@ -134,10 +135,72 @@ class PresidioTests(unittest.TestCase):
             for _, _, value in expected:
                 self.assertNotIn(value, content, path)
 
+    def test_real_consumer_seeds_find_every_literal_occurrence_without_leaking_values(self):
+        seeds = ("СидОр", "İd", "Secret-branch")
+        (self.root / ".eryx/presidio.toml").write_text(
+            'seeds = ["СидОр", "İd", "Secret-branch"]\n', encoding="utf-8")
+        lines = ['# сидор and СИДОР', 'tag = "preİDpost"',
+                 'path = "/unusual/secret-BRANCH/file"',
+                 'ssh secret-branch@host.example', 'other = "not identified"']
+        source = self.root / "review/seeds.txt"
+        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        before = source.read_bytes()
+        report = run_checks(self.root)
+        presidio = next(tool for tool in report["tools"] if tool["name"] == "presidio")
+        self.assertEqual((report["exit_code"], presidio["status"], presidio["exit_code"]),
+                         (1, "violations", 1), report)
+        actual = {(d["line"], d["column"], d["span_length"])
+                  for d in report["diagnostics"] if d["rule"] == "KNOWN_IDENTIFIER_SEED"}
+        self.assertEqual(actual, {(1, 3, 5), (1, 13, 5), (2, 11, 2),
+                                  (3, 18, 13), (4, 5, 13)})
+        self.assertEqual(report["coverage"]["presidio_scanned"],
+                         ["review/clean.txt", "review/seeds.txt"])
+        self.assertEqual(report["coverage"]["presidio_unconfirmed"], [])
+        self.assertEqual(source.read_bytes(), before)
+        archived = self.root / Path(report["report_path"]).parent
+        for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+            content = path.read_text(encoding="utf-8")
+            for value in ("СидОр", "сидор", "СИДОР", "İd", "İD", "Secret-branch", "secret-BRANCH"):
+                self.assertNotIn(value, content, path)
+        self.assertFalse(any(seed in " ".join(tool["argv"]) for seed in seeds for tool in report["tools"]))
+
+    def test_seed_offsets_survive_casefold_expansion_and_overlap(self):
+        self.assertEqual(seed_spans("aİb ß SS", ("İ", "i", "ss")),
+                         [(1, 2), (4, 5), (6, 8)])
+
+    def test_empty_and_missing_seeds_keep_general_policy_active(self):
+        self.assertEqual(run_checks(self.root)["exit_code"], 0)
+        (self.root / ".eryx/presidio.toml").write_text("seeds = []\n", encoding="utf-8")
+        (self.root / "review/known.txt").write_text('path = "/home/marker/work"\n', encoding="utf-8")
+        report = run_checks(self.root)
+        self.assertEqual(next(tool for tool in report["tools"] if tool["name"] == "presidio")["status"],
+                         "violations", report)
+        self.assertIn("LOCAL_PATH_IDENTIFIER", {d["rule"] for d in report["diagnostics"]})
+
+    def test_invalid_seed_config_is_value_free_and_preserves_independent_jobs(self):
+        config = self.root / ".eryx/presidio.toml"
+        for invalid in ('seeds = ["private-marker", 5]\n',
+                        'seeds = ["private-marker"\n',
+                        'seeds = ["private-marker"]\nextra = true\n',
+                        'seeds = [""]\n'):
+            with self.subTest(invalid=invalid):
+                config.write_text(invalid, encoding="utf-8")
+                report = run_checks(self.root)
+                presidio = next(tool for tool in report["tools"] if tool["name"] == "presidio")
+                secret = next(tool for tool in report["tools"] if tool["name"] == "pylint-anonymity")
+                self.assertEqual((report["exit_code"], presidio["status"], presidio["exit_code"]),
+                                 (2, "error", 2), report)
+                self.assertEqual(secret["status"], "passed", report)
+                self.assertEqual(report["coverage"]["presidio_unconfirmed"], ["review/clean.txt"])
+                self.assertIn("PRESIDIO_SEED_CONFIG_ERROR", {d["rule"] for d in report["diagnostics"]})
+                archived = self.root / Path(report["report_path"]).parent
+                for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+                    self.assertNotIn("private-marker", path.read_text(encoding="utf-8"))
+
     def test_contextual_inventory_is_active_in_each_language(self):
         engine = analyzer()
         for language in ("en", "ru"):
-            for name in ("LocalPathRecognizer", "RemoteAccountRecognizer"):
+            for name in ("LocalPathRecognizer", "RemoteAccountRecognizer", "SeedRecognizer"):
                 recognizer = next(r for r in engine.registry.recognizers
                                   if r.name == name and r.supported_language == language)
                 engine.registry.recognizers.remove(recognizer)

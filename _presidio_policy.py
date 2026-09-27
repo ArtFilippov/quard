@@ -18,6 +18,7 @@ ENGLISH_RECOGNIZERS = {
     "NhsRecognizer": ("UK_NHS",),
     "PhoneRecognizer": ("PHONE_NUMBER",),
     "RemoteAccountRecognizer": ("REMOTE_ACCOUNT",),
+    "SeedRecognizer": ("KNOWN_IDENTIFIER_SEED",),
     "SpacyRecognizer": ("AGE", "DATE_TIME", "EMAIL", "ID", "LOCATION", "NRP",
                         "ORGANIZATION", "PERSON", "PHONE_NUMBER"),
     "UrlRecognizer": ("URL",),
@@ -46,7 +47,7 @@ RUSSIAN_ENTITIES = frozenset(e for entities in RUSSIAN_RECOGNIZERS.values() for 
 ALL_ENTITIES = ENGLISH_ENTITIES | RUSSIAN_ENTITIES
 
 
-def add_russian_recognizers(engine) -> None:
+def add_russian_recognizers(engine, seeds: tuple[str, ...] = ()) -> None:
     """Extend Presidio's Russian defaults with country identifiers and NER parity."""
     from presidio_analyzer import Pattern, PatternRecognizer
     from presidio_analyzer import predefined_recognizers as builtins
@@ -76,7 +77,7 @@ def add_russian_recognizers(engine) -> None:
         engine.registry.add_recognizer(PatternRecognizer(
             supported_entity=entity, name=name, supported_language="ru",
             patterns=[Pattern(name, regex, 0.3)], context=context))
-    add_contextual_recognizers(engine)
+    add_contextual_recognizers(engine, seeds)
 
 
 class PresidioPolicyError(RuntimeError):

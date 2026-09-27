@@ -41,6 +41,22 @@ across model windows. The worker checks file identity and timestamps around the
 read and after analysis to reject changed files. Raw structured files and notebook
 JSON are scanned as text, with physical file lines. Archived Presidio native output
 contains only normalized status and coverage, never unvalidated worker output.
+To flag known identifiers even inside comments, strings, compound names or
+unusual paths and remote commands, optionally create consumer-owned
+`.eryx/presidio.toml` outside the review target:
+
+```toml
+seeds = ["ExampleAlias", "ПримерПсевдоним"]
+```
+
+List spelling variants and transliterations explicitly. Matching is literal and
+case-insensitive, including substrings; each occurrence is reported as
+`KNOWN_IDENTIFIER_SEED` with physical position and span length. Missing files or
+`seeds = []` leave the general-purpose recognizers active. Invalid configuration
+fails the Presidio job (exit 2) with a value-free error. Keep the private config
+out of the review package; seeds and matched values are never passed in process
+arguments or emitted in reports or archived logs.
+
 An anonymity-only consumer needs no `src/`, native code-analysis configuration or
 accepted architecture. Code-style
 analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
@@ -144,6 +160,7 @@ rule IDs or explicit adapter categories, stable fingerprints and tool/profile id
 consumer/
   eryx/                    # immutable gitlink; tool code, pins, defaults, tests
   .eryx/                   # versioned consumer settings and integration state
+    presidio.toml          # optional private literal seeds
     readability.toml
     scope.toml
     architecture.ready.json
@@ -160,7 +177,8 @@ consumer/
   tach.toml
 ```
 
-Commit `.gitmodules`, the Eryx gitlink, `.eryx/` settings and native configs.
+Commit `.gitmodules`, the Eryx gitlink, non-private `.eryx/` settings and native configs;
+keep private seeds outside the published review package.
 Ignore only runtime directories, not `.eryx/` wholesale. Analyzer caches and logs
 are consumer-owned; uv retains its normal package cache. Tach may use `.tach/` in
 the consumer. A normal install/check/apply/accept leaves the tool checkout clean.
