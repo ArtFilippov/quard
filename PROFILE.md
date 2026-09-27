@@ -109,6 +109,12 @@ by filename policy before opening or measuring them. Per-job `*_excluded` and
 `*_excluded_count` are distinct from scans, binary skips, and failures. The worker
 coverage is validated against the selected path policy; a missing or misclassified
 exclusion fails rather than certifying a scan. Zero confirmed text scans still fail.
+The Presidio text job also extracts primitive POSIX-like path references from
+confirmed UTF-8 text. Candidate records include safe source identities, original
+positions, spans and absolute flags, not reference text. Absolute candidates
+produce `ABSOLUTE_PATH_REFERENCE` diagnostics; relative candidates remain
+observable in `coverage.path_references`. This heuristic includes output paths
+and slash-containing model IDs, with no runtime or file-access semantics.
 
 ## Readability
 

@@ -215,12 +215,13 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
     policy_excluded = [path for path in expected if content_excluded(path)]
     coverage: dict[str, list[str]] = {"scanned": [], "skipped": [], "excluded": policy_excluded}
     items: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     error = "PRESIDIO_SCAN_INCOMPLETE"
     try:
         data = json.loads(output.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or set(data) not in (
-                 {"scanned", "skipped", "excluded", "findings", "failed"},
-                 {"scanned", "skipped", "excluded", "findings", "failed", "error"}):
+                {"scanned", "skipped", "excluded", "findings", "references", "failed"},
+                {"scanned", "skipped", "excluded", "findings", "references", "failed", "error"}):
             raise ValueError("Invalid worker schema")
         if ("error" in data and data["error"] not in
                 {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
@@ -250,6 +251,27 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                                     f"Potential {entry['entity']} detected (score {entry['score']:.4f}).",
                                     path=entry["path"], line=entry["line"], column=entry["column"],
                                     score=entry["score"], span_length=entry["span_length"]))
+        candidates = data["references"]
+        if not isinstance(candidates, list):
+            raise ValueError("Invalid references")
+        for entry in candidates:
+            if (not isinstance(entry, dict) or set(entry) !=
+                    {"path", "line", "column", "span_length", "absolute"} or
+                    type(entry["path"]) is not str or entry["path"] not in data["scanned"] or
+                    type(entry["line"]) is not int or entry["line"] < 1 or
+                    type(entry["column"]) is not int or entry["column"] < 1 or
+                    type(entry["span_length"]) is not int or entry["span_length"] < 2 or
+                    type(entry["absolute"]) is not bool):
+                raise ValueError("Invalid reference")
+        if len({(e["path"], e["line"], e["column"], e["span_length"])
+                for e in candidates}) != len(candidates):
+            raise ValueError("Duplicate reference")
+        for entry in candidates:
+            if entry["absolute"]:
+                items.append(diagnostic("presidio", "ABSOLUTE_PATH_REFERENCE",
+                                        "Possible absolute path reference in scanned text.",
+                                        path=entry["path"], line=entry["line"],
+                                        column=entry["column"], span_length=entry["span_length"]))
         if ("error" not in data and result.get("exit_code") in (0, 1, 2) and
                 not result.get("error") and not result.get("stdout") and not result.get("stderr")):
             coverage = {key: data[key] for key in ("scanned", "skipped", "excluded")}
@@ -273,7 +295,8 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                                 "Presidio could not confirm the selected text scan; check identifier configuration, pinned models, recognizer inventory and worker status.",
                                 is_infrastructure_error=True))
     return {"status": "error" if error else ("violations" if items else "passed"),
-            "error": error, "diagnostics": items, "coverage": coverage}
+            "error": error, "diagnostics": items, "coverage": coverage,
+            "references": candidates if not error else []}
 
 
 def sorted_diagnostics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -355,7 +355,7 @@ class PresidioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "native.json"
             output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "excluded": [], "failed": [],
-                                          "findings": [{"path": "review/clean.txt", "line": 1,
+                                           "references": [], "findings": [{"path": "review/clean.txt", "line": 1,
                                                         "column": 1, "span_length": length,
                                                         "entity": "PERSON", "score": 0.85}
                                                        for length in (4, 8)]}), encoding="utf-8")
@@ -446,7 +446,8 @@ class PresidioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "native.json"
             output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "excluded": [],
-                                          "failed": ["review/broken.txt"], "findings": []}), encoding="utf-8")
+                                           "failed": ["review/broken.txt"], "findings": [],
+                                           "references": []}), encoding="utf-8")
             expected = ["review/clean.txt", "review/broken.txt"]
             partial = normalize_presidio({"exit_code": 2}, self.root, output, expected)
             self.assertEqual(partial["status"], "error")
@@ -473,7 +474,7 @@ class PresidioTests(unittest.TestCase):
         def fake(argv, cwd, timeout):
             if "_presidio_worker.py" in " ".join(argv):
                 Path(argv[argv.index("--output") + 1]).write_text(
-                    '{"scanned": [], "skipped": [], "excluded": [], "failed": [], "findings": []}', encoding="utf-8")
+                     '{"scanned": [], "skipped": [], "excluded": [], "failed": [], "findings": [], "references": []}', encoding="utf-8")
             elif "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
                 selected = json.loads(Path(argv[argv.index("--secrets") + 1]).read_text())

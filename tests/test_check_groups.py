@@ -38,7 +38,8 @@ class CheckGroupsTests(unittest.TestCase):
             if "_presidio_worker.py" in " ".join(argv):
                 selected = json.loads(Path(argv[argv.index("--manifest") + 1]).read_text())
                 Path(argv[argv.index("--output") + 1]).write_text(
-                    json.dumps({"scanned": selected, "skipped": [], "excluded": [], "failed": [], "findings": []}))
+                     json.dumps({"scanned": selected, "skipped": [], "excluded": [], "failed": [],
+                                 "findings": [], "references": []}))
                 return native_result(argv)
             if "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")

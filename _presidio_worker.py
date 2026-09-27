@@ -14,6 +14,7 @@ sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
 from _content_policy import content_excluded
+from _path_references import references
 from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
 from _presidio_seeds import IdentifierConfigError, read_identifiers
 
@@ -71,7 +72,8 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
     """Return structured, value-free findings and confirmed coverage."""
     from detect_secrets.filters.heuristic import is_non_text_file
 
-    report = {"scanned": [], "skipped": [], "excluded": [], "findings": [], "failed": []}
+    report = {"scanned": [], "skipped": [], "excluded": [], "findings": [],
+              "references": [], "failed": []}
     try:
         seeds, patterns = read_identifiers(config)
     except IdentifierConfigError as exc:
@@ -104,6 +106,7 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
                     continue
                 raise
             starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
+            candidates = [{"path": name, **entry} for entry in references(text, starts)]
             observations = set()
             findings = []
             for language in ("en", "ru"):
@@ -125,13 +128,14 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
             if not unchanged(name, signature):
                 raise OSError("Input changed during analysis")
             report["findings"].extend(findings)
+            report["references"].extend(candidates)
             report["scanned"].append(name)
         except Exception:
             # No source text, third-party messages or matched strings leave this worker.
             report["failed"].append(name)
     return report, (2 if report["failed"] or not (report["scanned"] or
                                                     (report["excluded"] and not report["skipped"]))
-                    else 1 if report["findings"] else 0)
+                    else 1 if report["findings"] or any(ref["absolute"] for ref in report["references"]) else 0)
 
 
 def main() -> int:

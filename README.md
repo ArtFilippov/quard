@@ -92,6 +92,19 @@ record them separately from confirmed text scans, unsupported binaries and
 unconfirmed failures. `tree_objects[*].content` uses `excluded_by_policy` for
 each job that confirms the exclusion. The two jobs retain independent outcomes;
 zero confirmed text scans still fail their respective check contracts.
+Scanned UTF-8 text also yields `coverage.path_references` (and
+`path_reference_count`): opaque reference and source-object IDs, redacted source
+path, original physical line/column and span length, and an `absolute` flag.
+Each absolute candidate emits `ABSOLUTE_PATH_REFERENCE` with its reference ID;
+relative candidates are recorded for manual inspection even without a diagnostic.
+The heuristic recognizes POSIX-style `/a/b`, `./a/b`, `../a/b` and `a/b` forms
+in text, including defaults, comments, docs, shell and config files. It does
+not interpret APIs, follow runtime arguments, inspect excluded content or
+distinguish outputs and slash-containing model IDs from resource paths. URL
+and remote-command operands are avoided where recognizable; unusual quoting,
+spaces, escapes and other path grammars can be missed. Candidate text is never
+included in reports or archived logs; an absolute reference is a potential
+portability concern, not evidence of a runtime read.
 When code-style and anonymity groups run together, pydoclint receives selected
 document roots through a consumer-owned manifest rather than path-bearing process
 arguments.

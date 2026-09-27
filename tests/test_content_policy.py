@@ -130,7 +130,7 @@ class ContentPolicyTests(unittest.TestCase):
                                              ("false-exclude", [], selected)):
                 with self.subTest(label=label):
                     output.write_text(json.dumps({"scanned": scanned, "skipped": [], "excluded": excluded,
-                                                  "failed": [], "findings": []}), encoding="utf-8")
+                                                   "failed": [], "findings": [], "references": []}), encoding="utf-8")
                     self.assertEqual(normalize_presidio({"exit_code": 0}, self.root, output, selected)["status"],
                                      "error")
         self.assertTrue(content_excluded("x/asset.TXT.GZ"))
@@ -149,7 +149,7 @@ class ContentPolicyTests(unittest.TestCase):
             if "_presidio_worker.py" in argv[1]:
                 Path(argv[argv.index("--output") + 1]).write_text(
                     json.dumps({"scanned": ["review/ordinary.txt"], "skipped": [], "excluded": [],
-                                "failed": [], "findings": []}), encoding="utf-8")
+                                 "failed": [], "findings": [], "references": []}), encoding="utf-8")
                 return native_result(argv)
             Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
             Path(argv[argv.index("--secret-coverage") + 1]).write_text(

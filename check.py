@@ -201,6 +201,7 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
                 "Secret scanner did not confirm every selected input; inspect the tool status and file paths.",
                 is_infrastructure_error=True))
     presidio_coverage = normalized.pop("coverage", None)
+    references = normalized.pop("references", [])
     for entry in normalized["diagnostics"]:
         entry["job"] = job["name"]
         if "profile" in job:
@@ -211,7 +212,8 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
             "exit_code": result["exit_code"], "duration_seconds": result["duration_seconds"],
             "argv": job["argv"], "raw_output": logs, "diagnostics": normalized["diagnostics"],
             "error": normalized["error"], **({"secret_coverage": secret_coverage} if "secret_coverage" in job else {}),
-            **({"presidio_coverage": presidio_coverage} if "presidio_inputs" in job else {})}
+            **({"presidio_coverage": presidio_coverage, "references": references}
+               if "presidio_inputs" in job else {})}
 
 
 def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
@@ -233,13 +235,15 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                              "presidio_skipped": [], "presidio_skipped_count": 0,
                              "presidio_excluded": [], "presidio_excluded_count": 0,
                              "presidio_unconfirmed": [], "tree_objects": [], "tree_count": 0,
-                             "tree_incomplete_count": 0}
+                             "tree_incomplete_count": 0, "path_references": [],
+                             "path_reference_count": 0}
     displays: dict[str, str] = {}
     identifiers = ((), ())
     hidden_identifiers = False
     architecture_ready = False
     eryx_version = "unknown"
     results = []
+    references = []
     try:
         require_runtime()
         checks = read_checks(root)
@@ -333,6 +337,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                                    "Presidio job failed to write its report." if job["tool"] == "presidio" else str(exc),
                                    is_infrastructure_error=True)]}
                 diagnostics.extend(result.pop("diagnostics"))
+                references.extend(result.pop("references", []))
                 if "secret_coverage" in result:
                     coverage = result.pop("secret_coverage")
                     files["secret_scanned"] = coverage["scanned"]
@@ -374,7 +379,30 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     if "anonymity" in files["groups"]:
         by_id = {obj["object_id"]: obj for obj in files["tree_objects"]}
         object_ids = {raw: identity for raw in displays
-                      if (identity := hashlib.sha256((run_id + "\0" + raw).encode()).hexdigest()[:24]) in by_id}
+                       if (identity := hashlib.sha256((run_id + "\0" + raw).encode()).hexdigest()[:24]) in by_id}
+        safe_references = []
+        for entry in references:
+            source_id = object_ids.get(entry["path"])
+            if source_id is None:
+                diagnostics.append(diagnostic("presidio", "PATH_REFERENCE_SOURCE_UNAVAILABLE",
+                                              "Reference source is missing from tree inventory.",
+                                              is_infrastructure_error=True))
+                continue
+            reference_id = hashlib.sha256((run_id + "\0" + source_id + "\0" +
+                                           str(entry["line"]) + ":" + str(entry["column"]) + ":" +
+                                           str(entry["span_length"])).encode()).hexdigest()[:24]
+            safe_references.append({"reference_id": reference_id, "source_object_id": source_id,
+                                    "path": displays[entry["path"]], "line": entry["line"],
+                                    "column": entry["column"], "span_length": entry["span_length"],
+                                    "absolute": entry["absolute"]})
+            for item in diagnostics:
+                if (item["tool"] == "presidio" and item["rule"] == "ABSOLUTE_PATH_REFERENCE" and
+                        item["path"] == entry["path"] and item["line"] == entry["line"] and
+                        item["column"] == entry["column"] and
+                        item["span_length"] == entry["span_length"]):
+                    item["reference_id"] = reference_id
+        files["path_references"] = safe_references
+        files["path_reference_count"] = len(safe_references)
         for item in diagnostics:
             if item.get("path") in object_ids:
                 item.setdefault("object_id", object_ids[item["path"]])
