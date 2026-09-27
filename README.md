@@ -67,7 +67,8 @@ text exclusions: files, directories (including empty and ignored ones), dotfiles
 symlinks (without following them). `coverage.tree_objects` lists each entry once with
 an opaque `object_id`, its kind, `path_checked` state and a relative display path with configured identifiers
 redacted. `tree_count` and `tree_incomplete_count` are independent of content-scan
-coverage; traversal errors fail the check. Path findings carry the object's ID,
+coverage; traversal errors fail the check. Invalid identifier configuration marks
+path checks incomplete and uses opaque display for all entries. Path findings carry the object's ID,
 original relative-path character column (one-based) and span length.
 Content diagnostics also carry the source object's ID, and each file object records
 its independent Presidio and secret-scan selection/coverage state in `content`.

@@ -26,7 +26,10 @@ def read_checks(root: Path) -> dict[str, Any]:
         raise EryxError("INVALID_CHECKS", "checks.toml must not be a symlink.")
     if not path.exists():
         return {"groups": ["codestyle"], "working_directories": ["."], "legacy": True}
-    data = load_toml(path)
+    try:
+        data = load_toml(path)
+    except EryxError:
+        raise EryxError("INVALID_CHECKS", "Cannot read checks.toml.") from None
     if set(data) != {"groups", "working_directories"}:
         raise EryxError("INVALID_CHECKS", "checks.toml requires groups and working_directories only.")
     groups = data["groups"]
@@ -43,14 +46,14 @@ def read_checks(root: Path) -> dict[str, Any]:
         if (not item or item.startswith("/") or "\\" in item or
                 (item != "." and (any(part in {".", ".."} for part in item.split("/")) or
                                   not re.fullmatch(r"[A-Za-z0-9_. /-]+", item) or not parts))):
-            raise EryxError("INVALID_CHECKS", f"Invalid working directory: {item!r}")
+            raise EryxError("INVALID_CHECKS", "Invalid working directory.")
         target = root
         for part in parts:
             target /= part
             if target.is_symlink():
-                raise EryxError("INVALID_CHECKS", f"Symlink working directory: {item!r}")
+                raise EryxError("INVALID_CHECKS", "Symlink working directory.")
         if not target.is_dir() or target.resolve() == tool_dir():
-            raise EryxError("INVALID_CHECKS", f"Working directory does not exist: {item!r}")
+            raise EryxError("INVALID_CHECKS", "Working directory does not exist.")
         selected.append(PurePosixPath(*parts).as_posix())
     if len(set(selected)) != len(selected):
         raise EryxError("INVALID_CHECKS", "Duplicate working directories.")

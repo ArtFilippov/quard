@@ -10,13 +10,13 @@ import stat
 
 from _presidio_seeds import read_identifiers, seed_spans
 from _reports import diagnostic
+from _contextual_recognizers import SHARED_DIRECTORIES
 
 
 CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache",
                         ".ruff_cache", ".ipynb_checkpoints"})
 ACCOUNT = re.compile(r"(?:^|/)(?:home|Users|scratch|mnt/scratch)/"
                      r"(?P<account>[\w][\w.-]*)(?=$|/)")
-SHARED = frozenset({"shared", "public", "common", "project", "projects", "data", "tmp"})
 
 
 def path_spans(path: str, seeds: tuple[str, ...], patterns: tuple[re.Pattern[str], ...]):
@@ -27,7 +27,7 @@ def path_spans(path: str, seeds: tuple[str, ...], patterns: tuple[re.Pattern[str
                  if match.start() < match.end())
     spans.update(("LOCAL_PATH_IDENTIFIER", *match.span("account"))
                  for match in ACCOUNT.finditer(path)
-                 if match.group("account").casefold() not in SHARED)
+                 if match.group("account").casefold() not in SHARED_DIRECTORIES)
     return sorted(spans, key=lambda item: (item[1], item[2], item[0]))
 
 
@@ -49,9 +49,11 @@ def redact(path: str, spans: list[tuple[str, int, int]]) -> str:
     return "".join(output)
 
 
-def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool = False):
+def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool = False,
+              identifiers: tuple[tuple[str, ...], tuple[re.Pattern[str], ...]] | None = None):
     """Return public objects and diagnostics plus a private raw-to-display map."""
-    seeds, patterns = ((), ()) if hide_all else read_identifiers(root / ".eryx/presidio.toml")
+    seeds, patterns = ((), ()) if hide_all else (identifiers if identifiers is not None else
+                                            read_identifiers(root / ".eryx/presidio.toml"))
     objects = {}
     findings = []
     failures = []
@@ -110,6 +112,7 @@ def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool
                 os.close(fd)
 
     public = []
+    object_ids = {}
     for relative, kind in sorted(objects.items()):
         # The selected root itself is not part of its relative package tree.
         selected = min((name for name in directories if name == "." or
@@ -123,9 +126,10 @@ def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool
         display = ("/".join("[REDACTED]" for _ in relative.split("/")) if hide_all else
                    redact(relative, display_spans))
         object_id = hashlib.sha256((run_id + "\0" + relative).encode()).hexdigest()[:24]
+        object_ids[relative] = object_id
         displays[relative] = display
         public.append({"object_id": object_id, "path": display, "kind": kind,
-                       "path_checked": relative not in failures})
+                       "path_checked": relative not in failures and not hide_all})
         for rule, begin, end in spans:
             findings.append(diagnostic("tree", rule, f"Potential {rule} in tree path.",
                                        path=display, column=begin + 1,
@@ -141,18 +145,25 @@ def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool
         display = displays.get(relative, "<uninspected tree root>")
         findings.append(diagnostic("tree", "TREE_INVENTORY_INCOMPLETE",
                                    "Could not inspect a tree entry or directory.", path=display,
-                                   object_id=next((obj["object_id"] for obj in public
-                                                   if obj["path"] == display), None),
+                                    object_id=object_ids.get(relative),
                                    is_infrastructure_error=True))
     return public, findings, displays, len(set(failures))
 
 
-def safe_paths(value: str, root: Path, displays: dict[str, str]) -> str:
+def safe_paths(value: str, root: Path, displays: dict[str, str],
+               seeds: tuple[str, ...] = (), patterns: tuple[re.Pattern[str], ...] = ()) -> str:
     """Replace raw path spellings in reports and archived worker output."""
     for raw in sorted(displays, key=len, reverse=True):
         shown = displays[raw]
         if raw != shown:
             for source, target in ((str(root / raw), str(root / shown)), (raw, shown)):
-                value = value.replace(source, target)
-                value = value.replace(json.dumps(source)[1:-1], json.dumps(target)[1:-1])
-    return value
+                # A complete path or component boundary is required: "foo" must
+                # not rewrite a distinct name such as "foobar".
+                boundary = r"(?=$|/|[\s\"',}:\]])"
+                value = re.sub(re.escape(source) + boundary, lambda _: target, value)
+                escaped = json.dumps(source)[1:-1]
+                value = re.sub(re.escape(escaped) + boundary,
+                               lambda _: json.dumps(target)[1:-1], value)
+    value = redact(value, path_spans(value, seeds, patterns))
+    value = value.replace(json.dumps(str(root))[1:-1], "<consumer-root>")
+    return value.replace(str(root), "<consumer-root>")

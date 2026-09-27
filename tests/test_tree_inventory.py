@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _tree_inventory import inventory
+from _tree_inventory import inventory, safe_paths
 from check import run_checks
 from test_infrastructure import create_repo
 
@@ -37,7 +37,8 @@ class TreeInventoryTests(unittest.TestCase):
         (review / "generated").mkdir()
         (review / "generated/12a_lia.txt").write_text("outside text scope\n", encoding="utf-8")
         for name in ("12a_lia.txt", "12A_LIA.txt"):
-            (review / name).write_text("mail: ivy@example.com\n", encoding="utf-8")
+            (review / name).write_text("mail: ivy@example.com\naws_access_key_id = 'AKIAIOSFODNN7EXAMPLE'\n",
+                                       encoding="utf-8")
         for folder in ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
                        ".ipynb_checkpoints"):
             (review / folder).mkdir()
@@ -99,7 +100,7 @@ class TreeInventoryTests(unittest.TestCase):
         archive = self.root / Path(report["report_path"]).parent
         for artifact in [archive / "report.json", *archive.rglob("*.json"), *archive.rglob("*.log")]:
             text = artifact.read_text(encoding="utf-8")
-            for private in ("СИДОР", "12A_LIA", "12a_lia", "a.b"):
+            for private in ("СИДОР", "12A_LIA", "12a_lia", "a.b", "AKIAIOSFODNN7EXAMPLE"):
                 self.assertNotIn(private, text, artifact)
             self.assertNotIn(str(self.root), text, artifact)
         self.assertFalse(any(d["rule"] == "KNOWN_IDENTIFIER_PATTERN" and
@@ -127,6 +128,38 @@ class TreeInventoryTests(unittest.TestCase):
         self.assertTrue(any(d["rule"] == "TREE_INVENTORY_INCOMPLETE" and
                             d["is_infrastructure_error"] for d in findings))
         self.assertNotIn("private path", json.dumps([public, findings]))
+
+    def test_collision_on_failed_directory_keeps_its_own_identity(self):
+        for name in ("12a_lia", "12A_LIA"):
+            (self.root / "review" / name).mkdir()
+        from _tree_inventory import os as tree_os
+        original = tree_os.open
+
+        def broken(path, *args, **kwargs):
+            if path == "12A_LIA":
+                raise OSError("private name")
+            return original(path, *args, **kwargs)
+
+        with patch("_tree_inventory.os.open", side_effect=broken):
+            public, findings, _, incomplete = inventory(self.root, ["review"], "test")
+        self.assertEqual(incomplete, 1)
+        failed = next(d for d in findings if d["rule"] == "TREE_INVENTORY_INCOMPLETE")
+        self.assertEqual(failed["path"], "review/[REDACTED]")
+        import hashlib
+        self.assertEqual(failed["object_id"], hashlib.sha256(b"test\0review/12A_LIA").hexdigest()[:24])
+        self.assertEqual(len({obj["object_id"] for obj in public if obj["path"] == failed["path"]}), 2)
+
+    def test_path_replacement_requires_component_boundary(self):
+        self.assertEqual(safe_paths("review/foobar review/foo/child", self.root,
+                                    {"review/foo": "review/[REDACTED]"}),
+                         "review/foobar review/[REDACTED]/child")
+
+    def test_invalid_selected_root_does_not_appear_in_failure(self):
+        (self.root / ".eryx/checks.toml").write_text(
+            'groups = ["anonymity"]\nworking_directories = ["12a_lia"]\n', encoding="utf-8")
+        report = run_checks(self.root)
+        self.assertEqual(report["exit_code"], 2)
+        self.assertNotIn("12a_lia", json.dumps(report))
 
 
 if __name__ == "__main__":

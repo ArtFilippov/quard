@@ -24,7 +24,7 @@ from _checks import (ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, ANONYMITY_PY
 from _policy import discover_files, discover_notebooks, limit_drift, pyright_config, read_scope
 from _reports import diagnostic, normalize, normalize_presidio, sorted_diagnostics
 from _tree_inventory import inventory, safe_paths
-from _presidio_seeds import IdentifierConfigError
+from _presidio_seeds import IdentifierConfigError, read_identifiers
 from init_architecture import validate_architecture_config
 
 
@@ -224,6 +224,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                               "presidio_unconfirmed": [], "tree_objects": [], "tree_count": 0,
                               "tree_incomplete_count": 0}
     displays: dict[str, str] = {}
+    identifiers = ((), ())
+    hidden_identifiers = False
     architecture_ready = False
     eryx_version = "unknown"
     results = []
@@ -234,16 +236,21 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         files["working_directories"] = checks["working_directories"]
         if "anonymity" in checks["groups"]:
             try:
-                objects, tree_findings, displays, incomplete = inventory(root, checks["working_directories"], run_id)
+                identifiers = read_identifiers(root / ".eryx/presidio.toml")
+                objects, tree_findings, displays, incomplete = inventory(
+                    root, checks["working_directories"], run_id, identifiers=identifiers)
                 files["tree_objects"] = objects
                 files["tree_count"] = len(objects)
                 files["tree_incomplete_count"] = incomplete
                 diagnostics.extend(tree_findings)
             except IdentifierConfigError as exc:
-                files["tree_incomplete_count"] = 1
-                objects, _, displays, _ = inventory(root, checks["working_directories"], run_id, hide_all=True)
+                hidden_identifiers = True
+                objects, tree_findings, displays, incomplete = inventory(
+                    root, checks["working_directories"], run_id, hide_all=True)
                 files["tree_objects"] = objects
                 files["tree_count"] = len(objects)
+                files["tree_incomplete_count"] = incomplete + len(objects)
+                diagnostics.extend(tree_findings)
                 diagnostics.append(diagnostic("tree", exc.code,
                                               "Tree identifiers could not be checked: invalid identifier configuration.",
                                               is_infrastructure_error=True))
@@ -361,22 +368,33 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                            "unconfirmed" if raw in files.get(f"{name}_unconfirmed", []) else
                            "selected" if raw in files[f"{name}_inputs"] else "not_selected")
                     for name in ("presidio", "secret")}
-        def sanitized(value: str) -> str:
-            value = safe_paths(value, root, displays)
-            value = value.replace(json.dumps(str(root))[1:-1], "<consumer-root>")
-            return value.replace(str(root), "<consumer-root>")
+        def sanitized(value: Any) -> Any:
+            if isinstance(value, str):
+                return safe_paths(value, root, displays, *identifiers)
+            if isinstance(value, list):
+                return [sanitized(item) for item in value]
+            if isinstance(value, dict):
+                return {key: ("[REDACTED]" if hidden_identifiers and key == "module" and
+                              isinstance(item, str) else sanitized(item))
+                        for key, item in value.items()}
+            return value
         # Workers need raw paths while running. Once they finish, every persisted
         # artifact (including native JSON, manifests, coverage and report fields)
         # uses the same safe display spelling as the tree inventory.
         for artifact in run_dir.rglob("*"):
             if artifact.is_file() and artifact.suffix in {".json", ".log"}:
                 original = artifact.read_text(encoding="utf-8")
-                safe = sanitized(original)
-                if safe != original:
-                    atomic_write(artifact, safe, root)
-        files = json.loads(sanitized(json.dumps(files, ensure_ascii=False)))
-        results = json.loads(sanitized(json.dumps(results, ensure_ascii=False)))
-        diagnostics = json.loads(sanitized(json.dumps(diagnostics, ensure_ascii=False)))
+                if artifact.suffix == ".json":
+                    try:
+                        safe = sanitized(json.loads(original))
+                    except (ValueError, TypeError):
+                        safe = {"status": "unreadable worker output"}
+                    write_json(artifact, safe, root)
+                else:
+                    atomic_write(artifact, sanitized(original), root)
+        files = sanitized(files)
+        results = sanitized(results)
+        diagnostics = sanitized(diagnostics)
     diagnostics = sorted_diagnostics(diagnostics)
     has_error = any(item.get("is_infrastructure_error") for item in diagnostics) or any(result["status"] == "error" for result in results)
     code = 2 if has_error else (1 if diagnostics else 0)
