@@ -109,3 +109,41 @@ class LifecycleTests(unittest.TestCase):
                 stream.write("\n# local regression fixture\n")
             dirty = json.loads(self.run_command(uv + [str(submodule / "check.py"), "--json"], project))
             self.assertTrue(dirty["eryx"]["dirty"])
+
+    def test_anonymity_only_install_and_check_without_src_or_architecture(self):
+        with tempfile.TemporaryDirectory(prefix="eryx-anonymity-install-") as tmp:
+            project = Path(tmp)
+            (project / "review").mkdir()
+            (project / "review/notes.txt").write_text("No notebook", encoding="utf-8")
+            (project / "pyproject.toml").write_text(
+                '[project]\nname = "anonymity-fixture"\nversion = "0.1.0"\n'
+                'requires-python = ">=3.12,<3.13"\ndependencies = []\n'
+                '[tool.uv]\npackage = false\n', encoding="utf-8")
+            (project / ".eryx").mkdir()
+            (project / ".eryx/checks.toml").write_text(
+                'groups = ["anonymity"]\nworking_directories = ["review"]\n', encoding="utf-8")
+            installed = json.loads(self.run_command(["bash", str(ERYX / "install.sh"),
+                                                      "--project", str(project), "--json"], project))
+            self.assertEqual(installed["smoke_tests"]["pylint_notebook"], "detected")
+            self.assertEqual(set(installed["versions"]), {"pylint", "nbstripout", "tomlkit", "packaging"})
+            self.assertFalse(installed["architecture_initialization_required"])
+            self.assertFalse((project / "pyrightconfig.json").exists())
+            self.assertFalse((project / "tach.toml").exists())
+            self.assertFalse((project / ".eryx/readability.toml").exists())
+            uv = ["uv", "run", "--locked", "--group", "dev", "python", str(ERYX / "check.py"), "--json"]
+            clean = json.loads(self.run_command(uv, project))
+            self.assertEqual([tool["name"] for tool in clean["tools"]], ["pylint-anonymity"])
+            self.assertEqual(clean["coverage"]["notebook_count"], 0)
+            (project / "outside").mkdir()
+            (project / "outside/ignored.ipynb").write_text("invalid notebook", encoding="utf-8")
+            notebook = project / "review/dirty.ipynb"
+            notebook.write_text(json.dumps({"nbformat": 4, "nbformat_minor": 5, "metadata": {},
+                                            "cells": [{"cell_type": "code", "id": "fixture", "metadata": {},
+                                                       "source": "print(1)", "execution_count": 1,
+                                                       "outputs": [{"output_type": "stream", "name": "stdout",
+                                                                    "text": "1\n"}]}]}), encoding="utf-8")
+            before = notebook.read_bytes()
+            report = json.loads(self.run_command(uv, project, expected=1))
+            self.assertEqual([(d["rule"], d["path"]) for d in report["diagnostics"]],
+                             [("W9801", "review/dirty.ipynb")])
+            self.assertEqual(notebook.read_bytes(), before)

@@ -28,6 +28,10 @@ Notebooks are discovered project-wide (excluding configured directory names,
 tooling, environments and caches); the production Pylint worker checks them once
 with `nbstripout --verify` without rewriting them. Coverage lists notebook paths
 and count. Eryx's own code is verified by its autonomous test suite.
+When `.eryx/checks.toml` is present, notebook discovery is limited to its
+`working_directories`. `anonymity` alone runs a notebook-only Pylint worker
+without the native code-style or architecture analyzers. `codestyle` retains
+the `src/` layout and architecture requirements.
 
 ## Readability
 

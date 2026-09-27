@@ -1,8 +1,32 @@
 # Eryx
 
-Pinned native Python analysis for Linux `uv` projects with a `src/` layout.
+Pinned native analysis for Linux `uv` projects; code-style checks use a `src/` layout.
 Named after *Eryx jayakari*. Tools run in the **consumer's environment**;
 Eryx is versioned independently and normally attached as a Git submodule.
+
+## Select check groups (optional)
+
+Without `.eryx/checks.toml`, existing consumers retain the code-style workflow
+and project-wide notebook verification. To select groups and directories, create
+the consumer-owned file **before installation**:
+
+```toml
+groups = ["anonymity"]
+working_directories = ["review_target"]
+```
+
+The only groups are `codestyle` and `anonymity`; list both to enable both.
+Directories must exist inside the consumer and cannot be symlinks. Directory
+exclusions in `.eryx/scope.toml` still apply; an empty effective file scope is an
+error. `anonymity` currently verifies notebooks with `nbstripout` via Pylint;
+zero notebooks are explicitly reported, not counted as verified. Additional
+anonymity checks are tracked separately. An anonymity-only consumer needs no
+`src/`, native code-analysis configuration or accepted architecture. Code-style
+analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
+include root test files. Other selected directories participate in notebook
+verification, while native code analyzers retain their `src/` and `tests/` scope.
+The production Pylint worker verifies each notebook only once when both groups
+are enabled. Run `eryx/apply.py` after changing selected code-style directories.
 
 ## Install
 

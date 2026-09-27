@@ -18,13 +18,18 @@ from typing import Any, Callable
 
 from _common import (SCHEMA, EryxError, atomic_write, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
-from _policy import discover_files, discover_notebooks, limit_drift, read_scope
+from _checks import (ANONYMITY_DEPENDENCIES, NOTEBOOK_PYLINT_CONFIG, covered_files,
+                     in_working_directories, read_checks, selected_test_roots)
+from _policy import discover_files, discover_notebooks, limit_drift, pyright_config, read_scope
 from _reports import diagnostic, normalize, sorted_diagnostics
 from init_architecture import validate_architecture_config
 
 
 def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str, Any]]]:
     expected = read_json(tool_dir() / "tools.json")["dependencies"]
+    groups = read_checks(root)["groups"]
+    if "codestyle" not in groups:
+        expected = {key: value for key, value in expected.items() if key in ANONYMITY_DEPENDENCIES}
     versions: dict[str, str | None] = {}
     problems = []
     for name, required in expected.items():
@@ -45,11 +50,30 @@ def binary(name: str) -> str:
     return str(Path(sys.executable).parent / name)
 
 
-def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_ready: bool) -> list[dict[str, Any]]:
+def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_ready: bool,
+              groups: list[str] | None = None) -> list[dict[str, Any]]:
     # Pylint opens --output before the runner writes captured stdout/stderr logs.
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
+    groups = groups or ["codestyle"]
     jobs = []
+    if "codestyle" not in groups:
+        # A minimal, generated config makes the notebook checker independent of
+        # consumer Pylint/architecture settings. The empty input is never claimed as coverage.
+        dummy = run_dir / "anonymity-input.py"
+        atomic_write(dummy, "", root)
+        config = run_dir / "anonymity-pylint.toml"
+        atomic_write(config, NOTEBOOK_PYLINT_CONFIG, root)
+        manifest = run_dir / "pylint-anonymity-files.json"
+        notebook_manifest = run_dir / "pylint-notebooks.json"
+        output = run_dir / "raw/pylint-anonymity.json"
+        write_json(manifest, [str(dummy)], root)
+        write_json(notebook_manifest, files["notebooks"], root)
+        return [{"name": "pylint-anonymity", "tool": "pylint", "profile": "anonymity",
+                 "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
+                          "--config", str(config), "--output", str(output), "--notebooks", str(notebook_manifest),
+                          "--notebook-only"],
+                 "json_file": output}]
     for profile in ("production", "tests"):
         python_files = [path for path in files[profile] if path.endswith(".py")]
         if not python_files:
@@ -70,7 +94,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
                      "json_file": output})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
-    doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])
+    doc_roots = files.get("doc_roots", ["src"] + (["tests"] if (root / "tests").is_dir() else []))
     jobs.append({"name": "pydoclint", "tool": "pydoclint", "argv": [binary("pydoclint"),
                  "--config", str(root / "pyproject.toml"), "--quiet",
                  "--show-filenames-in-every-violation-message=True", *doc_roots]})
@@ -116,39 +140,60 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     diagnostics = []
     versions: dict[str, str | None] = {}
     files: dict[str, Any] = {"production": [], "tests": [], "excluded_directories": [],
-                             "notebooks": [], "notebook_count": 0}
+                             "notebooks": [], "notebook_count": 0, "groups": [], "working_directories": []}
     architecture_ready = False
     eryx_version = "unknown"
     results = []
     try:
         require_runtime()
+        checks = read_checks(root)
+        files["groups"] = checks["groups"]
+        files["working_directories"] = checks["working_directories"]
+        scope = read_scope(root)
+        effective = covered_files(root, checks, scope["exclude_directory_names"])
+        if not effective:
+            raise EryxError("EMPTY_CHECK_SCOPE", "No files in selected working directories after exclusions.")
         eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
         versions, problems = versions_fn(root)
         diagnostics.extend(problems)
-        scope = read_scope(root)
-        files = discover_files(root, scope)
+        if "codestyle" in checks["groups"]:
+            files.update(discover_files(root, scope))
+            if not checks["legacy"]:
+                files["tests"] = [path for path in files["tests"]
+                                  if in_working_directories(path, checks["working_directories"])]
+                files["doc_roots"] = ["src", *selected_test_roots(root, checks)]
         notebooks, excluded = discover_notebooks(root, scope)
+        if not checks["legacy"]:
+            notebooks = sorted(set(notebooks) & set(effective))
         files["notebooks"] = notebooks
         files["notebook_count"] = len(notebooks)
         files["excluded_directories"] = sorted(set(files["excluded_directories"] + excluded))
-        if not files["production"]:
+        if not checks["legacy"]:
+            files["excluded_directories"] = [path for path in files["excluded_directories"]
+                                              if in_working_directories(path, checks["working_directories"])]
+        if "codestyle" in checks["groups"] and not files["production"]:
             raise EryxError("EMPTY_SOURCE_SCOPE", "No Python source files found under src/. Refusing an empty successful check.")
-        try:
-            mismatch = limit_drift(root)
-            if mismatch:
-                raise EryxError("READABILITY_NOT_APPLIED", ", ".join(mismatch) + "; run uv run --locked --group dev python eryx/apply.py.")
-        except EryxError as exc:
-            diagnostics.append(diagnostic("system", exc.code, str(exc), is_infrastructure_error=True))
-        try:
-            marker = read_json(root / ".eryx/architecture.ready.json")
-            if not isinstance(marker, dict) or not marker.get("accepted"):
-                raise EryxError("ARCHITECTURE_NOT_INITIALIZED", "Architecture configuration has not been accepted.")
-            validate_architecture_config(root)
-            architecture_ready = True
-        except EryxError as exc:
-            diagnostics.append(diagnostic("system", "ARCHITECTURE_NOT_INITIALIZED" if not (root / ".eryx/architecture.ready.json").exists() else exc.code,
-                str(exc) + " Run eryx/init_architecture.py, review tach.toml, then run it with --accept.", is_infrastructure_error=True))
-        jobs = make_jobs(root, run_dir, files, architecture_ready)
+        if "codestyle" in checks["groups"] and not checks["legacy"]:
+            expected = pyright_config(scope, files, selected_test_roots(root, checks))["include"]
+            if read_json(root / "pyrightconfig.json").get("include") != expected:
+                raise EryxError("SCOPE_NOT_APPLIED", "Selected code-style directories differ from Pyright's include list; run eryx/apply.py.")
+        if "codestyle" in checks["groups"]:
+            try:
+                mismatch = limit_drift(root)
+                if mismatch:
+                    raise EryxError("READABILITY_NOT_APPLIED", ", ".join(mismatch) + "; run uv run --locked --group dev python eryx/apply.py.")
+            except EryxError as exc:
+                diagnostics.append(diagnostic("system", exc.code, str(exc), is_infrastructure_error=True))
+            try:
+                marker = read_json(root / ".eryx/architecture.ready.json")
+                if not isinstance(marker, dict) or not marker.get("accepted"):
+                    raise EryxError("ARCHITECTURE_NOT_INITIALIZED", "Architecture configuration has not been accepted.")
+                validate_architecture_config(root)
+                architecture_ready = True
+            except EryxError as exc:
+                diagnostics.append(diagnostic("system", "ARCHITECTURE_NOT_INITIALIZED" if not (root / ".eryx/architecture.ready.json").exists() else exc.code,
+                    str(exc) + " Run eryx/init_architecture.py, review tach.toml, then run it with --accept.", is_infrastructure_error=True))
+        jobs = make_jobs(root, run_dir, files, architecture_ready, checks["groups"])
         workers = 1 if serial else min(4, max(1, os.cpu_count() or 1), len(jobs))
         # Native analyzers complete independently. A failing job never cancels the others.
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -163,7 +208,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                               "diagnostics": [diagnostic(job["tool"], "REPORT_WRITE_ERROR", str(exc), is_infrastructure_error=True)]}
                 diagnostics.extend(result.pop("diagnostics"))
                 results.append(result)
-        if not architecture_ready:
+        if "codestyle" in checks["groups"] and not architecture_ready:
             for name in ("tach", "tach-external"):
                 results.append({"name": name, "tool": name, "status": "blocked", "exit_code": None,
                                 "duration_seconds": 0, "error": "ARCHITECTURE_NOT_INITIALIZED", "raw_output": {}})

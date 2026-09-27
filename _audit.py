@@ -17,6 +17,7 @@ import tomlkit
 
 from _common import (EryxError, atomic_write, capture, command_env, emit_event, error_exit,
                      load_toml, read_json, require_runtime, project_dir, tool_dir, write_json)
+from _checks import ANONYMITY_DEPENDENCIES, NOTEBOOK_PYLINT_CONFIG, read_checks
 from _policy import configure
 from _reports import normalize
 from init_architecture import sync_clean_arch, tool_binary
@@ -156,11 +157,44 @@ class Probe:
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed"}
 
 
+def smoke_anonymity(log_root: Path) -> dict[str, str]:
+    """Probe the actual notebook checker without loading code-style plugins."""
+    with tempfile.TemporaryDirectory(prefix="eryx-anonymity-probe-", dir=log_root) as tmp:
+        fixture = Path(tmp)
+        notebook = fixture / "unstripped.ipynb"
+        notebook.write_text(json.dumps({"nbformat": 4, "nbformat_minor": 5, "metadata": {},
+                                        "cells": [{"cell_type": "code", "id": "fixture", "metadata": {},
+                                                   "source": "print(1)", "execution_count": 1,
+                                                   "outputs": [{"output_type": "stream", "name": "stdout", "text": "1\n"}]}]}),
+                            encoding="utf-8")
+        original = notebook.read_bytes()
+        (fixture / "input.py").write_text("", encoding="utf-8")
+        write_json(fixture / "inputs.json", ["input.py"])
+        write_json(fixture / "notebooks.json", [notebook.name])
+        atomic_write(fixture / "anonymity-pylint.toml", NOTEBOOK_PYLINT_CONFIG)
+        output = fixture / "pylint.json"
+        result = probe([sys.executable, str(tool_dir() / "_pylint_worker.py"),
+                        "--manifest", str(fixture / "inputs.json"),
+                        "--config", str(fixture / "anonymity-pylint.toml"),
+                        "--output", str(output), "--notebooks", str(fixture / "notebooks.json"),
+                        "--notebook-only"],
+                       fixture, "pylint-anonymity-smoke", log_root)
+        normalized = normalize("pylint", result, fixture, output)
+        if (normalized["status"] != "violations" or
+                not any(d["rule"] == "W9801" and d["path"] == notebook.name for d in normalized["diagnostics"]) or
+                notebook.read_bytes() != original):
+            raise EryxError("PYLINT_SMOKE_FAILED", "Notebook checker failed its independent fixture; see install-probes.")
+    return {"pylint_notebook": "detected"}
+
+
 def audit(root: Path) -> dict[str, Any]:
     require_runtime()
+    checks = read_checks(root)
     log_root = root / ".eryx/logs/install-probes"
     log_root.mkdir(parents=True, exist_ok=True)
     pins = read_json(tool_dir() / "tools.json")["dependencies"]
+    if "codestyle" not in checks["groups"]:
+        pins = {key: value for key, value in pins.items() if key in ANONYMITY_DEPENDENCIES}
     versions = {}
     for name, expected in pins.items():
         try:
@@ -170,12 +204,16 @@ def audit(root: Path) -> dict[str, Any]:
         if actual != expected:
             raise EryxError("VERSION_MISMATCH", f"{name}: expected {expected}, installed {actual}")
         versions[name] = actual
-    plugins, catalog = discover_plugins(root, log_root)
-    write_json(root / ".eryx/pylint-catalog.json", catalog, root)
-    changed = configure(root, initial=True, plugins=plugins, catalog=catalog)
-    if (root / ".eryx/architecture.ready.json").exists() and (root / "tach.toml").exists():
-        sync_clean_arch(root, load_toml(root / "tach.toml"))
-    results = smoke_tests(root, log_root)
+    if "codestyle" in checks["groups"]:
+        plugins, catalog = discover_plugins(root, log_root)
+        write_json(root / ".eryx/pylint-catalog.json", catalog, root)
+        changed = configure(root, initial=True, plugins=plugins, catalog=catalog)
+        if (root / ".eryx/architecture.ready.json").exists() and (root / "tach.toml").exists():
+            sync_clean_arch(root, load_toml(root / "tach.toml"))
+        results = smoke_tests(root, log_root)
+    else:
+        plugins, catalog, changed = ["_notebook_checker"], {"message_ids": ["W9801", "F9802"]}, []
+        results = smoke_anonymity(log_root)
     report = {"status": "passed", "versions": versions, "plugins": plugins, "message_count": len(catalog["message_ids"]),
               "smoke_tests": results, "modified_files": changed}
     write_json(root / ".eryx/logs/install-probes/result.json", report, root)
