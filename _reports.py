@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from _presidio_policy import ENGLISH_ENTITIES
+
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
@@ -218,7 +220,8 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 {"scanned", "skipped", "findings", "failed"},
                 {"scanned", "skipped", "findings", "failed", "error"}):
             raise ValueError("Invalid worker schema")
-        if ("error" in data and data["error"] != "PRESIDIO_MODEL_UNAVAILABLE"):
+        if ("error" in data and data["error"] not in
+                {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH"}):
             raise ValueError("Invalid worker error")
         for key in ("scanned", "skipped", "failed"):
             if (not isinstance(data[key], list) or any(type(p) is not str for p in data[key]) or
@@ -234,7 +237,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
         for entry in data["findings"]:
             if (not isinstance(entry, dict) or set(entry) != {"path", "line", "entity", "score"} or
                     entry["path"] not in data["scanned"] or type(entry["line"]) is not int or
-                    entry["line"] < 1 or entry["entity"] not in {"PERSON", "EMAIL_ADDRESS"} or
+                    entry["line"] < 1 or entry["entity"] not in ENGLISH_ENTITIES or
                     type(entry["score"]) not in (int, float) or not 0 <= entry["score"] <= 1):
                 raise ValueError("Invalid finding")
             items.append(diagnostic("presidio", entry["entity"],
@@ -245,13 +248,13 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 result.get("exit_code") == (1 if items else 0) and not result.get("error") and
                 not result.get("stdout") and not result.get("stderr")):
             error = None
-        elif data.get("error") == "PRESIDIO_MODEL_UNAVAILABLE":
-            error = "PRESIDIO_MODEL_UNAVAILABLE"
+        elif data.get("error") in {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH"}:
+            error = data["error"]
     except (OSError, ValueError, KeyError, TypeError):
         pass
     if error:
         items.append(diagnostic("presidio", error,
-                                "Presidio could not confirm the selected text scan; check the pinned English model and worker status.",
+                                "Presidio could not confirm the selected text scan; check the pinned English model, recognizer inventory and worker status.",
                                 is_infrastructure_error=True))
     return {"status": "error" if error else ("violations" if items else "passed"),
             "error": error, "diagnostics": items, "coverage": coverage}

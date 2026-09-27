@@ -10,6 +10,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
+from _presidio_policy import ENGLISH_ENTITIES, PresidioPolicyError, verify_english_inventory
 
 
 def analyzer():
@@ -25,7 +26,9 @@ def analyzer():
     engine.load()
     if not engine.is_loaded():
         raise RuntimeError("English NLP model unavailable")
-    return AnalyzerEngine(nlp_engine=engine, supported_languages=["en"])
+    analyzer_engine = AnalyzerEngine(nlp_engine=engine, supported_languages=["en"])
+    verify_english_inventory(analyzer_engine)
+    return analyzer_engine
 
 
 def scan(paths: list[str]) -> tuple[dict, int]:
@@ -35,6 +38,8 @@ def scan(paths: list[str]) -> tuple[dict, int]:
     report = {"scanned": [], "skipped": [], "findings": [], "failed": []}
     try:
         engine = analyzer()
+    except PresidioPolicyError:
+        return report | {"error": "PRESIDIO_POLICY_MISMATCH"}, 2
     except Exception:
         # NLP initialization exceptions can include sensitive local paths or text.
         return report | {"error": "PRESIDIO_MODEL_UNAVAILABLE"}, 2
@@ -55,9 +60,9 @@ def scan(paths: list[str]) -> tuple[dict, int]:
                     continue
                 raise
             starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
-            findings = engine.analyze(text=text, language="en", entities=["PERSON", "EMAIL_ADDRESS"])
+            findings = engine.analyze(text=text, language="en")
             for item in findings:
-                if (item.entity_type not in {"PERSON", "EMAIL_ADDRESS"} or
+                if (item.entity_type not in ENGLISH_ENTITIES or
                         not 0 <= item.start < item.end <= len(text)):
                     raise ValueError("Invalid recognition position")
                 report["findings"].append({"path": name, "line": bisect_right(starts, item.start),

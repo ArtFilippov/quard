@@ -45,7 +45,7 @@ class LifecycleTests(unittest.TestCase):
             self.run_command(["git", "commit", "-m", "fixture"], tool)
             project = base / "consumer project"
             (project / "src/sample/domain").mkdir(parents=True)
-            (project / "src/sample/__init__.py").write_text('from sample.domain.api import double\n\n__all__ = ["double"]\n')
+            (project / "src/sample/__init__.py").write_text('from .domain.api import double\n\n__all__ = ["double"]\n')
             (project / "src/sample/domain/__init__.py").write_text("")
             (project / "src/sample/domain/api.py").write_text("def double(value: int) -> int:\n    return value * 2\n")
             (project / "pyproject.toml").write_text(

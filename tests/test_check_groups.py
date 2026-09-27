@@ -102,7 +102,8 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertEqual(report["exit_code"], 1, report)
         self.assertEqual(next(t for t in report["tools"] if t["name"] == "pylint-anonymity")["status"], "violations", report)
         self.assertEqual([(item["rule"], item["path"], item["line"])
-                          for item in report["diagnostics"]], [("W9803", "review/settings.py", 2)])
+                          for item in report["diagnostics"] if item["tool"] == "pylint"],
+                         [("W9803", "review/settings.py", 2)])
         self.assertNotIn(secret, json.dumps(report))
         self.assertEqual(source.read_bytes(), before)
         self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/settings.py"])
@@ -144,8 +145,8 @@ class CheckGroupsTests(unittest.TestCase):
         report = run_checks(self.root)
         self.assertEqual(report["exit_code"], 1, report)
         self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/style.css"])
-        self.assertEqual([(d["rule"], d["path"]) for d in report["diagnostics"]],
-                         [("W9803", "review/style.css")])
+        self.assertEqual([(d["rule"], d["path"]) for d in report["diagnostics"] if d["tool"] == "pylint"],
+                          [("W9803", "review/style.css")])
         self.assertNotIn(secret, json.dumps(report))
         self.assertEqual(path.read_bytes(), original)
 

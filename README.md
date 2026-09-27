@@ -24,7 +24,8 @@ the file and line but not the secret value. Zero notebooks are explicitly report
 not counted as verified. Reports distinguish selected `secret_inputs`, confirmed
 `secret_scanned` / `secret_count`, and unsupported binary `secret_skipped` /
 `secret_skipped_count`. An independent Presidio job scans the same effective file
-scope for English `PERSON` and `EMAIL_ADDRESS`, using the pinned local
+scope for the complete pinned standard English recognizer inventory (including
+country-specific identifiers, dates, URLs and IP addresses), using the pinned local
 `en_core_web_sm` model. It reports entity type, relative path, physical line and
 confidence score without matched values. `presidio_inputs`, `presidio_scanned` /
 `presidio_count`, `presidio_skipped` / `presidio_skipped_count` and

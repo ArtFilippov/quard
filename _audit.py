@@ -257,13 +257,17 @@ def smoke_secret(log_root: Path) -> dict[str, str]:
 
 
 def smoke_presidio(log_root: Path) -> dict[str, str]:
-    """Probe both English entities with the installed model and no input rewrites."""
+    """Probe the pinned English inventory, representative entities and clean input."""
     with tempfile.TemporaryDirectory(prefix="eryx-presidio-probe-", dir=log_root) as tmp:
         fixture = Path(tmp)
         person = "Dr. John Smith"
         email = "john.smith@example.com"
         source = fixture / "sample.txt"
-        source.write_text(f"Contact: {person}\nEmail: {email}\n", encoding="utf-8")
+        samples = [f"Contact: {person}", f"Email: {email}", "Born on 12 March 1992.",
+                   "See https://example.com/news", "Server 192.168.1.15",
+                   "US SSN 219-09-9999", "UK NHS number 943 476 5919",
+                   "Credit card 4111 1111 1111 1111", "IBAN GB82 WEST 1234 5698 7654 32"]
+        source.write_text("\n".join(samples) + "\n", encoding="utf-8")
         original = source.read_bytes()
         write_json(fixture / "manifest.json", [source.name])
         output = fixture / "presidio.json"
@@ -276,13 +280,31 @@ def smoke_presidio(log_root: Path) -> dict[str, str]:
         except OSError:
             native = ""
         found = {(d["rule"], d["line"]) for d in normalized["diagnostics"]}
+        expected = {("PERSON", 1), ("EMAIL_ADDRESS", 2), ("DATE_TIME", 3), ("URL", 4),
+                    ("IP_ADDRESS", 5), ("US_SSN", 6), ("UK_NHS", 7), ("CREDIT_CARD", 8),
+                    ("IBAN_CODE", 9)}
+        sensitive = (person, email, "12 March 1992", "https://example.com/news", "192.168.1.15",
+                     "219-09-9999", "943 476 5919", "4111 1111 1111 1111", "GB82 WEST 1234 5698 7654 32")
         if (normalized["status"] != "violations" or result["exit_code"] != 1 or
-                not {("PERSON", 1), ("EMAIL_ADDRESS", 2)} <= found or
+                not expected <= found or
                 normalized["coverage"] != {"scanned": [source.name], "skipped": []} or
-                person in native + json.dumps(normalized) or email in native + json.dumps(normalized) or
+                any(value in native + json.dumps(normalized) for value in sensitive) or
                 source.read_bytes() != original):
-            raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio did not safely detect both English entities; see install-probes.")
-    return {"presidio_person": "detected", "presidio_email": "detected"}
+            raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio did not safely detect standard English entities; see install-probes.")
+        clean = fixture / "clean.txt"
+        clean.write_text("A plain test file.\n", encoding="utf-8")
+        write_json(fixture / "manifest.json", [clean.name])
+        clean_output = fixture / "clean.json"
+        clean_result = probe([sys.executable, str(tool_dir() / "_presidio_worker.py"),
+                              "--manifest", str(fixture / "manifest.json"), "--output", str(clean_output)],
+                             fixture, "presidio-clean-smoke", log_root, sensitive=True)
+        clean_normalized = normalize_presidio(clean_result, fixture, clean_output, [clean.name])
+        if (clean_result["exit_code"] != 0 or clean_normalized["status"] != "passed" or
+                clean_normalized["coverage"] != {"scanned": [clean.name], "skipped": []} or
+                clean.read_text(encoding="utf-8") != "A plain test file.\n"):
+            raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio clean English probe failed; see install-probes.")
+    return {"presidio_person": "detected", "presidio_email": "detected",
+            "presidio_standard_entities": "detected", "presidio_clean": "verified"}
 
 
 def audit(root: Path) -> dict[str, Any]:

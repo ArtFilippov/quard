@@ -36,10 +36,29 @@ without the native code-style or architecture analyzers. Secret coverage records
 confirmed text-file scans separately from unsupported binary files and selected
 inputs. Unreadable text, partial scans and zero text-file coverage are errors.
 The installer verifies an intentional secret in an isolated fixture. An independent
-Presidio job checks English person names and email addresses with the pinned local
-`en_core_web_sm` model and no downloads during a check. It confirms selected text
-and skipped binary coverage, rejects unconfirmed inputs, and records only entity
-types and physical locations. The installer probes both entity types. `codestyle` retains
+Presidio job checks all standard English entities in the pinned analyzer 2.2.360
+with the pinned local `en_core_web_sm` 3.8.0 model and no downloads during a check.
+The expected active inventory is checked on both installation and each scan: exactly
+16 recognizers and the following 22 entity types (see `_presidio_policy.py` for the
+exact per-recognizer mapping, including the spaCy NER mapping):
+
+| Recognizers | Standard English entities |
+|---|---|
+| spaCy NER | AGE, DATE_TIME, EMAIL, ID, LOCATION, NRP, ORGANIZATION, PERSON, PHONE_NUMBER |
+| Date, Email, Phone, URL, IP | DATE_TIME, EMAIL_ADDRESS, PHONE_NUMBER, URL, IP_ADDRESS |
+| Credit card, crypto, IBAN, medical license | CREDIT_CARD, CRYPTO, IBAN_CODE, MEDICAL_LICENSE |
+| UK NHS | UK_NHS |
+| US bank, driver license, ITIN, passport, SSN | US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN |
+
+All applicable recognizers run for each selected file, with no Eryx entity allowlist,
+minimum score cutoff, baseline or value suppression. This inventory includes the
+installed standard medical *license* identifier; optional clinical/medical NLP
+models are not installed. A missing or unexpected recognizer, NER mapping or nonzero
+threshold fails the scan (exit 2), rather than silently changing coverage. The job
+confirms selected text and skipped binary coverage, rejects unconfirmed inputs, and
+records only entity types and physical locations (and scores). The installer probes
+name, contact, date, URL, network and country-specific identifiers as well as clean
+input. `codestyle` retains
 the `src/` layout and architecture requirements.
 
 ## Readability
