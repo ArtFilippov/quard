@@ -16,7 +16,7 @@ from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from _common import (EryxError, atomic_write, capture, emit_event, error_exit,
                      load_toml, read_json, repo_lock, require_runtime, project_dir,
                      safe_target, tool_dir, write_json)
-from _checks import ANONYMITY_DEPENDENCIES, covered_files, read_checks
+from _checks import ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, covered_files, read_checks
 
 STATE_FILES = ["readability.toml", "scope.toml", "architecture.ready.json",
                "pylint-catalog.json", "pylint-tests.toml", "policy-notes.json", "installation.json"]
@@ -26,10 +26,14 @@ def dependency_specs(tool: Path, groups: list[str] | None = None) -> list[str]:
     manifest = read_json(tool / "tools.json")
     specs = []
     for name, version in manifest["dependencies"].items():
+        if groups is not None and "anonymity" not in groups and name in PRESIDIO_DEPENDENCIES:
+            continue
         if groups is not None and "codestyle" not in groups and name not in ANONYMITY_DEPENDENCIES:
             continue
         extras = manifest.get("extras", {}).get(name)
-        specs.append(name + ("[" + ",".join(extras) + "]" if extras else "") + "==" + version)
+        source = manifest.get("sources", {}).get(name)
+        specs.append(name + (" @ " + source if source else
+                             ("[" + ",".join(extras) + "]" if extras else "") + "==" + version))
     return specs
 
 

@@ -35,7 +35,11 @@ secrets baseline or verification service. `anonymity` alone runs a minimal Pylin
 without the native code-style or architecture analyzers. Secret coverage records
 confirmed text-file scans separately from unsupported binary files and selected
 inputs. Unreadable text, partial scans and zero text-file coverage are errors.
-The installer verifies an intentional secret in an isolated fixture. `codestyle` retains
+The installer verifies an intentional secret in an isolated fixture. An independent
+Presidio job checks English person names and email addresses with the pinned local
+`en_core_web_sm` model and no downloads during a check. It confirms selected text
+and skipped binary coverage, rejects unconfirmed inputs, and records only entity
+types and physical locations. The installer probes both entity types. `codestyle` retains
 the `src/` layout and architecture requirements.
 
 ## Readability

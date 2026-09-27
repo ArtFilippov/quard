@@ -23,8 +23,14 @@ for potential secrets with `detect-secrets`, both through Pylint. Findings inclu
 the file and line but not the secret value. Zero notebooks are explicitly reported,
 not counted as verified. Reports distinguish selected `secret_inputs`, confirmed
 `secret_scanned` / `secret_count`, and unsupported binary `secret_skipped` /
-`secret_skipped_count`. Missing or partial scanner confirmation and zero scanned
-text files fail the check (exit 2), rather than claiming a clean scan. An
+`secret_skipped_count`. An independent Presidio job scans the same effective file
+scope for English `PERSON` and `EMAIL_ADDRESS`, using the pinned local
+`en_core_web_sm` model. It reports entity type, relative path, physical line and
+confidence score without matched values. `presidio_inputs`, `presidio_scanned` /
+`presidio_count`, `presidio_skipped` / `presidio_skipped_count` and
+`presidio_unconfirmed` separately describe selected, confirmed text, unsupported
+binary and unconfirmed inputs. Missing resources, partial coverage and zero
+scanned text files fail the check (exit 2), rather than claiming a clean scan. An
 anonymity-only consumer needs no `src/`, native code-analysis configuration or
 accepted architecture. Code-style
 analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
@@ -115,7 +121,7 @@ Every native severity fails the check. Unknown failed output never becomes succe
 Full diagnostics and per-tool statuses: `.eryx/reports/latest.json`. Archived reports
 and raw stdout/stderr/native JSON: `.eryx/reports/<run-id>/`. The report contains
 `eryx.commit` and `eryx.dirty` for the **running checkout** (null when unavailable).
-For secret-enabled Pylint workers, stdout/stderr are withheld from archived logs
+For secret-enabled Pylint and Presidio workers, stdout/stderr are withheld from archived logs
 because third-party failures can include source contents; structured status and
 diagnostics remain in the report.
 Schemas: `eryx-report/v1` in `report.schema.json`, events: `eryx-event/v1`.

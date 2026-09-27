@@ -206,6 +206,57 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             "diagnostics": items, "error": error}
 
 
+def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
+                       expected: list[str]) -> dict[str, Any]:
+    """Accept only the worker's closed schema, never third-party prose or source text."""
+    coverage: dict[str, list[str]] = {"scanned": [], "skipped": []}
+    items: list[dict[str, Any]] = []
+    error = "PRESIDIO_SCAN_INCOMPLETE"
+    try:
+        data = json.loads(output.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or set(data) not in (
+                {"scanned", "skipped", "findings", "failed"},
+                {"scanned", "skipped", "findings", "failed", "error"}):
+            raise ValueError("Invalid worker schema")
+        if ("error" in data and data["error"] != "PRESIDIO_MODEL_UNAVAILABLE"):
+            raise ValueError("Invalid worker error")
+        for key in ("scanned", "skipped", "failed"):
+            if (not isinstance(data[key], list) or any(type(p) is not str for p in data[key]) or
+                    len(data[key]) != len(set(data[key])) or not set(data[key]) <= set(expected)):
+                raise ValueError("Invalid worker coverage")
+        if (set(data["scanned"]) & set(data["skipped"]) or
+                set(data["scanned"]) & set(data["failed"]) or
+                set(data["skipped"]) & set(data["failed"])):
+            raise ValueError("Overlapping worker coverage")
+        coverage = {key: data[key] for key in ("scanned", "skipped")}
+        if not isinstance(data["findings"], list):
+            raise ValueError("Invalid findings")
+        for entry in data["findings"]:
+            if (not isinstance(entry, dict) or set(entry) != {"path", "line", "entity", "score"} or
+                    entry["path"] not in data["scanned"] or type(entry["line"]) is not int or
+                    entry["line"] < 1 or entry["entity"] not in {"PERSON", "EMAIL_ADDRESS"} or
+                    type(entry["score"]) not in (int, float) or not 0 <= entry["score"] <= 1):
+                raise ValueError("Invalid finding")
+            items.append(diagnostic("presidio", entry["entity"],
+                                    f"Potential {entry['entity']} detected (score {entry['score']:.4f}).",
+                                    path=entry["path"], line=entry["line"], score=entry["score"]))
+        if (set(data["scanned"] + data["skipped"] + data["failed"]) == set(expected) and
+                not data["failed"] and data["scanned"] and "error" not in data and
+                result.get("exit_code") == (1 if items else 0) and not result.get("error") and
+                not result.get("stdout") and not result.get("stderr")):
+            error = None
+        elif data.get("error") == "PRESIDIO_MODEL_UNAVAILABLE":
+            error = "PRESIDIO_MODEL_UNAVAILABLE"
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if error:
+        items.append(diagnostic("presidio", error,
+                                "Presidio could not confirm the selected text scan; check the pinned English model and worker status.",
+                                is_infrastructure_error=True))
+    return {"status": "error" if error else ("violations" if items else "passed"),
+            "error": error, "diagnostics": items, "coverage": coverage}
+
+
 def sorted_diagnostics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # Only remove byte-identical observations of the same native diagnostic.
     seen = set()

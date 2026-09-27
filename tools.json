@@ -10,9 +10,12 @@
     "tomlkit": "0.13.3",
     "packaging": "25.0",
     "nbstripout": "0.9.1",
-    "detect-secrets": "1.5.0"
+    "detect-secrets": "1.5.0",
+    "presidio-analyzer": "2.2.360",
+    "en-core-web-sm": "3.8.0"
   },
   "extras": {"pyright": ["nodejs"]},
+  "sources": {"en-core-web-sm": "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"},
   "upstream_release_checked": "2026-09-21",
   "note": "Exact top-level pins; uv.lock resolves and fixes transitive dependencies. No third-party wheels are embedded."
 }

@@ -35,6 +35,11 @@ class CheckGroupsTests(unittest.TestCase):
 
     def run_mocked(self):
         def fake(argv, cwd, timeout):
+            if "_presidio_worker.py" in " ".join(argv):
+                selected = json.loads(Path(argv[argv.index("--manifest") + 1]).read_text())
+                Path(argv[argv.index("--output") + 1]).write_text(
+                    json.dumps({"scanned": selected, "skipped": [], "failed": [], "findings": []}))
+                return native_result(argv)
             if "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
             if "--secret-coverage" in argv:
@@ -51,15 +56,20 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertEqual(validate_project(self.root)["project"]["name"], "demo")
         report = self.run_mocked()
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual([job["name"] for job in report["tools"]], ["pylint-anonymity"])
+        self.assertEqual([job["name"] for job in report["tools"]], ["presidio", "pylint-anonymity"])
         self.assertEqual(report["coverage"]["notebooks"], ["review/clean.ipynb"])
         self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/clean.ipynb"])
         self.assertEqual(report["coverage"]["secret_count"], 2)
+        self.assertEqual(report["coverage"]["presidio_count"], 2)
         self.assertNotIn("ARCHITECTURE_NOT_INITIALIZED", [item["rule"] for item in report["diagnostics"]])
         specs = dependency_specs(ERYX, ["anonymity"])
         self.assertTrue(any(spec.startswith("nbstripout==") for spec in specs))
         self.assertIn("detect-secrets==1.5.0", specs)
+        self.assertTrue(any(spec.startswith("presidio-analyzer==") for spec in specs))
+        self.assertTrue(any(spec.startswith("en-core-web-sm @ https://") for spec in specs))
         self.assertFalse(any(spec.startswith("tach==") for spec in specs))
+        self.assertFalse(any(spec.startswith("presidio-analyzer==") or spec.startswith("en-core-web-sm @")
+                             for spec in dependency_specs(ERYX, ["codestyle"])))
 
     def test_codestyle_and_both_keep_native_jobs_and_do_not_duplicate_notebooks(self):
         for groups in (["codestyle"], ["codestyle", "anonymity"]):
@@ -67,7 +77,7 @@ class CheckGroupsTests(unittest.TestCase):
                 self.configure(groups, ["src", "tests", "review"])
                 report = self.run_mocked()
                 self.assertEqual(report["exit_code"], 0, report)
-                self.assertEqual(len(report["tools"]), 6)
+                self.assertEqual(len(report["tools"]), 6 + int("anonymity" in groups))
                 self.assertEqual(report["coverage"]["notebooks"], ["review/clean.ipynb"])
                 self.assertEqual(sum("--notebooks" in job["argv"] for job in report["tools"]), 1)
                 self.assertEqual(sum("--secrets" in job["argv"] for job in report["tools"]),
@@ -81,7 +91,7 @@ class CheckGroupsTests(unittest.TestCase):
         before = source.read_bytes()
         clean = run_checks(self.root)
         self.assertEqual(clean["exit_code"], 0, clean)
-        self.assertEqual(clean["tools"][0]["status"], "passed", clean)
+        self.assertEqual(next(t for t in clean["tools"] if t["name"] == "pylint-anonymity")["status"], "passed", clean)
         self.assertEqual(source.read_bytes(), before)
         self.assertEqual(clean["coverage"]["secret_scanned"], ["review/a.txt", "review/settings.py"])
 
@@ -90,7 +100,7 @@ class CheckGroupsTests(unittest.TestCase):
         before = source.read_bytes()
         report = run_checks(self.root)
         self.assertEqual(report["exit_code"], 1, report)
-        self.assertEqual(report["tools"][0]["status"], "violations", report)
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "pylint-anonymity")["status"], "violations", report)
         self.assertEqual([(item["rule"], item["path"], item["line"])
                           for item in report["diagnostics"]], [("W9803", "review/settings.py", 2)])
         self.assertNotIn(secret, json.dumps(report))
@@ -172,7 +182,7 @@ class CheckGroupsTests(unittest.TestCase):
                     return result
                 report = run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
                 self.assertEqual(report["exit_code"], 2, report)
-                self.assertEqual(report["tools"][0]["status"], "error")
+                self.assertEqual(next(t for t in report["tools"] if t["name"] == "pylint-anonymity")["status"], "error")
                 self.assertNotIn("AKIAIOSFODNN7EXAMPLE", json.dumps(report))
                 if mode in ("missing", "malformed"):
                     self.assertEqual(report["coverage"]["secret_count"], 0)

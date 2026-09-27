@@ -8,7 +8,9 @@ from typing import Any
 
 from _common import EryxError, load_toml, tool_dir
 
-ANONYMITY_DEPENDENCIES = frozenset({"pylint", "nbstripout", "detect-secrets", "tomlkit", "packaging"})
+PRESIDIO_DEPENDENCIES = frozenset({"presidio-analyzer", "en-core-web-sm"})
+ANONYMITY_DEPENDENCIES = (frozenset({"pylint", "nbstripout", "detect-secrets", "tomlkit", "packaging"}) |
+                          PRESIDIO_DEPENDENCIES)
 IGNORED_DIRECTORIES = frozenset({".git", ".eryx", ".venv", "venv", "__pycache__",
                                  ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
                                  ".nox", "node_modules", "build", "dist"})

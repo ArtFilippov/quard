@@ -17,9 +17,9 @@ import tomlkit
 
 from _common import (EryxError, atomic_write, capture, command_env, emit_event, error_exit,
                      load_toml, read_json, require_runtime, project_dir, tool_dir, write_json)
-from _checks import ANONYMITY_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, read_checks
+from _checks import ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, read_checks
 from _policy import configure
-from _reports import normalize
+from _reports import normalize, normalize_presidio
 from init_architecture import sync_clean_arch, tool_binary
 
 
@@ -256,14 +256,44 @@ def smoke_secret(log_root: Path) -> dict[str, str]:
     return {"pylint_secret": "detected"}
 
 
+def smoke_presidio(log_root: Path) -> dict[str, str]:
+    """Probe both English entities with the installed model and no input rewrites."""
+    with tempfile.TemporaryDirectory(prefix="eryx-presidio-probe-", dir=log_root) as tmp:
+        fixture = Path(tmp)
+        person = "Dr. John Smith"
+        email = "john.smith@example.com"
+        source = fixture / "sample.txt"
+        source.write_text(f"Contact: {person}\nEmail: {email}\n", encoding="utf-8")
+        original = source.read_bytes()
+        write_json(fixture / "manifest.json", [source.name])
+        output = fixture / "presidio.json"
+        result = probe([sys.executable, str(tool_dir() / "_presidio_worker.py"),
+                        "--manifest", str(fixture / "manifest.json"), "--output", str(output)],
+                       fixture, "presidio-smoke", log_root, sensitive=True)
+        normalized = normalize_presidio(result, fixture, output, [source.name])
+        try:
+            native = output.read_text(encoding="utf-8")
+        except OSError:
+            native = ""
+        found = {(d["rule"], d["line"]) for d in normalized["diagnostics"]}
+        if (normalized["status"] != "violations" or result["exit_code"] != 1 or
+                not {("PERSON", 1), ("EMAIL_ADDRESS", 2)} <= found or
+                normalized["coverage"] != {"scanned": [source.name], "skipped": []} or
+                person in native + json.dumps(normalized) or email in native + json.dumps(normalized) or
+                source.read_bytes() != original):
+            raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio did not safely detect both English entities; see install-probes.")
+    return {"presidio_person": "detected", "presidio_email": "detected"}
+
+
 def audit(root: Path) -> dict[str, Any]:
     require_runtime()
     checks = read_checks(root)
     log_root = root / ".eryx/logs/install-probes"
     log_root.mkdir(parents=True, exist_ok=True)
     pins = read_json(tool_dir() / "tools.json")["dependencies"]
-    if "codestyle" not in checks["groups"]:
-        pins = {key: value for key, value in pins.items() if key in ANONYMITY_DEPENDENCIES}
+    pins = {key: value for key, value in pins.items()
+            if ("codestyle" in checks["groups"] or key in ANONYMITY_DEPENDENCIES) and
+            ("anonymity" in checks["groups"] or key not in PRESIDIO_DEPENDENCIES)}
     versions = {}
     for name, expected in pins.items():
         try:
@@ -284,6 +314,8 @@ def audit(root: Path) -> dict[str, Any]:
         plugins = ["_notebook_checker", "_secret_checker"]
         catalog, changed = {"message_ids": ["W9801", "F9802", "W9803", "F9804"]}, []
         results = smoke_anonymity(log_root)
+    if "anonymity" in checks["groups"]:
+        results.update(smoke_presidio(log_root))
     report = {"status": "passed", "versions": versions, "plugins": plugins, "message_count": len(catalog["message_ids"]),
               "smoke_tests": results, "modified_files": changed}
     write_json(root / ".eryx/logs/install-probes/result.json", report, root)

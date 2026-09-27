@@ -84,7 +84,8 @@ class PylintOutputTest(unittest.TestCase):
             run_dir = root / ".eryx/reports/first-run"
             run_dir.mkdir(parents=True)
             jobs = make_jobs(root, run_dir, {"production": ["src/sample.py"], "tests": [],
-                                            "notebooks": [], "secret_inputs": ["src/sample.py"]},
+                                            "notebooks": [], "secret_inputs": ["src/sample.py"],
+                                            "presidio_inputs": ["src/sample.py"]},
                              architecture_ready=False, groups=["codestyle", "anonymity"])
             result = execute_job(jobs[0], root, run_dir, timeout=30)
             self.assertEqual(result["status"], "violations", result)
@@ -104,7 +105,8 @@ class PylintOutputTest(unittest.TestCase):
             run_dir = root / ".eryx/reports/first-run"
             run_dir.mkdir(parents=True)
             job = make_jobs(root, run_dir, {"production": ["src/sample.py"], "tests": [],
-                                            "notebooks": [], "secret_inputs": ["src/sample.py"]},
+                                            "notebooks": [], "secret_inputs": ["src/sample.py"],
+                                            "presidio_inputs": ["src/sample.py"]},
                             architecture_ready=False, groups=["codestyle", "anonymity"])[0]
             result = execute_job(job, root, run_dir, timeout=30)
             self.assertEqual(result["status"], "error", result)

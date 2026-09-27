@@ -18,18 +18,19 @@ from typing import Any, Callable
 
 from _common import (SCHEMA, EryxError, atomic_write, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
-from _checks import (ANONYMITY_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, covered_files,
+from _checks import (ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, covered_files,
                      in_working_directories, read_checks, selected_test_roots)
 from _policy import discover_files, discover_notebooks, limit_drift, pyright_config, read_scope
-from _reports import diagnostic, normalize, sorted_diagnostics
+from _reports import diagnostic, normalize, normalize_presidio, sorted_diagnostics
 from init_architecture import validate_architecture_config
 
 
 def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str, Any]]]:
     expected = read_json(tool_dir() / "tools.json")["dependencies"]
     groups = read_checks(root)["groups"]
-    if "codestyle" not in groups:
-        expected = {key: value for key, value in expected.items() if key in ANONYMITY_DEPENDENCIES}
+    expected = {key: value for key, value in expected.items()
+                if ("codestyle" in groups or key in ANONYMITY_DEPENDENCIES) and
+                ("anonymity" in groups or key not in PRESIDIO_DEPENDENCIES)}
     versions: dict[str, str | None] = {}
     problems = []
     for name, required in expected.items():
@@ -72,13 +73,29 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
         write_json(manifest, [str(dummy)], root)
         write_json(secret_manifest, files["secret_inputs"], root)
         write_json(notebook_manifest, files["notebooks"], root)
-        return [{"name": "pylint-anonymity", "tool": "pylint", "profile": "anonymity",
-                 "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
-                          "--config", str(config), "--output", str(output), "--notebooks", str(notebook_manifest),
-                          "--secrets", str(secret_manifest), "--secret-coverage", str(secret_coverage),
-                          "--notebook-only"],
-                 "json_file": output, "secret_coverage": secret_coverage,
-                 "secret_inputs": files["secret_inputs"]}]
+        jobs.append({"name": "pylint-anonymity", "tool": "pylint", "profile": "anonymity",
+                     "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
+                              "--config", str(config), "--output", str(output), "--notebooks", str(notebook_manifest),
+                              "--secrets", str(secret_manifest), "--secret-coverage", str(secret_coverage),
+                              "--notebook-only"],
+                     "json_file": output, "secret_coverage": secret_coverage,
+                     "secret_inputs": files["secret_inputs"]})
+    if "codestyle" in groups:
+        jobs.extend(make_codestyle_jobs(root, run_dir, files, architecture_ready, groups))
+    if "anonymity" in groups:
+        manifest = run_dir / "presidio-files.json"
+        output = run_dir / "raw/presidio.json"
+        write_json(manifest, files["presidio_inputs"], root)
+        jobs.append({"name": "presidio", "tool": "presidio", "argv":
+                     [sys.executable, str(tool_dir() / "_presidio_worker.py"),
+                      "--manifest", str(manifest), "--output", str(output)],
+                     "json_file": output, "presidio_inputs": files["presidio_inputs"]})
+    return jobs
+
+
+def make_codestyle_jobs(root: Path, run_dir: Path, files: dict[str, Any],
+                        architecture_ready: bool, groups: list[str]) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
     for profile in ("production", "tests"):
         python_files = [path for path in files[profile] if path.endswith(".py")]
         if not python_files:
@@ -88,13 +105,13 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
         write_json(manifest, python_files, root)
         config = root / ("pyproject.toml" if profile == "production" else ".eryx/pylint-tests.toml")
         notebook_args = []
+        secret_coverage = run_dir / "raw/secret-coverage.json"
         if profile == "production":
             notebook_manifest = run_dir / "pylint-notebooks.json"
             write_json(notebook_manifest, files.get("notebooks", []), root)
             notebook_args = ["--notebooks", str(notebook_manifest)]
             if "anonymity" in groups:
                 secret_manifest = run_dir / "pylint-secrets.json"
-                secret_coverage = run_dir / "raw/secret-coverage.json"
                 write_json(secret_manifest, files["secret_inputs"], root)
                 notebook_args += ["--secrets", str(secret_manifest), "--secret-coverage", str(secret_coverage)]
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
@@ -123,7 +140,7 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
     except Exception as exc:
         result = {"argv": job["argv"], "exit_code": None, "stdout": "", "stderr": str(exc),
                   "duration_seconds": 0, "error": "RUNNER_SUBPROCESS_ERROR"}
-    if "secret_coverage" in job:
+    if "secret_coverage" in job or "presidio_inputs" in job:
         # Tool/third-party exceptions can contain source text. Only structured
         # diagnostics and coverage from the worker are safe to persist.
         result["stdout"] = "[Secret-enabled worker output withheld.]" if result.get("stdout") else ""
@@ -133,7 +150,8 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
         path = run_dir / "raw" / f"{job['name']}.{stream}.log"
         atomic_write(path, result.get(stream, ""), root)
         logs[stream] = path.relative_to(root).as_posix()
-    normalized = normalize(job["tool"], result, root, job.get("json_file"))
+    normalized = (normalize_presidio(result, root, job["json_file"], job["presidio_inputs"])
+                  if "presidio_inputs" in job else normalize(job["tool"], result, root, job.get("json_file")))
     secret_coverage = {"scanned": [], "skipped": []}
     if "secret_coverage" in job:
         if (result.get("exit_code") is None or
@@ -163,6 +181,7 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
             normalized["diagnostics"].append(diagnostic("pylint", "SECRET_SCAN_INCOMPLETE",
                 "Secret scanner did not confirm every selected input; inspect the tool status and file paths.",
                 is_infrastructure_error=True))
+    presidio_coverage = normalized.pop("coverage", None)
     for entry in normalized["diagnostics"]:
         entry["job"] = job["name"]
         if "profile" in job:
@@ -172,7 +191,8 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
     return {"name": job["name"], "tool": job["tool"], "status": normalized["status"],
             "exit_code": result["exit_code"], "duration_seconds": result["duration_seconds"],
             "argv": job["argv"], "raw_output": logs, "diagnostics": normalized["diagnostics"],
-            "error": normalized["error"], **({"secret_coverage": secret_coverage} if "secret_coverage" in job else {})}
+            "error": normalized["error"], **({"secret_coverage": secret_coverage} if "secret_coverage" in job else {}),
+            **({"presidio_coverage": presidio_coverage} if "presidio_inputs" in job else {})}
 
 
 def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
@@ -188,7 +208,10 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     files: dict[str, Any] = {"production": [], "tests": [], "excluded_directories": [],
                              "notebooks": [], "notebook_count": 0, "groups": [], "working_directories": [],
                              "secret_inputs": [], "secret_scanned": [], "secret_count": 0,
-                             "secret_skipped": [], "secret_skipped_count": 0}
+                             "secret_skipped": [], "secret_skipped_count": 0,
+                             "presidio_inputs": [], "presidio_scanned": [], "presidio_count": 0,
+                             "presidio_skipped": [], "presidio_skipped_count": 0,
+                             "presidio_unconfirmed": []}
     architecture_ready = False
     eryx_version = "unknown"
     results = []
@@ -202,6 +225,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         if not effective:
             raise EryxError("EMPTY_CHECK_SCOPE", "No files in selected working directories after exclusions.")
         files["secret_inputs"] = effective if "anonymity" in checks["groups"] else []
+        files["presidio_inputs"] = effective if "anonymity" in checks["groups"] else []
+        files["presidio_unconfirmed"] = files["presidio_inputs"].copy()
         eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
         versions, problems = versions_fn(root)
         diagnostics.extend(problems)
@@ -253,8 +278,10 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                     result = future.result()
                 except Exception as exc:
                     result = {"name": job["name"], "tool": job["tool"], "status": "error", "exit_code": None,
-                              "duration_seconds": 0, "error": "REPORT_WRITE_ERROR", "raw_output": {},
-                              "diagnostics": [diagnostic(job["tool"], "REPORT_WRITE_ERROR", str(exc), is_infrastructure_error=True)]}
+                               "duration_seconds": 0, "error": "REPORT_WRITE_ERROR", "raw_output": {},
+                               "diagnostics": [diagnostic(job["tool"], "REPORT_WRITE_ERROR",
+                                   "Presidio job failed to write its report." if job["tool"] == "presidio" else str(exc),
+                                   is_infrastructure_error=True)]}
                 diagnostics.extend(result.pop("diagnostics"))
                 if "secret_coverage" in result:
                     coverage = result.pop("secret_coverage")
@@ -262,6 +289,14 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                     files["secret_count"] = len(coverage["scanned"])
                     files["secret_skipped"] = coverage["skipped"]
                     files["secret_skipped_count"] = len(coverage["skipped"])
+                if "presidio_coverage" in result:
+                    coverage = result.pop("presidio_coverage")
+                    files["presidio_scanned"] = coverage["scanned"]
+                    files["presidio_count"] = len(coverage["scanned"])
+                    files["presidio_skipped"] = coverage["skipped"]
+                    files["presidio_skipped_count"] = len(coverage["skipped"])
+                    files["presidio_unconfirmed"] = sorted(
+                        set(files["presidio_inputs"]) - set(coverage["scanned"] + coverage["skipped"]))
                 results.append(result)
         if "codestyle" in checks["groups"] and not architecture_ready:
             for name in ("tach", "tach-external"):
@@ -271,6 +306,9 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
             diagnostics.append(diagnostic("system", "EMPTY_SECRET_SCAN_SCOPE",
                 "No text files were scanned for secrets in the selected working directories.",
                 is_infrastructure_error=True))
+        if "anonymity" in checks["groups"] and not files["presidio_count"]:
+            diagnostics.append(diagnostic("presidio", "EMPTY_PRESIDIO_SCAN_SCOPE",
+                "No text files were confirmed scanned by Presidio.", is_infrastructure_error=True))
     except Exception as exc:
         diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"), str(exc), is_infrastructure_error=True))
     diagnostics = sorted_diagnostics(diagnostics)
