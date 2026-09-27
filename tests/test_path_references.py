@@ -16,6 +16,27 @@ from test_infrastructure import create_repo
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_partial_scan_keeps_confirmed_reference_and_its_diagnostic_link(self):
+        with tempfile.TemporaryDirectory(prefix="eryx-partial-reference-") as directory:
+            root = Path(directory)
+            create_repo(root)
+            (root / ".eryx/checks.toml").write_text(
+                'groups = ["anonymity"]\nworking_directories = ["review"]\n', encoding="utf-8")
+            (root / "review").mkdir()
+            (root / "review/ordinary.txt").write_text('path="/some/private/file"\n', encoding="utf-8")
+            (root / "review/oversize.txt").write_bytes(b"x" * (512 * 1024 + 1))
+            report = run_checks(root)
+            self.assertEqual(report["exit_code"], 2)
+            self.assertEqual(next(t["status"] for t in report["tools"] if t["name"] == "presidio"),
+                             "error")
+            self.assertEqual(report["coverage"]["presidio_unconfirmed"], ["review/oversize.txt"])
+            self.assertEqual(report["coverage"]["path_reference_count"], 1)
+            candidate = report["coverage"]["path_references"][0]
+            absolute = [d for d in report["diagnostics"] if d["rule"] == "ABSOLUTE_PATH_REFERENCE"]
+            self.assertEqual(len(absolute), 1)
+            self.assertEqual(absolute[0]["reference_id"], candidate["reference_id"])
+            self.assertEqual(absolute[0]["object_id"], candidate["source_object_id"])
+
     def test_missing_or_malformed_reference_records_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

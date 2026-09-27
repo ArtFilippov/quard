@@ -288,6 +288,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
     except (OSError, ValueError, KeyError, TypeError):
         coverage = {"scanned": [], "skipped": [], "excluded": policy_excluded}
         items = []
+        candidates = []
     if result.get("error") or result.get("exit_code") not in (0, 1, 2) or result.get("stdout") or result.get("stderr"):
         items = []
     if error:
@@ -296,7 +297,9 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                                 is_infrastructure_error=True))
     return {"status": "error" if error else ("violations" if items else "passed"),
             "error": error, "diagnostics": items, "coverage": coverage,
-            "references": candidates if not error else []}
+            "references": candidates if not (result.get("error") or result.get("stdout") or
+                                             result.get("stderr") or
+                                             result.get("exit_code") not in (0, 1, 2)) else []}
 
 
 def sorted_diagnostics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
