@@ -250,6 +250,31 @@ class CheckGroupsTests(unittest.TestCase):
         pydoclint = next(job for job in report["tools"] if job["name"] == "pydoclint")
         self.assertEqual(pydoclint["argv"][-2:], ["src", "tests/selected"])
 
+    def test_combined_group_uses_manifest_for_private_doc_roots(self):
+        (self.root / "tests/12a_lia").mkdir()
+        (self.root / "tests/12a_lia/test_example.py").write_text("value = 1\n", encoding="utf-8")
+        (self.root / ".eryx/presidio.toml").write_text(
+            'patterns = ["[0-9]{2}[a-z]_[a-z]{3}"]\n', encoding="utf-8")
+        self.configure(["codestyle", "anonymity"], ["src", "tests/12a_lia"])
+        configure(self.root)
+        report = self.run_mocked()
+        job = next(job for job in report["tools"] if job["name"] == "pydoclint")
+        self.assertNotIn("12a_lia", " ".join(job["argv"]))
+        self.assertTrue(job["argv"][1].endswith("_pydoclint_worker.py"))
+        # The worker receives raw roots only through a consumer-owned manifest.
+        run_dir = self.root / Path(report["report_path"]).parent
+        self.assertEqual(json.loads((run_dir / "pydoclint-roots.json").read_text()),
+                         ["src", "tests/[REDACTED]"])
+        from _common import capture
+        import sys
+
+        raw = run_dir / "worker-input.json"
+        raw.write_text(json.dumps(["src", "tests/12a_lia"]), encoding="utf-8")
+        result = capture([sys.executable, str(ERYX / "_pydoclint_worker.py"),
+                          "--manifest", str(raw), "--config", str(self.root / "pyproject.toml")], self.root, 30)
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertNotIn("12a_lia", " ".join(result["argv"]))
+
 
 if __name__ == "__main__":
     unittest.main()

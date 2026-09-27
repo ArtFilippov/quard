@@ -128,9 +128,15 @@ def make_codestyle_jobs(root: Path, run_dir: Path, files: dict[str, Any],
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = files.get("doc_roots", ["src"] + (["tests"] if (root / "tests").is_dir() else []))
-    jobs.append({"name": "pydoclint", "tool": "pydoclint", "argv": [binary("pydoclint"),
-                 "--config", str(root / "pyproject.toml"), "--quiet",
-                 "--show-filenames-in-every-violation-message=True", *doc_roots]})
+    if "anonymity" in groups:
+        doc_manifest = run_dir / "pydoclint-roots.json"
+        write_json(doc_manifest, doc_roots, root)
+        doc_argv = [sys.executable, str(tool_dir() / "_pydoclint_worker.py"),
+                    "--manifest", str(doc_manifest), "--config", str(root / "pyproject.toml")]
+    else:
+        doc_argv = [binary("pydoclint"), "--config", str(root / "pyproject.toml"), "--quiet",
+                    "--show-filenames-in-every-violation-message=True", *doc_roots]
+    jobs.append({"name": "pydoclint", "tool": "pydoclint", "argv": doc_argv})
     if architecture_ready:
         for name, command in (("tach", "check"), ("tach-external", "check-external")):
             jobs.append({"name": name, "tool": name, "argv": [sys.executable, str(tool_dir() / "_tach_worker.py"), command]})
@@ -368,14 +374,15 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                            "unconfirmed" if raw in files.get(f"{name}_unconfirmed", []) else
                            "selected" if raw in files[f"{name}_inputs"] else "not_selected")
                     for name in ("presidio", "secret")}
-        def sanitized(value: Any) -> Any:
+        def sanitized(value: Any, key: str = "") -> Any:
             if isinstance(value, str):
-                return safe_paths(value, root, displays, *identifiers)
+                return safe_paths(value, root, displays, *identifiers,
+                                  redact_matches=key in {"path", "message", "module", "obj", "symbol", "log"})
             if isinstance(value, list):
-                return [sanitized(item) for item in value]
+                return [sanitized(item, key) for item in value]
             if isinstance(value, dict):
                 return {key: ("[REDACTED]" if hidden_identifiers and key == "module" and
-                              isinstance(item, str) else sanitized(item))
+                              isinstance(item, str) else sanitized(item, key))
                         for key, item in value.items()}
             return value
         # Workers need raw paths while running. Once they finish, every persisted
@@ -391,7 +398,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                         safe = {"status": "unreadable worker output"}
                     write_json(artifact, safe, root)
                 else:
-                    atomic_write(artifact, sanitized(original), root)
+                    atomic_write(artifact, sanitized(original, "log"), root)
         files = sanitized(files)
         results = sanitized(results)
         diagnostics = sanitized(diagnostics)

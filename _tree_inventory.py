@@ -151,7 +151,8 @@ def inventory(root: Path, directories: list[str], run_id: str, *, hide_all: bool
 
 
 def safe_paths(value: str, root: Path, displays: dict[str, str],
-               seeds: tuple[str, ...] = (), patterns: tuple[re.Pattern[str], ...] = ()) -> str:
+               seeds: tuple[str, ...] = (), patterns: tuple[re.Pattern[str], ...] = (),
+               *, redact_matches: bool = False) -> str:
     """Replace raw path spellings in reports and archived worker output."""
     for raw in sorted(displays, key=len, reverse=True):
         shown = displays[raw]
@@ -159,11 +160,12 @@ def safe_paths(value: str, root: Path, displays: dict[str, str],
             for source, target in ((str(root / raw), str(root / shown)), (raw, shown)):
                 # A complete path or component boundary is required: "foo" must
                 # not rewrite a distinct name such as "foobar".
-                boundary = r"(?=$|/|[\s\"',}:\]])"
+                boundary = r"(?=$|/|[\"',}:\]])"
                 value = re.sub(re.escape(source) + boundary, lambda _: target, value)
                 escaped = json.dumps(source)[1:-1]
                 value = re.sub(re.escape(escaped) + boundary,
                                lambda _: json.dumps(target)[1:-1], value)
-    value = redact(value, path_spans(value, seeds, patterns))
+    if redact_matches:
+        value = redact(value, path_spans(value, seeds, patterns))
     value = value.replace(json.dumps(str(root))[1:-1], "<consumer-root>")
     return value.replace(str(root), "<consumer-root>")

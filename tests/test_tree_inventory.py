@@ -150,9 +150,15 @@ class TreeInventoryTests(unittest.TestCase):
         self.assertEqual(len({obj["object_id"] for obj in public if obj["path"] == failed["path"]}), 2)
 
     def test_path_replacement_requires_component_boundary(self):
-        self.assertEqual(safe_paths("review/foobar review/foo/child", self.root,
+        self.assertEqual(safe_paths("review/foobar review/foo bar review/foo/child", self.root,
                                     {"review/foo": "review/[REDACTED]"}),
-                         "review/foobar review/[REDACTED]/child")
+                         "review/foobar review/foo bar review/[REDACTED]/child")
+
+    def test_identifier_matching_does_not_change_machine_status(self):
+        (self.root / ".eryx/presidio.toml").write_text('seeds = ["passed"]\n', encoding="utf-8")
+        report = run_checks(self.root)
+        self.assertEqual(report["status"], "passed", report)
+        self.assertEqual({tool["status"] for tool in report["tools"]}, {"passed"})
 
     def test_invalid_selected_root_does_not_appear_in_failure(self):
         (self.root / ".eryx/checks.toml").write_text(

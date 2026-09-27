@@ -81,6 +81,9 @@ not removed. Content scanning still follows the effective selected file scope;
 an inventoried object is **not** thereby a confirmed text scan. Archived worker JSON,
 manifests and reports use the same redacted display paths. An identifier in the
 enclosing checkout path alone does not create a tree finding.
+When code-style and anonymity groups run together, pydoclint receives selected
+document roots through a consumer-owned manifest rather than path-bearing process
+arguments.
 
 An anonymity-only consumer needs no `src/`, native code-analysis configuration or
 accepted architecture. Code-style
