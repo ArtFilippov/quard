@@ -16,6 +16,7 @@ sys.path.insert(0, str(ERYX))
 from check import execute_job, make_jobs
 from _policy import discover_notebooks
 from _notebook_checker import NotebookChecker, configure_notebooks
+from _secret_checker import SecretChecker, configure_secrets, secret_coverage
 
 
 class PylintOutputTest(unittest.TestCase):
@@ -90,6 +91,32 @@ class PylintOutputTest(unittest.TestCase):
             self.assertEqual([(d["rule"], d["path"], d["line"]) for d in result["diagnostics"]],
                              [("W9803", "src/sample.py", 1)])
             self.assertNotIn(secret, json.dumps(result))
+            self.assertEqual(result["secret_coverage"], {"scanned": ["src/sample.py"], "skipped": []})
+
+
+class SecretCheckerTest(unittest.TestCase):
+    def test_unreadable_input_and_upstream_exception_do_not_claim_coverage_or_expose_value(self):
+        with TemporaryDirectory(prefix="eryx-secret-failure-") as directory:
+            root = Path(directory)
+            source = root / "settings.txt"
+            source.write_text("label = 'safe'\n", encoding="utf-8")
+            original = source.read_bytes()
+            linter = MagicMock()
+            for failure in ("missing", "scanner"):
+                with self.subTest(failure=failure):
+                    configure_secrets([str(source)])
+                    checker = SecretChecker(linter)
+                    with patch.object(checker, "add_message") as message:
+                        if failure == "missing":
+                            source.unlink()
+                            checker.open()
+                            source.write_bytes(original)
+                        else:
+                            with patch("_secret_checker.Path.read_text", side_effect=OSError("AKIAIOSFODNN7EXAMPLE")):
+                                checker.open()
+                        message.assert_called_once_with("secret-scan-failed", line=1, args=(str(source),))
+                    self.assertEqual(secret_coverage(), {"scanned": [], "skipped": []})
+            self.assertEqual(source.read_bytes(), original)
 
 
 class NotebookPylintTest(unittest.TestCase):

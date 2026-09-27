@@ -62,6 +62,7 @@ class LifecycleTests(unittest.TestCase):
             installed = self.run_command(["bash", str(tool / "install.sh"), "--project", str(project),
                                           "--json", "--extra", "keep"], base)
             self.assertEqual(json.loads(installed)["smoke_tests"]["pylint_notebook"], "detected")
+            self.assertEqual(json.loads(installed)["smoke_tests"]["pylint_secret"], "detected")
             uv = ["uv", "run", "--locked", "--group", "dev", "--extra", "keep", "python"]
             missing = self.run_command(uv + [str(tool / "check.py"), "--json"], project, expected=2)
             self.assertIn("ARCHITECTURE_NOT_INITIALIZED", [d["rule"] for d in json.loads(missing)["diagnostics"]])
@@ -125,6 +126,7 @@ class LifecycleTests(unittest.TestCase):
             installed = json.loads(self.run_command(["bash", str(ERYX / "install.sh"),
                                                       "--project", str(project), "--json"], project))
             self.assertEqual(installed["smoke_tests"]["pylint_notebook"], "detected")
+            self.assertEqual(installed["smoke_tests"]["pylint_secret"], "detected")
             self.assertEqual(set(installed["versions"]), {"pylint", "nbstripout", "detect-secrets", "tomlkit", "packaging"})
             self.assertFalse(installed["architecture_initialization_required"])
             self.assertFalse((project / "pyrightconfig.json").exists())
@@ -134,6 +136,7 @@ class LifecycleTests(unittest.TestCase):
             clean = json.loads(self.run_command(uv, project))
             self.assertEqual([tool["name"] for tool in clean["tools"]], ["pylint-anonymity"])
             self.assertEqual(clean["coverage"]["notebook_count"], 0)
+            self.assertEqual(clean["coverage"]["secret_scanned"], ["review/notes.txt"])
             (project / "outside").mkdir()
             (project / "outside/ignored.ipynb").write_text("invalid notebook", encoding="utf-8")
             notebook = project / "review/dirty.ipynb"

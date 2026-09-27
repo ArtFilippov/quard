@@ -21,8 +21,12 @@ exclusions in `.eryx/scope.toml` still apply; an empty effective file scope is a
 error. `anonymity` verifies notebooks with `nbstripout` and scans selected files
 for potential secrets with `detect-secrets`, both through Pylint. Findings include
 the file and line but not the secret value. Zero notebooks are explicitly reported,
-not counted as verified. An anonymity-only consumer needs no
-`src/`, native code-analysis configuration or accepted architecture. Code-style
+not counted as verified. Reports distinguish selected `secret_inputs`, confirmed
+`secret_scanned` / `secret_count`, and unsupported binary `secret_skipped` /
+`secret_skipped_count`. Missing or partial scanner confirmation and zero scanned
+text files fail the check (exit 2), rather than claiming a clean scan. An
+anonymity-only consumer needs no `src/`, native code-analysis configuration or
+accepted architecture. Code-style
 analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
 include root test files. Other selected directories participate in notebook
 verification, while native code analyzers retain their `src/` and `tests/` scope.

@@ -32,7 +32,10 @@ When `.eryx/checks.toml` is present, notebook discovery is limited to its
 `working_directories`. `anonymity` scans selected files with pinned `detect-secrets`
 and reports potential-secret types and locations without values. It requires no
 secrets baseline or verification service. `anonymity` alone runs a minimal Pylint worker
-without the native code-style or architecture analyzers. `codestyle` retains
+without the native code-style or architecture analyzers. Secret coverage records
+confirmed text-file scans separately from unsupported binary files and selected
+inputs. Unreadable text, partial scans and zero text-file coverage are errors.
+The installer verifies an intentional secret in an isolated fixture. `codestyle` retains
 the `src/` layout and architecture requirements.
 
 ## Readability

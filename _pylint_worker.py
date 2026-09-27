@@ -43,6 +43,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--notebooks")
     parser.add_argument("--secrets")
+    parser.add_argument("--secret-coverage")
     parser.add_argument("--notebook-only", action="store_true")
     args = parser.parse_args()
     files = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
@@ -60,6 +61,11 @@ def main() -> int:
         install_architecture_compat()
     result = Run(["--rcfile=" + args.config, "--output-format=json2", "--output=" + args.output,
                   "--jobs=1", *files], exit=False)
+    if args.secrets:
+        from _secret_checker import secret_coverage
+        if not args.secret_coverage:
+            raise ValueError("Secret coverage output is required")
+        Path(args.secret_coverage).write_text(json.dumps(secret_coverage()), encoding="utf-8")
     return result.linter.msg_status
 
 

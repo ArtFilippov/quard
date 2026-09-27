@@ -66,6 +66,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
         atomic_write(config, ANONYMITY_PYLINT_CONFIG, root)
         manifest = run_dir / "pylint-anonymity-files.json"
         secret_manifest = run_dir / "pylint-secrets.json"
+        secret_coverage = run_dir / "raw/secret-coverage.json"
         notebook_manifest = run_dir / "pylint-notebooks.json"
         output = run_dir / "raw/pylint-anonymity.json"
         write_json(manifest, [str(dummy)], root)
@@ -74,8 +75,10 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
         return [{"name": "pylint-anonymity", "tool": "pylint", "profile": "anonymity",
                  "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
                           "--config", str(config), "--output", str(output), "--notebooks", str(notebook_manifest),
-                           "--secrets", str(secret_manifest), "--notebook-only"],
-                 "json_file": output}]
+                          "--secrets", str(secret_manifest), "--secret-coverage", str(secret_coverage),
+                          "--notebook-only"],
+                 "json_file": output, "secret_coverage": secret_coverage,
+                 "secret_inputs": files["secret_inputs"]}]
     for profile in ("production", "tests"):
         python_files = [path for path in files[profile] if path.endswith(".py")]
         if not python_files:
@@ -91,13 +94,16 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_rea
             notebook_args = ["--notebooks", str(notebook_manifest)]
             if "anonymity" in groups:
                 secret_manifest = run_dir / "pylint-secrets.json"
+                secret_coverage = run_dir / "raw/secret-coverage.json"
                 write_json(secret_manifest, files["secret_inputs"], root)
-                notebook_args += ["--secrets", str(secret_manifest)]
+                notebook_args += ["--secrets", str(secret_manifest), "--secret-coverage", str(secret_coverage)]
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
                      "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"),
                               "--manifest", str(manifest), "--config", str(config), "--output", str(output),
                               *notebook_args],
-                     "json_file": output})
+                     "json_file": output,
+                     **({"secret_coverage": secret_coverage, "secret_inputs": files["secret_inputs"]}
+                        if profile == "production" and "anonymity" in groups else {})})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = files.get("doc_roots", ["src"] + (["tests"] if (root / "tests").is_dir() else []))
@@ -117,12 +123,46 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
     except Exception as exc:
         result = {"argv": job["argv"], "exit_code": None, "stdout": "", "stderr": str(exc),
                   "duration_seconds": 0, "error": "RUNNER_SUBPROCESS_ERROR"}
+    if "secret_coverage" in job:
+        # Tool/third-party exceptions can contain source text. Only structured
+        # diagnostics and coverage from the worker are safe to persist.
+        result["stdout"] = "[Secret-enabled worker output withheld.]" if result.get("stdout") else ""
+        result["stderr"] = "[Secret-enabled worker output withheld.]" if result.get("stderr") else ""
     logs = {}
     for stream in ("stdout", "stderr"):
         path = run_dir / "raw" / f"{job['name']}.{stream}.log"
         atomic_write(path, result.get(stream, ""), root)
         logs[stream] = path.relative_to(root).as_posix()
     normalized = normalize(job["tool"], result, root, job.get("json_file"))
+    secret_coverage = {"scanned": [], "skipped": []}
+    if "secret_coverage" in job:
+        if (result.get("exit_code") is None or
+                (result.get("exit_code") == 0 and normalized["diagnostics"]) or
+                result.get("stdout") or result.get("stderr")):
+            normalized["status"] = "error"
+            normalized["error"] = "SECRET_SCAN_WORKER_ERROR"
+            normalized["diagnostics"].append(diagnostic("pylint", "SECRET_SCAN_WORKER_ERROR",
+                "Secret-enabled worker returned unexpected output or exit status.",
+                is_infrastructure_error=True))
+        try:
+            data = read_json(job["secret_coverage"])
+            expected = set(job["secret_inputs"])
+            if (not isinstance(data, dict) or set(data) != {"scanned", "skipped"} or
+                    any(not isinstance(data[key], list) or
+                        any(type(path) is not str for path in data[key]) or
+                        len(data[key]) != len(set(data[key])) for key in ("scanned", "skipped")) or
+                    set(data["scanned"]) & set(data["skipped"]) or
+                    not set(data["scanned"] + data["skipped"]) <= expected):
+                raise ValueError("Invalid secret coverage")
+            secret_coverage = data
+            if set(data["scanned"] + data["skipped"]) != expected:
+                raise ValueError("Incomplete secret coverage")
+        except (OSError, ValueError, EryxError):
+            normalized["status"] = "error"
+            normalized["error"] = "SECRET_SCAN_INCOMPLETE"
+            normalized["diagnostics"].append(diagnostic("pylint", "SECRET_SCAN_INCOMPLETE",
+                "Secret scanner did not confirm every selected input; inspect the tool status and file paths.",
+                is_infrastructure_error=True))
     for entry in normalized["diagnostics"]:
         entry["job"] = job["name"]
         if "profile" in job:
@@ -132,7 +172,7 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
     return {"name": job["name"], "tool": job["tool"], "status": normalized["status"],
             "exit_code": result["exit_code"], "duration_seconds": result["duration_seconds"],
             "argv": job["argv"], "raw_output": logs, "diagnostics": normalized["diagnostics"],
-            "error": normalized["error"]}
+            "error": normalized["error"], **({"secret_coverage": secret_coverage} if "secret_coverage" in job else {})}
 
 
 def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
@@ -146,7 +186,9 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     diagnostics = []
     versions: dict[str, str | None] = {}
     files: dict[str, Any] = {"production": [], "tests": [], "excluded_directories": [],
-                             "notebooks": [], "notebook_count": 0, "groups": [], "working_directories": []}
+                             "notebooks": [], "notebook_count": 0, "groups": [], "working_directories": [],
+                             "secret_inputs": [], "secret_scanned": [], "secret_count": 0,
+                             "secret_skipped": [], "secret_skipped_count": 0}
     architecture_ready = False
     eryx_version = "unknown"
     results = []
@@ -214,11 +256,21 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                               "duration_seconds": 0, "error": "REPORT_WRITE_ERROR", "raw_output": {},
                               "diagnostics": [diagnostic(job["tool"], "REPORT_WRITE_ERROR", str(exc), is_infrastructure_error=True)]}
                 diagnostics.extend(result.pop("diagnostics"))
+                if "secret_coverage" in result:
+                    coverage = result.pop("secret_coverage")
+                    files["secret_scanned"] = coverage["scanned"]
+                    files["secret_count"] = len(coverage["scanned"])
+                    files["secret_skipped"] = coverage["skipped"]
+                    files["secret_skipped_count"] = len(coverage["skipped"])
                 results.append(result)
         if "codestyle" in checks["groups"] and not architecture_ready:
             for name in ("tach", "tach-external"):
                 results.append({"name": name, "tool": name, "status": "blocked", "exit_code": None,
                                 "duration_seconds": 0, "error": "ARCHITECTURE_NOT_INITIALIZED", "raw_output": {}})
+        if "anonymity" in checks["groups"] and not files["secret_count"]:
+            diagnostics.append(diagnostic("system", "EMPTY_SECRET_SCAN_SCOPE",
+                "No text files were scanned for secrets in the selected working directories.",
+                is_infrastructure_error=True))
     except Exception as exc:
         diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"), str(exc), is_infrastructure_error=True))
     diagnostics = sorted_diagnostics(diagnostics)
@@ -238,7 +290,9 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                          "No source files are modified. No baseline or automatic fixes are applied.",
                          "Tach names come from native diagnostics or explicitly marked adapter categories; raw details are retained.",
                          "Pylint receives .py files; Pyright also checks discovered .pyi stubs."]
-               + (["No notebooks discovered; notebook anonymity was not verified."] if not files["notebooks"] else [])}
+               + (["No notebooks discovered; notebook anonymity was not verified."] if not files["notebooks"] else [])
+               + (["No text files scanned for secrets; secret anonymity was not verified."]
+                  if "anonymity" in files["groups"] and not files["secret_count"] else [])}
     write_json(run_dir / "report.json", report, root)
     write_json(root / ".eryx/reports/latest.json", report, root)
     return report

@@ -24,8 +24,11 @@ from init_architecture import sync_clean_arch, tool_binary
 
 
 def probe(argv: list[str], cwd: Path, label: str, log_root: Path,
-          env: dict[str, str] | None = None) -> dict[str, Any]:
+          env: dict[str, str] | None = None, sensitive: bool = False) -> dict[str, Any]:
     result = capture(argv, cwd, timeout=300, env=env)
+    if sensitive:
+        result["stdout"] = "[Secret probe output withheld.]" if result["stdout"] else ""
+        result["stderr"] = "[Secret probe output withheld.]" if result["stderr"] else ""
     atomic_write(log_root / f"{label}.stdout.log", result["stdout"])
     atomic_write(log_root / f"{label}.stderr.log", result["stderr"])
     if result["error"]:
@@ -155,8 +158,9 @@ class Probe:
         normalized = normalize("tach-external", result, fixture)
         if normalized["status"] != "passed":
             raise EryxError("TACH_EXTERNAL_SMOKE_FAILED", "The native external-dependency command failed on a project with no external imports. See install-probes.")
+    secret_result = smoke_secret(log_root)
     return {"pylint_plugin_load": "passed", "pylint_config_and_fixture": "passed",
-            "pylint_notebook": "detected",
+            "pylint_notebook": "detected", **secret_result,
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed"}
 
@@ -188,7 +192,44 @@ def smoke_anonymity(log_root: Path) -> dict[str, str]:
                 not any(d["rule"] == "W9801" and d["path"] == notebook.name for d in normalized["diagnostics"]) or
                 notebook.read_bytes() != original):
             raise EryxError("PYLINT_SMOKE_FAILED", "Notebook checker failed its independent fixture; see install-probes.")
-    return {"pylint_notebook": "detected"}
+    return {"pylint_notebook": "detected", **smoke_secret(log_root)}
+
+
+def smoke_secret(log_root: Path) -> dict[str, str]:
+    """Require the real installed checker to detect a secret without disclosing it."""
+    with tempfile.TemporaryDirectory(prefix="eryx-secret-probe-", dir=log_root) as tmp:
+        fixture = Path(tmp)
+        secret = "AKIAIOSFODNN7EXAMPLE"
+        source = fixture / "settings.txt"
+        source.write_text(f"label = 'safe'\naws_access_key_id = '{secret}'\n", encoding="utf-8")
+        original = source.read_bytes()
+        (fixture / "input.py").write_text("", encoding="utf-8")
+        write_json(fixture / "inputs.json", ["input.py"])
+        write_json(fixture / "secrets.json", [source.name])
+        atomic_write(fixture / "anonymity-pylint.toml", ANONYMITY_PYLINT_CONFIG)
+        output = fixture / "pylint.json"
+        coverage = fixture / "secret-coverage.json"
+        result = probe([sys.executable, str(tool_dir() / "_pylint_worker.py"),
+                        "--manifest", str(fixture / "inputs.json"),
+                        "--config", str(fixture / "anonymity-pylint.toml"),
+                        "--output", str(output), "--secrets", str(fixture / "secrets.json"),
+                        "--secret-coverage", str(coverage), "--notebook-only"],
+                       fixture, "pylint-secret-smoke", log_root, sensitive=True)
+        normalized = normalize("pylint", result, fixture, output)
+        try:
+            covered = read_json(coverage)
+            native = output.read_text(encoding="utf-8")
+        except (EryxError, OSError):
+            covered, native = None, ""
+        if (normalized["status"] != "violations" or result["exit_code"] != 4 or
+                [(item["rule"], item["path"], item["line"]) for item in normalized["diagnostics"]]
+                != [("W9803", source.name, 2)] or
+                covered != {"scanned": [source.name], "skipped": []} or
+                secret in json.dumps(normalized) + native or result["stdout"] or result["stderr"] or
+                source.read_bytes() != original):
+            raise EryxError("PYLINT_SECRET_SMOKE_FAILED",
+                            "Secret checker failed its independent fixture or exposed its value; see install-probes.")
+    return {"pylint_secret": "detected"}
 
 
 def audit(root: Path) -> dict[str, Any]:

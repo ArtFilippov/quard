@@ -37,6 +37,10 @@ class CheckGroupsTests(unittest.TestCase):
         def fake(argv, cwd, timeout):
             if "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
+            if "--secret-coverage" in argv:
+                selected = json.loads(Path(argv[argv.index("--secrets") + 1]).read_text())
+                Path(argv[argv.index("--secret-coverage") + 1]).write_text(
+                    json.dumps({"scanned": selected, "skipped": []}), encoding="utf-8")
             return native_result(argv, stdout='{"generalDiagnostics": []}' if "pyright" in argv else "")
         return run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
 
@@ -49,6 +53,8 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertEqual(report["exit_code"], 0, report)
         self.assertEqual([job["name"] for job in report["tools"]], ["pylint-anonymity"])
         self.assertEqual(report["coverage"]["notebooks"], ["review/clean.ipynb"])
+        self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/clean.ipynb"])
+        self.assertEqual(report["coverage"]["secret_count"], 2)
         self.assertNotIn("ARCHITECTURE_NOT_INITIALIZED", [item["rule"] for item in report["diagnostics"]])
         specs = dependency_specs(ERYX, ["anonymity"])
         self.assertTrue(any(spec.startswith("nbstripout==") for spec in specs))
@@ -77,6 +83,7 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertEqual(clean["exit_code"], 0, clean)
         self.assertEqual(clean["tools"][0]["status"], "passed", clean)
         self.assertEqual(source.read_bytes(), before)
+        self.assertEqual(clean["coverage"]["secret_scanned"], ["review/a.txt", "review/settings.py"])
 
         secret = "AKIAIOSFODNN7EXAMPLE"
         source.write_text(f"label = 'safe'\naws_access_key_id = '{secret}'\n", encoding="utf-8")
@@ -88,6 +95,7 @@ class CheckGroupsTests(unittest.TestCase):
                           for item in report["diagnostics"]], [("W9803", "review/settings.py", 2)])
         self.assertNotIn(secret, json.dumps(report))
         self.assertEqual(source.read_bytes(), before)
+        self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/settings.py"])
 
     def test_project_root_selects_existing_codestyle_layout(self):
         self.configure(["codestyle"], ["."])
@@ -103,6 +111,58 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertEqual(covered, ["review/a.txt", "review/clean.ipynb"])
         report = self.run_mocked()
         self.assertEqual(report["coverage"]["notebooks"], ["review/clean.ipynb"])
+        self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/clean.ipynb"])
+
+    def test_binary_inputs_are_visible_as_skipped_not_scanned(self):
+        self.configure(["anonymity"], ["review"])
+        (self.root / "review/clean.ipynb").unlink()
+        (self.root / "review/photo.png").write_bytes(b"\x89PNG\r\n")
+        before = (self.root / "review/photo.png").read_bytes()
+        report = run_checks(self.root)
+        self.assertEqual(report["exit_code"], 0, report)
+        self.assertEqual(report["coverage"]["secret_skipped"], ["review/photo.png"])
+        self.assertNotIn("review/photo.png", report["coverage"]["secret_scanned"])
+        self.assertEqual((self.root / "review/photo.png").read_bytes(), before)
+
+    def test_zero_text_coverage_is_an_explicit_failure(self):
+        self.configure(["anonymity"], ["review"])
+        (self.root / "review/a.txt").unlink()
+        (self.root / "review/clean.ipynb").unlink()
+        (self.root / "review/photo.png").write_bytes(b"\x89PNG\r\n")
+        report = run_checks(self.root)
+        self.assertEqual(report["exit_code"], 2, report)
+        self.assertEqual(report["coverage"]["secret_inputs"], ["review/photo.png"])
+        self.assertEqual(report["coverage"]["secret_count"], 0)
+        self.assertEqual(report["coverage"]["secret_skipped"], ["review/photo.png"])
+        self.assertIn("EMPTY_SECRET_SCAN_SCOPE", [item["rule"] for item in report["diagnostics"]])
+
+    def test_missing_partial_and_unexpected_scanner_results_fail_closed(self):
+        self.configure(["anonymity"], ["review"])
+        for mode in ("missing", "partial", "malformed", "unexpected", "nonzero"):
+            with self.subTest(mode=mode):
+                def fake(argv, cwd, timeout):
+                    output = Path(argv[argv.index("--output") + 1])
+                    output.write_text('{"messages": []}', encoding="utf-8")
+                    coverage = Path(argv[argv.index("--secret-coverage") + 1])
+                    if mode == "partial":
+                        coverage.write_text('{"scanned": ["review/a.txt"], "skipped": []}')
+                    elif mode == "malformed":
+                        coverage.write_text('{"scanned": "all", "skipped": []}')
+                    elif mode != "missing":
+                        coverage.write_text(json.dumps({"scanned": ["review/a.txt", "review/clean.ipynb"],
+                                                        "skipped": []}))
+                    result = native_result(argv, stdout="unexpected AKIAIOSFODNN7EXAMPLE" if mode == "unexpected" else "")
+                    if mode == "nonzero":
+                        result["exit_code"] = 4
+                    return result
+                report = run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
+                self.assertEqual(report["exit_code"], 2, report)
+                self.assertEqual(report["tools"][0]["status"], "error")
+                self.assertNotIn("AKIAIOSFODNN7EXAMPLE", json.dumps(report))
+                if mode in ("missing", "malformed"):
+                    self.assertEqual(report["coverage"]["secret_count"], 0)
+                if mode == "partial":
+                    self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt"])
 
     def test_empty_and_invalid_configuration_fail_explicitly(self):
         invalid = [(["anonymity", "unknown"], ["review"]), ([], ["review"]),
