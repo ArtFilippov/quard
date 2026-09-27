@@ -214,8 +214,13 @@ class PresidioTests(unittest.TestCase):
         self.assertIn("LOCAL_PATH_IDENTIFIER", {d["rule"] for d in report["diagnostics"]})
 
     def test_latin_range_rewrite_does_not_change_escaped_literals(self):
-        self.assertEqual(latin_ranges(r"\[a-z] [a-z] \\ [A-Z]"),
-                         r"\[a-z] (?a:[a-z]) \\ (?a:[A-Z])")
+        self.assertEqual(latin_ranges(r"\[a-z] [a-z] \\ (?# [a-z]) [A-Z]"),
+                         r"\[a-z] (?a:[a-z]) \\ (?# [a-z]) (?a:[A-Z])")
+        config = self.root / ".eryx/presidio.toml"
+        config.write_text('patterns = ["(?# [a-z])x"]\n', encoding="utf-8")
+        (self.root / "review/known.txt").write_text("x\n", encoding="utf-8")
+        report = run_checks(self.root)
+        self.assertIn("KNOWN_IDENTIFIER_PATTERN", {d["rule"] for d in report["diagnostics"]})
 
     def test_empty_and_missing_seeds_keep_general_policy_active(self):
         self.assertEqual(run_checks(self.root)["exit_code"], 0)

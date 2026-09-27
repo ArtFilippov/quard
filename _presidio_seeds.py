@@ -25,7 +25,14 @@ def latin_ranges(pattern: str) -> str:
     parts = []
     index = 0
     while index < len(pattern):
-        if pattern[index] == "\\" and index + 1 < len(pattern):
+        if pattern.startswith("(?#", index):
+            end = pattern.find(")", index + 3)
+            if end == -1:
+                parts.append(pattern[index:])
+                break
+            parts.append(pattern[index:end + 1])
+            index = end + 1
+        elif pattern[index] == "\\" and index + 1 < len(pattern):
             parts.append(pattern[index:index + 2])
             index += 2
         elif pattern.startswith(("[a-z]", "[A-Z]"), index):
