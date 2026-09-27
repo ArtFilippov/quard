@@ -61,7 +61,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(managed_bytes(project), before)
             installed = self.run_command(["bash", str(tool / "install.sh"), "--project", str(project),
                                           "--json", "--extra", "keep"], base)
-            self.assertEqual(len(json.loads(installed)["smoke_tests"]), 6)
+            self.assertEqual(json.loads(installed)["smoke_tests"]["pylint_notebook"], "detected")
             uv = ["uv", "run", "--locked", "--group", "dev", "--extra", "keep", "python"]
             missing = self.run_command(uv + [str(tool / "check.py"), "--json"], project, expected=2)
             self.assertIn("ARCHITECTURE_NOT_INITIALIZED", [d["rule"] for d in json.loads(missing)["diagnostics"]])

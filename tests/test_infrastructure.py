@@ -347,6 +347,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(seen), 6)
         self.assertEqual(report["coverage"]["notebooks"], [])
         self.assertEqual(report["coverage"]["notebook_count"], 0)
+        self.assertIn("No notebooks discovered; notebook anonymity was not verified.", report["notes"])
         self.assertTrue((self.root / report["latest_report_path"]).is_file())
         import jsonschema
         jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))

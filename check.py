@@ -182,10 +182,11 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
               "tools": sorted(results, key=lambda item: item["name"]), "diagnostics": diagnostics,
               "report_path": (run_dir / "report.json").relative_to(root).as_posix(),
               "latest_report_path": ".eryx/reports/latest.json",
-              "notes": ["Every reported diagnostic fails the check, including informational messages.",
-                        "No source files are modified. No baseline or automatic fixes are applied.",
-                        "Tach names come from native diagnostics or explicitly marked adapter categories; raw details are retained.",
-                        "Pylint receives .py files; Pyright also checks discovered .pyi stubs."]}
+               "notes": ["Every reported diagnostic fails the check, including informational messages.",
+                         "No source files are modified. No baseline or automatic fixes are applied.",
+                         "Tach names come from native diagnostics or explicitly marked adapter categories; raw details are retained.",
+                         "Pylint receives .py files; Pyright also checks discovered .pyi stubs."]
+               + (["No notebooks discovered; notebook anonymity was not verified."] if not files["notebooks"] else [])}
     write_json(run_dir / "report.json", report, root)
     write_json(root / ".eryx/reports/latest.json", report, root)
     return report

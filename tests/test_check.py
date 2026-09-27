@@ -8,12 +8,14 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import MagicMock, patch
 
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX))
 
 from check import execute_job, make_jobs
 from _policy import discover_notebooks
+from _notebook_checker import NotebookChecker, configure_notebooks
 
 
 class PylintOutputTest(unittest.TestCase):
@@ -69,6 +71,50 @@ class PylintOutputTest(unittest.TestCase):
 
 
 class NotebookPylintTest(unittest.TestCase):
+    def test_invalid_notebook_is_an_infrastructure_error_with_its_path(self):
+        with TemporaryDirectory(prefix="eryx-invalid-notebook-") as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "src/sample.py").write_text("VALUE = 1\n", encoding="utf-8")
+            notebook = root / "bad.ipynb"
+            notebook.write_bytes(b"not json\n")
+            (root / "pyproject.toml").write_text(
+                '[tool.pylint.main]\nload-plugins = ["_notebook_checker"]\n'
+                '[tool.pylint.messages_control]\ndisable = ["all"]\n'
+                'enable = ["notebook-verification-failed"]\n', encoding="utf-8")
+            run_dir = root / ".eryx/reports/first-run"
+            run_dir.mkdir(parents=True)
+            job = make_jobs(root, run_dir, {"production": ["src/sample.py"],
+                                            "tests": [], "notebooks": [notebook.name]}, False)[0]
+            result = execute_job(job, root, run_dir, timeout=30)
+            self.assertEqual(result["status"], "error", result)
+            self.assertEqual([(item["rule"], item["path"]) for item in result["diagnostics"]
+                              if item.get("is_infrastructure_error")], [("F9802", "bad.ipynb"),
+                                                                          ("PYLINT_ANALYSIS_ERROR", None)])
+            self.assertEqual(notebook.read_bytes(), b"not json\n")
+
+    def test_launch_and_unexpected_output_are_not_violations(self):
+        linter = MagicMock()
+        configure_notebooks(["bad.ipynb"])
+        try:
+            checker = NotebookChecker(linter)
+            with patch.object(checker, "add_message") as message:
+                with patch("_notebook_checker.subprocess.run", side_effect=FileNotFoundError("missing nbstripout")):
+                    checker.open()
+                message.assert_called_once_with("notebook-verification-failed", line=1,
+                                                args=("bad.ipynb", "missing nbstripout"))
+                message.reset_mock()
+                for code, stdout, stderr in [(0, "surprise", ""), (1, "", "invalid notebook"),
+                                             (2, "", ""), (1, "wrong notebook", "")]:
+                    with self.subTest(code=code, stdout=stdout, stderr=stderr):
+                        with patch("_notebook_checker.subprocess.run", return_value=subprocess.CompletedProcess(
+                                [], code, stdout, stderr)):
+                            checker.open()
+                        self.assertEqual(message.call_args.args[0], "notebook-verification-failed")
+                        message.reset_mock()
+        finally:
+            configure_notebooks([])
+
     def test_project_wide_notebooks_are_checked_once_without_modification(self):
         with TemporaryDirectory(prefix="eryx-notebooks-") as directory:
             root = Path(directory)

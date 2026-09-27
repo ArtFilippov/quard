@@ -54,7 +54,7 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
     if not pairs:
         pairs = re.findall(r"([a-z][a-z0-9-]+) \(([A-Z]\d{4})\)", result["stdout"])
     ids = sorted({message_id for _, message_id in pairs})
-    if not {"R0915", "R1260", "W9001", "W9201", "W9301", "W9801"}.issubset(ids):
+    if not {"R0915", "R1260", "W9001", "W9201", "W9301", "W9801", "F9802"}.issubset(ids):
         raise EryxError("INCOMPLETE_CHECKER_CATALOG", "Required standard/architecture checker IDs are missing; inspect the installed plugin release.")
     catalog = {"plugins": plugins, "message_ids": ids,
                "messages": [{"id": code, "symbol": symbol} for symbol, code in sorted(set(pairs), key=lambda pair: pair[1])],
@@ -103,12 +103,25 @@ class Probe:
         atomic_write(fixture / "pyproject.toml", tomlkit.dumps(project))
         manifest = fixture / "inputs.json"
         write_json(manifest, [source.relative_to(fixture).as_posix()])
+        notebook = fixture / "smoke.ipynb"
+        notebook.write_text(json.dumps({"nbformat": 4, "nbformat_minor": 5, "metadata": {},
+                                        "cells": [{"cell_type": "code", "id": "smoke", "metadata": {},
+                                                   "source": "print(1)", "execution_count": 1,
+                                                   "outputs": [{"output_type": "stream", "name": "stdout",
+                                                                "text": "1\n"}]}]}), encoding="utf-8")
+        original_notebook = notebook.read_bytes()
+        notebook_manifest = fixture / "notebooks.json"
+        write_json(notebook_manifest, [notebook.name])
         pylint_json = fixture / "pylint.json"
         result = probe([sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
-                        "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json)], fixture, "pylint-smoke", log_root)
+                         "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json),
+                         "--notebooks", str(notebook_manifest)], fixture, "pylint-smoke", log_root)
         normalized = normalize("pylint", result, fixture, pylint_json)
         if normalized["status"] == "error" or not any(d["rule"] == "W0611" for d in normalized["diagnostics"]):
             raise EryxError("PYLINT_SMOKE_FAILED", "Configured Pylint/plugins failed on a small fixture. See .eryx/logs/install-probes/pylint-smoke.*.log")
+        if (not any(d["rule"] == "W9801" and d["path"] == notebook.name for d in normalized["diagnostics"])
+                or notebook.read_bytes() != original_notebook):
+            raise EryxError("PYLINT_SMOKE_FAILED", "Notebook checker did not diagnose the unstripped notebook without changing it. See install-probes.")
         if any(d["rule"] in {"C0114", "C0115", "C0116"} for d in normalized["diagnostics"]):
             raise EryxError("DOCSTRING_POLICY_MISMATCH", "Pylint unexpectedly requires docstrings.")
         pyright = load_toml(root / "pyproject.toml")["tool"]["pyright"]
@@ -138,6 +151,7 @@ class Probe:
         if normalized["status"] != "passed":
             raise EryxError("TACH_EXTERNAL_SMOKE_FAILED", "The native external-dependency command failed on a project with no external imports. See install-probes.")
     return {"pylint_plugin_load": "passed", "pylint_config_and_fixture": "passed",
+            "pylint_notebook": "detected",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed"}
 
