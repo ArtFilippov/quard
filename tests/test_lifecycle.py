@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import tomlkit
 
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX))
@@ -51,6 +52,9 @@ class LifecycleTests(unittest.TestCase):
                 '[project]\nname = "sample"\nversion = "0.1.0"\nrequires-python = ">=3.12,<3.13"\n'
                 'dependencies = []\n[project.optional-dependencies]\nkeep = ["six==1.17.0"]\n'
                 '[tool.uv]\npackage = false\n')
+            (project / ".eryx").mkdir()
+            (project / ".eryx/checks.toml").write_text(
+                'groups = ["codestyle", "anonymity"]\nworking_directories = ["src"]\n')
             self.run_command(["git", "init", "-b", "main"], project)
             (project / ".gitignore").write_text(".venv/\n__pycache__/\n")
             original_tool = managed_bytes(tool)
@@ -110,6 +114,18 @@ class LifecycleTests(unittest.TestCase):
                 stream.write("\n# local regression fixture\n")
             dirty = json.loads(self.run_command(uv + [str(submodule / "check.py"), "--json"], project))
             self.assertTrue(dirty["eryx"]["dirty"])
+            # Installation must test the effective combined-group configuration.
+            config_path = project / "pyproject.toml"
+            config = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+            config["tool"]["pylint"]["messages_control"]["disable"].append("potential-secret")
+            config_path.write_text(tomlkit.dumps(config), encoding="utf-8")
+            failed = json.loads(self.run_command(
+                ["bash", str(submodule / "install.sh"), "--project", str(project), "--json"],
+                base, expected=2))
+            self.assertEqual(failed["code"], "INSTALL_STEP_FAILED")
+            self.assertIn("PYLINT_SECRET_SMOKE_FAILED", (project / ".eryx/logs/install.log").read_text())
+            self.assertEqual(json.loads((project / ".eryx/logs/install-error.json").read_text())
+                             ["managed_files_rolled_back"], True)
 
     def test_anonymity_only_install_and_check_without_src_or_architecture(self):
         with tempfile.TemporaryDirectory(prefix="eryx-anonymity-install-") as tmp:

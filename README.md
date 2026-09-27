@@ -115,6 +115,9 @@ Every native severity fails the check. Unknown failed output never becomes succe
 Full diagnostics and per-tool statuses: `.eryx/reports/latest.json`. Archived reports
 and raw stdout/stderr/native JSON: `.eryx/reports/<run-id>/`. The report contains
 `eryx.commit` and `eryx.dirty` for the **running checkout** (null when unavailable).
+For secret-enabled Pylint workers, stdout/stderr are withheld from archived logs
+because third-party failures can include source contents; structured status and
+diagnostics remain in the report.
 Schemas: `eryx-report/v1` in `report.schema.json`, events: `eryx-event/v1`.
 Positions are one-based; unavailable positions are null. Diagnostics retain native
 rule IDs or explicit adapter categories, stable fingerprints and tool/profile identity.

@@ -80,7 +80,7 @@ class PylintOutputTest(unittest.TestCase):
             (root / "pyproject.toml").write_text(
                 '[tool.pylint.main]\nload-plugins = ["_notebook_checker", "_secret_checker"]\n'
                 '[tool.pylint.messages_control]\ndisable = ["all"]\n'
-                'enable = ["potential-secret"]\n', encoding="utf-8")
+                'enable = ["potential-secret", "secret-scan-failed"]\n', encoding="utf-8")
             run_dir = root / ".eryx/reports/first-run"
             run_dir.mkdir(parents=True)
             jobs = make_jobs(root, run_dir, {"production": ["src/sample.py"], "tests": [],
@@ -92,6 +92,24 @@ class PylintOutputTest(unittest.TestCase):
                              [("W9803", "src/sample.py", 1)])
             self.assertNotIn(secret, json.dumps(result))
             self.assertEqual(result["secret_coverage"], {"scanned": ["src/sample.py"], "skipped": []})
+
+    def test_combined_group_rejects_disabled_secret_diagnostics(self):
+        with TemporaryDirectory(prefix="eryx-disabled-secrets-") as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "src/sample.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                '[tool.pylint.main]\nload-plugins = ["_notebook_checker", "_secret_checker"]\n'
+                '[tool.pylint.messages_control]\ndisable = ["all"]\n', encoding="utf-8")
+            run_dir = root / ".eryx/reports/first-run"
+            run_dir.mkdir(parents=True)
+            job = make_jobs(root, run_dir, {"production": ["src/sample.py"], "tests": [],
+                                            "notebooks": [], "secret_inputs": ["src/sample.py"]},
+                            architecture_ready=False, groups=["codestyle", "anonymity"])[0]
+            result = execute_job(job, root, run_dir, timeout=30)
+            self.assertEqual(result["status"], "error", result)
+            self.assertEqual(result["secret_coverage"], {"scanned": [], "skipped": []})
+            self.assertIn("SECRET_SCAN_INCOMPLETE", [d["rule"] for d in result["diagnostics"]])
 
 
 class SecretCheckerTest(unittest.TestCase):

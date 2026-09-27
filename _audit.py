@@ -120,16 +120,40 @@ class Probe:
         original_notebook = notebook.read_bytes()
         notebook_manifest = fixture / "notebooks.json"
         write_json(notebook_manifest, [notebook.name])
+        secret = "AKIAIOSFODNN7EXAMPLE"
+        secret_file = fixture / "settings.txt"
+        secret_file.write_text(f"label = 'safe'\naws_access_key_id = '{secret}'\n", encoding="utf-8")
+        original_secret = secret_file.read_bytes()
+        secret_manifest = fixture / "secrets.json"
+        secret_coverage = fixture / "secret-coverage.json"
+        write_json(secret_manifest, [secret_file.name])
+        check_secrets = "anonymity" in read_checks(root)["groups"]
         pylint_json = fixture / "pylint.json"
         result = probe([sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
-                         "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json),
-                         "--notebooks", str(notebook_manifest)], fixture, "pylint-smoke", log_root)
+                          "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json),
+                          "--notebooks", str(notebook_manifest),
+                          *(["--secrets", str(secret_manifest), "--secret-coverage", str(secret_coverage)]
+                            if check_secrets else [])],
+                       fixture, "pylint-smoke", log_root, sensitive=check_secrets)
         normalized = normalize("pylint", result, fixture, pylint_json)
         if normalized["status"] == "error" or not any(d["rule"] == "W0611" for d in normalized["diagnostics"]):
             raise EryxError("PYLINT_SMOKE_FAILED", "Configured Pylint/plugins failed on a small fixture. See .eryx/logs/install-probes/pylint-smoke.*.log")
         if (not any(d["rule"] == "W9801" and d["path"] == notebook.name for d in normalized["diagnostics"])
                 or notebook.read_bytes() != original_notebook):
             raise EryxError("PYLINT_SMOKE_FAILED", "Notebook checker did not diagnose the unstripped notebook without changing it. See install-probes.")
+        if check_secrets:
+            try:
+                covered = read_json(secret_coverage)
+                native = pylint_json.read_text(encoding="utf-8")
+            except (EryxError, OSError):
+                covered, native = None, ""
+            if (not any(d["rule"] == "W9803" and d["path"] == secret_file.name and d["line"] == 2
+                        for d in normalized["diagnostics"]) or
+                    covered != {"scanned": [secret_file.name], "skipped": []} or
+                    secret in json.dumps(normalized) + native or result["stdout"] or result["stderr"] or
+                    secret_file.read_bytes() != original_secret):
+                raise EryxError("PYLINT_SECRET_SMOKE_FAILED",
+                                "Configured secret checker failed its fixture or exposed its value; see install-probes.")
         if any(d["rule"] in {"C0114", "C0115", "C0116"} for d in normalized["diagnostics"]):
             raise EryxError("DOCSTRING_POLICY_MISMATCH", "Pylint unexpectedly requires docstrings.")
         pyright = load_toml(root / "pyproject.toml")["tool"]["pyright"]
@@ -158,9 +182,9 @@ class Probe:
         normalized = normalize("tach-external", result, fixture)
         if normalized["status"] != "passed":
             raise EryxError("TACH_EXTERNAL_SMOKE_FAILED", "The native external-dependency command failed on a project with no external imports. See install-probes.")
-    secret_result = smoke_secret(log_root)
     return {"pylint_plugin_load": "passed", "pylint_config_and_fixture": "passed",
-            "pylint_notebook": "detected", **secret_result,
+            "pylint_notebook": "detected",
+            **({"pylint_secret": "detected"} if check_secrets else {}),
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed"}
 

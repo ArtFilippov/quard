@@ -65,6 +65,9 @@ def main() -> int:
         from _secret_checker import secret_coverage
         if not args.secret_coverage:
             raise ValueError("Secret coverage output is required")
+        if not all(result.linter.is_message_enabled(symbol) for symbol in
+                   ("potential-secret", "secret-scan-failed")):
+            raise ValueError("Secret scanner messages are disabled in the Pylint configuration")
         Path(args.secret_coverage).write_text(json.dumps(secret_coverage()), encoding="utf-8")
     return result.linter.msg_status
 

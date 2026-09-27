@@ -48,13 +48,16 @@ class SecretChecker(BaseRawFileChecker):
                     source = Path(path)
                     if source.is_symlink() or not source.is_file():
                         raise OSError("Input is not a regular file")
-                    if is_non_text_file(path):
-                        _skipped.append(path)
-                        continue
                     # detect-secrets' scan_file silently swallows IOError and UnicodeError.
                     # Validate the input, then use its pinned scan primitives so failures
                     # remain observable instead of counting an unexamined file as clean.
-                    text = source.read_text(encoding="utf-8")
+                    try:
+                        text = source.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        if is_non_text_file(path):
+                            _skipped.append(path)
+                            continue
+                        raise
                     if "\0" in text:
                         _skipped.append(path)
                         continue

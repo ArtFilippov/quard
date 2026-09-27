@@ -124,6 +124,21 @@ class CheckGroupsTests(unittest.TestCase):
         self.assertNotIn("review/photo.png", report["coverage"]["secret_scanned"])
         self.assertEqual((self.root / "review/photo.png").read_bytes(), before)
 
+    def test_text_with_upstream_ignored_extension_is_scanned(self):
+        self.configure(["anonymity"], ["review"])
+        (self.root / "review/clean.ipynb").unlink()
+        secret = "AKIAIOSFODNN7EXAMPLE"
+        path = self.root / "review/style.css"
+        path.write_text(f"/* aws_access_key_id = '{secret}' */\n", encoding="utf-8")
+        original = path.read_bytes()
+        report = run_checks(self.root)
+        self.assertEqual(report["exit_code"], 1, report)
+        self.assertEqual(report["coverage"]["secret_scanned"], ["review/a.txt", "review/style.css"])
+        self.assertEqual([(d["rule"], d["path"]) for d in report["diagnostics"]],
+                         [("W9803", "review/style.css")])
+        self.assertNotIn(secret, json.dumps(report))
+        self.assertEqual(path.read_bytes(), original)
+
     def test_zero_text_coverage_is_an_explicit_failure(self):
         self.configure(["anonymity"], ["review"])
         (self.root / "review/a.txt").unlink()
