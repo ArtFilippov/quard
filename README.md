@@ -54,10 +54,9 @@ List spelling variants and transliterations explicitly. Matching is literal and
 case-insensitive, including substrings; each occurrence is reported as
 `KNOWN_IDENTIFIER_SEED` with physical position and span length. Regex `patterns`
 are separate from literal seeds; each nonempty match is reported as
-`KNOWN_IDENTIFIER_PATTERN`, case-insensitively. ASCII-only expressions use ASCII
-character classes (so `[a-z]` matches Latin letters only); expressions with
-non-ASCII literals use Python's Unicode case-insensitive regex rules. Missing files
-or empty collections leave the general-purpose recognizers active. Invalid configuration
+`KNOWN_IDENTIFIER_PATTERN`, case-insensitively using Python's Unicode regex rules.
+Missing files or empty collections leave the general-purpose recognizers active.
+Invalid configuration
 fails the Presidio job (exit 2) with a value-free error. Keep the private config
 out of the review package; identifiers and matched values are never passed in process
 arguments or emitted in reports or archived logs.

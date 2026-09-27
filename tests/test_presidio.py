@@ -171,10 +171,11 @@ class PresidioTests(unittest.TestCase):
     def test_real_patterns_and_literals_are_distinct_and_value_free(self):
         config = self.root / ".eryx/presidio.toml"
         expression = r"[0-9]{2}[a-z]_[a-z]{3}"
-        config.write_text('seeds = ["a.b"]\npatterns = ["' + expression + '", "сокол"]\n',
+        config.write_text('seeds = ["a.b"]\npatterns = ["' + expression + '", "сокол", '
+                          '"\\\\u0441\\\\u043e\\\\u043a\\\\u043e\\\\u043b"]\n',
                           encoding="utf-8")
         lines = ['# 12a_lia and 12A_LIA', 'default = "/models/12a_lia.pth"',
-                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12İ_lia"',
+                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12Ж_lia"',
                  'alias = "СОКОЛ"']
         source = self.root / "review/known.txt"
         source.write_text("\n".join(lines) + "\n", encoding="utf-8")

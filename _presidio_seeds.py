@@ -48,10 +48,7 @@ def read_identifiers(path: Path | None) -> tuple[tuple[str, ...], tuple[re.Patte
                 any(char in value for char in "\r\n\0") for value in patterns)):
         raise IdentifierConfigError("Invalid Presidio identifier configuration")
     try:
-        # ASCII-only expressions keep [a-z] within Latin letters; expressions
-        # containing Cyrillic literals retain Unicode case-insensitive matching.
-        compiled = tuple(re.compile(value, re.IGNORECASE | (re.ASCII if value.isascii() else 0))
-                         for value in patterns)
+        compiled = tuple(re.compile(value, re.IGNORECASE) for value in patterns)
     except (re.error, RecursionError, OverflowError, ValueError):
         raise IdentifierConfigError("Invalid Presidio identifier configuration") from None
     return tuple(seeds), compiled
