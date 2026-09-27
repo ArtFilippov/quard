@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from _common import (SCHEMA, EryxError, atomic_write, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
-from _policy import discover_files, limit_drift, read_scope
+from _policy import discover_files, discover_notebooks, limit_drift, read_scope
 from _reports import diagnostic, normalize, sorted_diagnostics
 from init_architecture import validate_architecture_config
 
@@ -45,7 +45,7 @@ def binary(name: str) -> str:
     return str(Path(sys.executable).parent / name)
 
 
-def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architecture_ready: bool) -> list[dict[str, Any]]:
+def make_jobs(root: Path, run_dir: Path, files: dict[str, Any], architecture_ready: bool) -> list[dict[str, Any]]:
     # Pylint opens --output before the runner writes captured stdout/stderr logs.
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
@@ -58,9 +58,15 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         output = run_dir / "raw" / f"pylint-{profile}.json"
         write_json(manifest, python_files, root)
         config = root / ("pyproject.toml" if profile == "production" else ".eryx/pylint-tests.toml")
+        notebook_args = []
+        if profile == "production":
+            notebook_manifest = run_dir / "pylint-notebooks.json"
+            write_json(notebook_manifest, files.get("notebooks", []), root)
+            notebook_args = ["--notebooks", str(notebook_manifest)]
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
                      "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"),
-                              "--manifest", str(manifest), "--config", str(config), "--output", str(output)],
+                              "--manifest", str(manifest), "--config", str(config), "--output", str(output),
+                              *notebook_args],
                      "json_file": output})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
@@ -109,7 +115,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     run_dir.mkdir(parents=True, exist_ok=False)
     diagnostics = []
     versions: dict[str, str | None] = {}
-    files: dict[str, list[str]] = {"production": [], "tests": [], "excluded_directories": []}
+    files: dict[str, Any] = {"production": [], "tests": [], "excluded_directories": [],
+                             "notebooks": [], "notebook_count": 0}
     architecture_ready = False
     eryx_version = "unknown"
     results = []
@@ -118,7 +125,12 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
         versions, problems = versions_fn(root)
         diagnostics.extend(problems)
-        files = discover_files(root, read_scope(root))
+        scope = read_scope(root)
+        files = discover_files(root, scope)
+        notebooks, excluded = discover_notebooks(root, scope)
+        files["notebooks"] = notebooks
+        files["notebook_count"] = len(notebooks)
+        files["excluded_directories"] = sorted(set(files["excluded_directories"] + excluded))
         if not files["production"]:
             raise EryxError("EMPTY_SOURCE_SCOPE", "No Python source files found under src/. Refusing an empty successful check.")
         try:

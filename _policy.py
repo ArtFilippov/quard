@@ -165,6 +165,33 @@ def discover_files(root: Path, scope: dict[str, list[str]]) -> dict[str, list[st
     return {"production": sorted(production), "tests": sorted(tests), "excluded_directories": sorted(excluded)}
 
 
+def discover_notebooks(root: Path, scope: dict[str, list[str]]) -> tuple[list[str], list[str]]:
+    """Search the whole consumer without descending into tooling or excluded directories."""
+    import os
+    from _common import tool_dir
+
+    excluded_names = set(scope["exclude_directory_names"]) | {
+        ".git", ".eryx", ".venv", "venv", "__pycache__", ".mypy_cache",
+        ".pytest_cache", ".ruff_cache", ".tox", ".nox", "node_modules", "build", "dist",
+    }
+    notebooks: list[str] = []
+    excluded: list[str] = []
+    for parent, dirs, files in os.walk(root, followlinks=False):
+        kept = []
+        for dirname in sorted(dirs):
+            path = Path(parent) / dirname
+            if dirname in excluded_names or path.resolve() == tool_dir() or path.is_symlink():
+                excluded.append(path.relative_to(root).as_posix() + "/")
+            else:
+                kept.append(dirname)
+        dirs[:] = kept
+        for name in sorted(files):
+            path = Path(parent) / name
+            if path.suffix == ".ipynb" and not path.is_symlink():
+                notebooks.append(path.relative_to(root).as_posix())
+    return sorted(notebooks), sorted(excluded)
+
+
 def apply_limits(config: dict[str, Any], limits: dict[str, int]) -> None:
     for key, (section, option) in LIMIT_MAP.items():
         config.setdefault(section, {})[option] = limits[key]
@@ -289,7 +316,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         tool.setdefault("pyright", pyright_config(scope, files))
         tool.setdefault("pydoclint", pydoclint_config(scope))
         tool.setdefault("clean-arch", clean_config())
-        tool["pylint"].setdefault("main", {})["load-plugins"] = plugins
+        tool["pylint"].setdefault("main", {})["load-plugins"] = list(dict.fromkeys([*plugins, "_notebook_checker"]))
         native_pyright = root / "pyrightconfig.json"
         if native_pyright.exists():
             for key, value in read_json(native_pyright).items():
@@ -297,6 +324,9 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
                     tool["pyright"][key] = value
     elif "pylint" not in tool:
         raise EryxError("NOT_INSTALLED", "Missing [tool.pylint]; run the installer first.")
+    loaded = tool["pylint"].setdefault("main", {}).setdefault("load-plugins", [])
+    if "_notebook_checker" not in loaded:
+        loaded.append("_notebook_checker")
     apply_limits(tool["pylint"], limits["production"])
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]

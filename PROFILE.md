@@ -23,8 +23,11 @@ Production is `src/`; tests are `tests/` and the test directory basenames config
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
 reports. `.pyi` files are checked by Pyright; other tools use their native scope.
-`__init__.py` is included. Root scripts, notebooks and Eryx itself are outside the
-consumer's source scope. Eryx's own code is verified by its autonomous test suite.
+`__init__.py` is included. Root scripts are outside the Python source scope.
+Notebooks are discovered project-wide (excluding configured directory names,
+tooling, environments and caches); the production Pylint worker checks them once
+with `nbstripout --verify` without rewriting them. Coverage lists notebook paths
+and count. Eryx's own code is verified by its autonomous test suite.
 
 ## Readability
 

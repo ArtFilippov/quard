@@ -41,11 +41,15 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--notebooks")
     args = parser.parse_args()
     files = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     if not files:
         raise ValueError("No files for Pylint")
     from pylint.lint import Run
+    if args.notebooks:
+        from _notebook_checker import configure_notebooks
+        configure_notebooks(json.loads(Path(args.notebooks).read_text(encoding="utf-8")))
     patch_pathlib_alias_check()
     install_architecture_compat()
     result = Run(["--rcfile=" + args.config, "--output-format=json2", "--output=" + args.output,

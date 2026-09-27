@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -14,15 +15,16 @@ from typing import Any
 
 import tomlkit
 
-from _common import (EryxError, atomic_write, capture, emit_event, error_exit,
+from _common import (EryxError, atomic_write, capture, command_env, emit_event, error_exit,
                      load_toml, read_json, require_runtime, project_dir, tool_dir, write_json)
 from _policy import configure
 from _reports import normalize
 from init_architecture import sync_clean_arch, tool_binary
 
 
-def probe(argv: list[str], cwd: Path, label: str, log_root: Path) -> dict[str, Any]:
-    result = capture(argv, cwd, timeout=300)
+def probe(argv: list[str], cwd: Path, label: str, log_root: Path,
+          env: dict[str, str] | None = None) -> dict[str, Any]:
+    result = capture(argv, cwd, timeout=300, env=env)
     atomic_write(log_root / f"{label}.stdout.log", result["stdout"])
     atomic_write(log_root / f"{label}.stderr.log", result["stderr"])
     if result["error"]:
@@ -38,8 +40,12 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
     extensions = sorted(set(re.findall(r"\bpylint\.extensions\.[A-Za-z][A-Za-z0-9_]*", result["stdout"])))
     if not {"pylint.extensions.mccabe", "pylint.extensions.broad_try_clause"}.issubset(extensions):
         raise EryxError("PYLINT_DISCOVERY_FAILED", "Required mccabe/broad_try_clause extensions were not discovered.")
-    plugins = [name for name in extensions if name != "pylint.extensions.docparams"] + ["clean_architecture_linter"]
-    result = probe(base + ["--load-plugins=" + ",".join(plugins), "--list-msgs"], root, "pylint-catalog", log_root)
+    plugins = [name for name in extensions if name != "pylint.extensions.docparams"]
+    plugins += ["clean_architecture_linter", "_notebook_checker"]
+    env = command_env(root)
+    env["PYTHONPATH"] = str(tool_dir()) + os.pathsep + env["PYTHONPATH"]
+    result = probe(base + ["--load-plugins=" + ",".join(plugins), "--list-msgs"],
+                   root, "pylint-catalog", log_root, env=env)
     text = result["stdout"] + "\n" + result["stderr"]
     if result["exit_code"] != 0 or "Traceback (most recent call last)" in text:
         raise EryxError("PYLINT_PLUGIN_INCOMPATIBILITY", "The complete plugin set did not load. No checker has been silently dropped. See .eryx/logs/install-probes/pylint-catalog.*.log")
@@ -48,7 +54,7 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
     if not pairs:
         pairs = re.findall(r"([a-z][a-z0-9-]+) \(([A-Z]\d{4})\)", result["stdout"])
     ids = sorted({message_id for _, message_id in pairs})
-    if not {"R0915", "R1260", "W9001", "W9201", "W9301"}.issubset(ids):
+    if not {"R0915", "R1260", "W9001", "W9201", "W9301", "W9801"}.issubset(ids):
         raise EryxError("INCOMPLETE_CHECKER_CATALOG", "Required standard/architecture checker IDs are missing; inspect the installed plugin release.")
     catalog = {"plugins": plugins, "message_ids": ids,
                "messages": [{"id": code, "symbol": symbol} for symbol, code in sorted(set(pairs), key=lambda pair: pair[1])],
