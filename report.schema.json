@@ -12,7 +12,14 @@
     "run_id": {"type": "string"},
     "duration_seconds": {"type": "number", "minimum": 0},
     "summary": {"type": "object", "required": ["diagnostics", "infrastructure_errors"], "properties": {"diagnostics": {"type": "integer", "minimum": 0}, "infrastructure_errors": {"type": "integer", "minimum": 0}}},
-    "coverage": {"type": "object"},
+    "coverage": {"type": "object", "properties": {
+      "presidio_inputs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+      "presidio_scanned": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+      "presidio_skipped": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+      "presidio_unconfirmed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+      "presidio_count": {"type": "integer", "minimum": 0},
+      "presidio_skipped_count": {"type": "integer", "minimum": 0}
+    }},
     "tools": {"type": "array", "items": {"type": "object", "required": ["name", "tool", "status"], "properties": {"status": {"enum": ["passed", "violations", "error", "blocked"]}}}},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
     "report_path": {"type": "string"},

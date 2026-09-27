@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _reports import normalize_presidio, sorted_diagnostics
 from _presidio_policy import ENGLISH_ENTITIES, RUSSIAN_ENTITIES, PresidioPolicyError, verify_inventory
-from _presidio_worker import analyzer, scan
+from _presidio_worker import MAX_TEXT_BYTES, analyzer, scan
 from check import execute_job, run_checks
 from test_infrastructure import create_repo, native_result
 
@@ -170,6 +170,98 @@ class PresidioTests(unittest.TestCase):
         findings = sorted_diagnostics(result["diagnostics"])
         self.assertEqual(result["status"], "violations")
         self.assertEqual([d["span_length"] for d in findings], [4, 8])
+
+    def test_raw_structured_text_and_notebook_physical_lines(self):
+        import jsonschema
+
+        values = ["john.smith@example.com", "ivan.petrov@example.com"]
+        (self.root / "review/data.json").write_text(json.dumps({"contact": values[0]}) + "\n", encoding="utf-8")
+        notebook = self.root / "review/notes.ipynb"
+        notebook.write_text('{"cells": [\n {"source": ["Contact: ' + values[1] + '"]}\n]}\n', encoding="utf-8")
+        before = {path: path.read_bytes() for path in (self.root / "review").rglob("*") if path.is_file()}
+        report = run_checks(self.root)
+        emails = {(d["path"], d["line"]) for d in report["diagnostics"]
+                  if d["tool"] == "presidio" and d["rule"] == "EMAIL_ADDRESS"}
+        self.assertTrue({("review/data.json", 1), ("review/notes.ipynb", 2)} <= emails, report)
+        self.assertEqual(report["coverage"]["presidio_unconfirmed"], [])
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        jsonschema.validate(report, json.loads((Path(__file__).resolve().parents[1] / "report.schema.json").read_text()))
+        archived = self.root / Path(report["report_path"]).parent
+        for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+            for value in values:
+                self.assertNotIn(value, path.read_text(encoding="utf-8"))
+
+    def test_oversize_and_changed_files_are_unconfirmed_without_partial_findings(self):
+        from types import SimpleNamespace
+
+        source = self.root / "review/contact.md"
+        source.write_text("john.smith@example.com\n", encoding="utf-8")
+        huge = self.root / "review/huge.ipynb"
+        huge.write_bytes(b"x" * (MAX_TEXT_BYTES + 1))
+
+        class Engine:
+            def analyze(self, *, text, language):
+                if language == "ru":
+                    source.write_text("changed during scan\n", encoding="utf-8")
+                return [SimpleNamespace(start=0, end=4, entity_type="PERSON", score=0.8)]
+
+        with patch("_presidio_worker.analyzer", return_value=Engine()):
+            result, code = scan([str(source), str(huge)])
+        self.assertEqual(code, 2)
+        self.assertEqual(result["failed"], [str(source), str(huge)])
+        self.assertEqual(result["scanned"], [])
+        self.assertEqual(result["findings"], [])
+
+    def test_unreadable_file_is_unconfirmed_without_source_bearing_error(self):
+        source = str(self.root / "review/clean.txt")
+        with (patch("_presidio_worker.analyzer"),
+              patch("_presidio_worker.read_stable_file", side_effect=OSError("private source text"))):
+            result, code = scan([source])
+        self.assertEqual(code, 2)
+        self.assertEqual(result["failed"], [source])
+        self.assertEqual(result["scanned"], [])
+        self.assertNotIn("private source text", json.dumps(result))
+
+    def test_partial_coverage_and_malformed_payload_do_not_archive_source(self):
+        secret = "john.smith@example.com"
+        source = self.root / "review/contact.txt"
+        source.write_text(secret, encoding="utf-8")
+
+        def fake(argv, cwd, timeout):
+            if "_presidio_worker.py" in " ".join(argv):
+                Path(argv[argv.index("--output") + 1]).write_text(
+                    json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "failed": [],
+                                "findings": [], "extra": secret}), encoding="utf-8")
+                return native_result(argv, code=2, stderr=secret)
+            if "--output" in argv:
+                Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
+                selected = json.loads(Path(argv[argv.index("--secrets") + 1]).read_text())
+                Path(argv[argv.index("--secret-coverage") + 1]).write_text(
+                    json.dumps({"scanned": selected, "skipped": []}), encoding="utf-8")
+            return native_result(argv)
+
+        report = run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 2)
+        self.assertEqual(report["coverage"]["presidio_scanned"], [])
+        self.assertEqual(report["coverage"]["presidio_unconfirmed"],
+                         ["review/clean.txt", "review/contact.txt"])
+        archived = self.root / Path(report["report_path"]).parent
+        for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+            self.assertNotIn(secret, path.read_text(encoding="utf-8"))
+
+    def test_partial_worker_coverage_and_timeout_are_not_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "native.json"
+            output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [],
+                                          "failed": ["review/broken.txt"], "findings": []}), encoding="utf-8")
+            expected = ["review/clean.txt", "review/broken.txt"]
+            partial = normalize_presidio({"exit_code": 2}, self.root, output, expected)
+            self.assertEqual(partial["status"], "error")
+            self.assertEqual(partial["coverage"], {"scanned": ["review/clean.txt"], "skipped": []})
+            timed_out = normalize_presidio({"exit_code": -15, "error": "TOOL_TIMEOUT"}, self.root,
+                                           output, expected)
+            self.assertEqual(timed_out["status"], "error")
+            self.assertEqual(timed_out["coverage"], {"scanned": [], "skipped": []})
 
     def test_binary_headers_are_skipped_without_claiming_text_coverage(self):
         (self.root / "review/photo.png").write_bytes(b"\x89PNG\r\n\0")

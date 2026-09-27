@@ -31,8 +31,14 @@ score and span length without matched values. `presidio_inputs`, `presidio_scann
 `presidio_count`, `presidio_skipped` / `presidio_skipped_count` and
 `presidio_unconfirmed` separately describe selected, confirmed text, unsupported
 binary and unconfirmed inputs. Missing resources, partial coverage and zero
-scanned text files fail the check (exit 2), rather than claiming a clean scan. An
-anonymity-only consumer needs no `src/`, native code-analysis configuration or
+scanned text files fail the check (exit 2), rather than claiming a clean scan. Each
+text file is analyzed whole in both languages, up to 512 KiB of raw
+UTF-8; larger files are unconfirmed and cause exit 2, without splitting an entity
+across model windows. The worker checks file identity and timestamps around the
+read and after analysis to reject changed files. Raw structured files and notebook
+JSON are scanned as text, with physical file lines. Archived Presidio native output
+contains only normalized status and coverage, never unvalidated worker output.
+An anonymity-only consumer needs no `src/`, native code-analysis configuration or
 accepted architecture. Code-style
 analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
 include root test files. Other selected directories participate in notebook

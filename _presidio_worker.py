@@ -5,12 +5,40 @@ from __future__ import annotations
 import argparse
 from bisect import bisect_right
 from importlib import metadata
+import os
 from pathlib import Path
+import stat
 import sys
 sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
 from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
+
+MAX_TEXT_BYTES = 512 * 1024
+
+
+def file_signature(stat):
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def read_stable_file(name: str) -> tuple[bytes, tuple]:
+    """Read one complete, bounded file; reject replacements and concurrent edits."""
+    source = Path(name)
+    with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_TEXT_BYTES:
+            raise OSError("Unsupported input")
+        raw = stream.read(MAX_TEXT_BYTES + 1)
+        after = os.fstat(stream.fileno())
+    current = source.stat(follow_symlinks=False)
+    if (len(raw) > MAX_TEXT_BYTES or len(raw) != before.st_size or
+            file_signature(before) != file_signature(after) or file_signature(before) != file_signature(current)):
+        raise OSError("Input changed or exceeds scan limit")
+    return raw, file_signature(before)
+
+
+def unchanged(name: str, signature: tuple) -> bool:
+    return file_signature(Path(name).stat(follow_symlinks=False)) == signature
 
 
 def analyzer():
@@ -50,22 +78,24 @@ def scan(paths: list[str]) -> tuple[dict, int]:
         return report | {"error": "PRESIDIO_MODEL_UNAVAILABLE"}, 2
     for name in paths:
         try:
-            source = Path(name)
-            if source.is_symlink() or not source.is_file():
-                raise OSError("Not a regular file")
-            raw = source.read_bytes()
+            raw, signature = read_stable_file(name)
             if b"\0" in raw:
+                if not unchanged(name, signature):
+                    raise OSError("Input changed during classification")
                 report["skipped"].append(name)
                 continue
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 if (is_non_text_file(name) or raw.startswith((b"PK\x03\x04", b"\x1f\x8b", b"\x80\x02", b"\x80\x04"))):
+                    if not unchanged(name, signature):
+                        raise OSError("Input changed during classification")
                     report["skipped"].append(name)
                     continue
                 raise
             starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
             observations = set()
+            findings = []
             for language in ("en", "ru"):
                 for item in engine.analyze(text=text, language=language):
                     if (item.entity_type not in ALL_ENTITIES or
@@ -77,10 +107,14 @@ def scan(paths: list[str]) -> tuple[dict, int]:
                     if key not in observations:
                         observations.add(key)
                         line = bisect_right(starts, item.start)
-                        report["findings"].append({"path": name, "line": line,
-                                                    "column": item.start - starts[line - 1] + 1,
-                                                    "span_length": item.end - item.start,
-                                                    "entity": item.entity_type, "score": round(float(item.score), 4)})
+                        findings.append({"path": name, "line": line,
+                                         "column": item.start - starts[line - 1] + 1,
+                                         "span_length": item.end - item.start,
+                                         "entity": item.entity_type, "score": round(float(item.score), 4)})
+            # A second edit while the models ran invalidates both language passes.
+            if not unchanged(name, signature):
+                raise OSError("Input changed during analysis")
+            report["findings"].extend(findings)
             report["scanned"].append(name)
         except Exception:
             # No source text, third-party messages or matched strings leave this worker.

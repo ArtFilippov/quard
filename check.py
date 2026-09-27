@@ -152,6 +152,12 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
         logs[stream] = path.relative_to(root).as_posix()
     normalized = (normalize_presidio(result, root, job["json_file"], job["presidio_inputs"])
                   if "presidio_inputs" in job else normalize(job["tool"], result, root, job.get("json_file")))
+    if "presidio_inputs" in job and job["json_file"].exists():
+        # Never archive unvalidated worker output: a malformed payload may contain
+        # raw source or third-party exception text. The normalized report is safe.
+        job["json_file"].unlink()
+        write_json(job["json_file"], {"status": normalized["status"], "error": normalized["error"],
+                                      "coverage": normalized["coverage"]}, root)
     secret_coverage = {"scanned": [], "skipped": []}
     if "secret_coverage" in job:
         if (result.get("exit_code") is None or

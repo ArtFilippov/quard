@@ -76,6 +76,11 @@ claimed as Russian NER categories. Dates and contact details instead use pattern
 recognizers. Identifier patterns indicate *potential* identifiers, not checksum
 validation. Findings from both passes are deduplicated by span and entity type;
 physical columns and span lengths keep distinct observations on the same line.
+Each file is analyzed whole (no chunk-boundary omissions) with a 512 KiB raw-byte
+limit per file. Larger/changed/unreadable inputs remain unconfirmed and force exit 2;
+binary inputs are reported separately. JSON and notebook text use physical file
+lines. Archived Presidio worker JSON is replaced with validated status and coverage
+so malformed output cannot expose source text.
 
 ## Readability
 

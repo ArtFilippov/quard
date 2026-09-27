@@ -231,7 +231,6 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                 set(data["scanned"]) & set(data["failed"]) or
                 set(data["skipped"]) & set(data["failed"])):
             raise ValueError("Overlapping worker coverage")
-        coverage = {key: data[key] for key in ("scanned", "skipped")}
         if not isinstance(data["findings"], list):
             raise ValueError("Invalid findings")
         for entry in data["findings"]:
@@ -247,6 +246,8 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                                     f"Potential {entry['entity']} detected (score {entry['score']:.4f}).",
                                     path=entry["path"], line=entry["line"], column=entry["column"],
                                     score=entry["score"], span_length=entry["span_length"]))
+        if result.get("exit_code") in (0, 1, 2) and not result.get("error") and not result.get("stdout") and not result.get("stderr"):
+            coverage = {key: data[key] for key in ("scanned", "skipped")}
         if (set(data["scanned"] + data["skipped"] + data["failed"]) == set(expected) and
                 not data["failed"] and data["scanned"] and "error" not in data and
                 result.get("exit_code") == (1 if items else 0) and not result.get("error") and
@@ -255,7 +256,10 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
         elif data.get("error") in {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH"}:
             error = data["error"]
     except (OSError, ValueError, KeyError, TypeError):
-        pass
+        coverage = {"scanned": [], "skipped": []}
+        items = []
+    if result.get("error") or result.get("exit_code") not in (0, 1, 2) or result.get("stdout") or result.get("stderr"):
+        items = []
     if error:
         items.append(diagnostic("presidio", error,
                                 "Presidio could not confirm the selected text scan; check the pinned English/Russian models, recognizer inventory and worker status.",
