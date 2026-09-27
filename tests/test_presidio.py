@@ -168,6 +168,47 @@ class PresidioTests(unittest.TestCase):
         self.assertEqual(seed_spans("aİb ß SS", ("İ", "i", "ss")),
                          [(1, 2), (4, 5), (6, 8)])
 
+    def test_real_patterns_and_literals_are_distinct_and_value_free(self):
+        config = self.root / ".eryx/presidio.toml"
+        expression = r"[0-9]{2}[a-z]_[a-z]{3}"
+        config.write_text('seeds = ["a.b"]\npatterns = ["' + expression + '"]\n', encoding="utf-8")
+        lines = ['# 12a_lia and 12A_LIA', 'default = "/models/12a_lia.pth"',
+                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12İ_lia"']
+        source = self.root / "review/known.txt"
+        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        before = source.read_bytes()
+        report = run_checks(self.root)
+        self.assertEqual(report["exit_code"], 1, report)
+        actual = {(d["rule"], d["line"], d["column"], d["span_length"])
+                  for d in report["diagnostics"] if d["path"] == "review/known.txt" and
+                  d["rule"] in {"KNOWN_IDENTIFIER_SEED", "KNOWN_IDENTIFIER_PATTERN"}}
+        expected = {("KNOWN_IDENTIFIER_PATTERN", line, text.index(value) + 1, len(value))
+                    for line, text, value in ((1, lines[0], "12a_lia"), (2, lines[1], "12a_lia"),
+                                              (3, lines[2], "12A_LIA"))}
+        expected.add(("KNOWN_IDENTIFIER_PATTERN", 1, lines[0].index("12A_LIA") + 1, 7))
+        expected.add(("KNOWN_IDENTIFIER_SEED", 3, lines[2].index("a.b") + 1, 3))
+        self.assertEqual(actual, expected)
+        self.assertEqual(source.read_bytes(), before)
+        archived = self.root / Path(report["report_path"]).parent
+        for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
+            contents = path.read_text(encoding="utf-8")
+            for value in (expression, "12a_lia", "12A_LIA", "a.b"):
+                self.assertNotIn(value, contents, path)
+        self.assertFalse(any(expression in " ".join(tool["argv"]) for tool in report["tools"]))
+
+    def test_pattern_only_empty_and_missing_configuration_preserve_context(self):
+        config = self.root / ".eryx/presidio.toml"
+        config.write_text('patterns = ["[0-9]{2}[a-z]_[a-z]{3}"]\n', encoding="utf-8")
+        source = self.root / "review/known.txt"
+        source.write_text('tag = "12a_lia"\npath = "/home/marker/work"\n', encoding="utf-8")
+        report = run_checks(self.root)
+        self.assertTrue({"KNOWN_IDENTIFIER_PATTERN", "LOCAL_PATH_IDENTIFIER"} <=
+                        {d["rule"] for d in report["diagnostics"]})
+        config.write_text("seeds = []\npatterns = []\n", encoding="utf-8")
+        report = run_checks(self.root)
+        self.assertNotIn("KNOWN_IDENTIFIER_PATTERN", {d["rule"] for d in report["diagnostics"]})
+        self.assertIn("LOCAL_PATH_IDENTIFIER", {d["rule"] for d in report["diagnostics"]})
+
     def test_empty_and_missing_seeds_keep_general_policy_active(self):
         self.assertEqual(run_checks(self.root)["exit_code"], 0)
         (self.root / ".eryx/presidio.toml").write_text("seeds = []\n", encoding="utf-8")
@@ -177,12 +218,16 @@ class PresidioTests(unittest.TestCase):
                          "violations", report)
         self.assertIn("LOCAL_PATH_IDENTIFIER", {d["rule"] for d in report["diagnostics"]})
 
-    def test_invalid_seed_config_is_value_free_and_preserves_independent_jobs(self):
+    def test_invalid_identifier_config_is_value_free_and_preserves_independent_jobs(self):
         config = self.root / ".eryx/presidio.toml"
         for invalid in ('seeds = ["private-marker", 5]\n',
                         'seeds = ["private-marker"\n',
                         'seeds = ["private-marker"]\nextra = true\n',
-                        'seeds = [""]\n'):
+                        'seeds = [""]\n',
+                        'patterns = ["private-marker", 5]\n',
+                        'patterns = ["private-marker", "["]\n',
+                        'patterns = ["private-marker"]\nother = true\n',
+                        'patterns = [" "]\n'):
             with self.subTest(invalid=invalid):
                 config.write_text(invalid, encoding="utf-8")
                 report = run_checks(self.root)
@@ -192,7 +237,7 @@ class PresidioTests(unittest.TestCase):
                                  (2, "error", 2), report)
                 self.assertEqual(secret["status"], "passed", report)
                 self.assertEqual(report["coverage"]["presidio_unconfirmed"], ["review/clean.txt"])
-                self.assertIn("PRESIDIO_SEED_CONFIG_ERROR", {d["rule"] for d in report["diagnostics"]})
+                self.assertIn("PRESIDIO_IDENTIFIER_CONFIG_ERROR", {d["rule"] for d in report["diagnostics"]})
                 archived = self.root / Path(report["report_path"]).parent
                 for path in [archived / "report.json", *archived.rglob("*.log"), archived / "raw/presidio.json"]:
                     self.assertNotIn("private-marker", path.read_text(encoding="utf-8"))
@@ -200,7 +245,8 @@ class PresidioTests(unittest.TestCase):
     def test_contextual_inventory_is_active_in_each_language(self):
         engine = analyzer()
         for language in ("en", "ru"):
-            for name in ("LocalPathRecognizer", "RemoteAccountRecognizer", "SeedRecognizer"):
+            for name in ("LocalPathRecognizer", "RemoteAccountRecognizer", "SeedRecognizer",
+                         "IdentifierPatternRecognizer"):
                 recognizer = next(r for r in engine.registry.recognizers
                                   if r.name == name and r.supported_language == language)
                 engine.registry.recognizers.remove(recognizer)

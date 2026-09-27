@@ -1,6 +1,8 @@
 """Pinned English/Russian Presidio 2.2.360 and spaCy 3.8.0 inventory."""
 from __future__ import annotations
 
+import re
+
 from _contextual_recognizers import add_contextual_recognizers
 
 
@@ -19,6 +21,7 @@ ENGLISH_RECOGNIZERS = {
     "PhoneRecognizer": ("PHONE_NUMBER",),
     "RemoteAccountRecognizer": ("REMOTE_ACCOUNT",),
     "SeedRecognizer": ("KNOWN_IDENTIFIER_SEED",),
+    "IdentifierPatternRecognizer": ("KNOWN_IDENTIFIER_PATTERN",),
     "SpacyRecognizer": ("AGE", "DATE_TIME", "EMAIL", "ID", "LOCATION", "NRP",
                         "ORGANIZATION", "PERSON", "PHONE_NUMBER"),
     "UrlRecognizer": ("URL",),
@@ -47,7 +50,8 @@ RUSSIAN_ENTITIES = frozenset(e for entities in RUSSIAN_RECOGNIZERS.values() for 
 ALL_ENTITIES = ENGLISH_ENTITIES | RUSSIAN_ENTITIES
 
 
-def add_russian_recognizers(engine, seeds: tuple[str, ...] = ()) -> None:
+def add_russian_recognizers(engine, seeds: tuple[str, ...] = (),
+                            patterns: tuple[re.Pattern[str], ...] = ()) -> None:
     """Extend Presidio's Russian defaults with country identifiers and NER parity."""
     from presidio_analyzer import Pattern, PatternRecognizer
     from presidio_analyzer import predefined_recognizers as builtins
@@ -77,7 +81,7 @@ def add_russian_recognizers(engine, seeds: tuple[str, ...] = ()) -> None:
         engine.registry.add_recognizer(PatternRecognizer(
             supported_entity=entity, name=name, supported_language="ru",
             patterns=[Pattern(name, regex, 0.3)], context=context))
-    add_contextual_recognizers(engine, seeds)
+    add_contextual_recognizers(engine, seeds, patterns)
 
 
 class PresidioPolicyError(RuntimeError):

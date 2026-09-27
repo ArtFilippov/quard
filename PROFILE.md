@@ -39,7 +39,7 @@ The installer verifies an intentional secret in an isolated fixture. An independ
 Presidio job checks both languages in the pinned analyzer 2.2.360 with pinned local
 `en_core_web_sm` and `ru_core_news_sm` 3.8.0 models and no downloads during a check.
 The expected active inventory is checked on both installation and each scan: exactly
-19 English recognizers and 25 entity types (see `_presidio_policy.py` for the
+20 English recognizers and 26 entity types (see `_presidio_policy.py` for the
 exact per-recognizer mapping, including the spaCy NER mapping):
 
 | Recognizers | Standard English entities |
@@ -51,6 +51,7 @@ exact per-recognizer mapping, including the spaCy NER mapping):
 | US bank, driver license, ITIN, passport, SSN | US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN |
 | Contextual local path / remote account | LOCAL_PATH_IDENTIFIER, REMOTE_ACCOUNT |
 | Optional consumer literal seeds | KNOWN_IDENTIFIER_SEED |
+| Optional consumer regex patterns | KNOWN_IDENTIFIER_PATTERN |
 
 All applicable recognizers run for each selected file, with no Eryx entity allowlist,
 minimum score cutoff, baseline or value suppression. This inventory includes the
@@ -79,8 +80,8 @@ US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN), Russian spaCy
 NER (PERSON, LOCATION, ORGANIZATION), a Russian month-name date pattern and
 three Russian domestic identifier patterns: RU_INN (10/12 digits), RU_SNILS
 (3-3-3-2 digits), RU_PASSPORT (4 + 6 digits).
-All 23 Russian recognizers and their 24 entity types are verified at install and
-check time alongside the 19 English recognizers. The Russian model's only NER
+All 24 Russian recognizers and their 25 entity types are verified at install and
+check time alongside the 20 English recognizers. The Russian model's only NER
 labels are PER, LOC and ORG; dates, nationality, age, ID, email and phone are not
 claimed as Russian NER categories. Dates and contact details instead use pattern
 recognizers. Identifier patterns indicate *potential* identifiers, not checksum
@@ -89,9 +90,11 @@ physical columns and span lengths keep distinct observations on the same line.
 When configured, literal seeds in the consumer's `.eryx/presidio.toml` produce
 `KNOWN_IDENTIFIER_SEED` findings anywhere, including unusual paths, command operands,
 comments and compound names. Case folding is mapped back to original character offsets;
-variants and transliterations must be listed explicitly. Invalid seed configuration
-fails with a value-free `PRESIDIO_SEED_CONFIG_ERROR`; missing or empty seeds do not
-disable general-purpose recognition.
+variants and transliterations must be listed explicitly. Separately configured regex
+`patterns` produce `KNOWN_IDENTIFIER_PATTERN` with original positions and case-insensitive
+ASCII letter ranges. Invalid identifier configuration fails with a value-free
+`PRESIDIO_IDENTIFIER_CONFIG_ERROR`; missing or empty collections do not disable
+general-purpose recognition.
 
 Each file is analyzed whole (no chunk-boundary omissions) with a 512 KiB raw-byte
 limit per file. Larger/changed/unreadable inputs remain unconfirmed and force exit 2;

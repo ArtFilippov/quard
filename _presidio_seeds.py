@@ -1,35 +1,42 @@
-"""Consumer-owned literal identifiers, kept out of reports and process arguments."""
+"""Consumer-owned identifiers, kept out of reports and process arguments."""
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import tomllib
 
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 
 
-class SeedConfigError(ValueError):
-    """Invalid seed configuration; the exception never contains input values."""
+class IdentifierConfigError(ValueError):
+    """Invalid identifier configuration; never include input values."""
 
 
-def read_seeds(path: Path | None) -> tuple[str, ...]:
+def read_identifiers(path: Path | None) -> tuple[tuple[str, ...], tuple[re.Pattern[str], ...]]:
     """Missing configuration is optional; present but invalid configuration fails."""
     if path is None:
-        return ()
+        return (), ()
     try:
         if path.is_symlink():
-            raise SeedConfigError("Invalid Presidio seed configuration")
+            raise IdentifierConfigError("Invalid Presidio identifier configuration")
         with path.open("rb") as stream:
             data = tomllib.load(stream)
     except FileNotFoundError:
-        return ()
+        return (), ()
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        raise SeedConfigError("Invalid Presidio seed configuration") from None
-    if (not isinstance(data, dict) or set(data) != {"seeds"} or
-            type(data["seeds"]) is not list or
-            any(type(seed) is not str or not seed or not seed.strip() or
-                any(char in seed for char in "\r\n\0") for seed in data["seeds"])):
-        raise SeedConfigError("Invalid Presidio seed configuration")
-    return tuple(data["seeds"])
+        raise IdentifierConfigError("Invalid Presidio identifier configuration") from None
+    if not isinstance(data, dict) or not set(data) <= {"seeds", "patterns"}:
+        raise IdentifierConfigError("Invalid Presidio identifier configuration")
+    seeds, patterns = data.get("seeds", []), data.get("patterns", [])
+    if (type(seeds) is not list or type(patterns) is not list or
+            any(type(value) is not str or not value.strip() or
+                any(char in value for char in "\r\n\0") for value in seeds + patterns)):
+        raise IdentifierConfigError("Invalid Presidio identifier configuration")
+    try:
+        compiled = tuple(re.compile(value, re.IGNORECASE | re.ASCII) for value in patterns)
+    except re.error:
+        raise IdentifierConfigError("Invalid Presidio identifier configuration") from None
+    return tuple(seeds), compiled
 
 
 def seed_spans(text: str, seeds: tuple[str, ...]) -> list[tuple[int, int]]:
@@ -63,3 +70,20 @@ class SeedRecognizer(EntityRecognizer):
             return []
         return [RecognizerResult("KNOWN_IDENTIFIER_SEED", start, end, 1.0)
                 for start, end in seed_spans(text, self.seeds)]
+
+
+class IdentifierPatternRecognizer(EntityRecognizer):
+    """Find every nonempty match of consumer-supplied regular expressions."""
+
+    def __init__(self, language: str, patterns: tuple[re.Pattern[str], ...]):
+        super().__init__(["KNOWN_IDENTIFIER_PATTERN"], name="IdentifierPatternRecognizer",
+                         supported_language=language)
+        self.patterns = patterns
+
+    def analyze(self, text, entities, nlp_artifacts):
+        if "KNOWN_IDENTIFIER_PATTERN" not in entities:
+            return []
+        spans = {(match.start(), match.end()) for pattern in self.patterns
+                 for match in pattern.finditer(text) if match.start() < match.end()}
+        return [RecognizerResult("KNOWN_IDENTIFIER_PATTERN", start, end, 1.0)
+                for start, end in sorted(spans)]

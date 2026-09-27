@@ -321,9 +321,29 @@ def smoke_presidio(log_root: Path) -> dict[str, str]:
                 clean_normalized["coverage"] != {"scanned": [clean.name], "skipped": []} or
                 clean.read_text(encoding="utf-8") != clean_text):
             raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio clean English probe failed; see install-probes.")
+        config = fixture / "presidio.toml"
+        config.write_text('seeds = ["literal.marker"]\npatterns = ["[0-9]{2}[a-z]_[a-z]{3}"]\n',
+                          encoding="utf-8")
+        custom = fixture / "custom.txt"
+        custom.write_text('tag = "12A_LIA literal.marker"\n', encoding="utf-8")
+        write_json(fixture / "manifest.json", [custom.name])
+        custom_output = fixture / "custom.json"
+        custom_result = probe([sys.executable, str(tool_dir() / "_presidio_worker.py"),
+                               "--manifest", str(fixture / "manifest.json"), "--output", str(custom_output),
+                               "--config", str(config)], fixture, "presidio-identifier-smoke", log_root,
+                              sensitive=True)
+        custom_normalized = normalize_presidio(custom_result, fixture, custom_output, [custom.name])
+        custom_native = custom_output.read_text(encoding="utf-8") if custom_output.exists() else ""
+        if (custom_result["exit_code"] != 1 or custom_normalized["status"] != "violations" or
+                not {("KNOWN_IDENTIFIER_PATTERN", 8, 7), ("KNOWN_IDENTIFIER_SEED", 16, 14)} <=
+                {(d["rule"], d["column"], d["span_length"]) for d in custom_normalized["diagnostics"]} or
+                any(value in custom_native + json.dumps(custom_normalized)
+                    for value in ("12A_LIA", "literal.marker", "[0-9]{2}[a-z]_[a-z]{3}"))):
+            raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio identifier probe failed; see install-probes.")
     return {"presidio_person": "detected", "presidio_email": "detected",
-            "presidio_standard_entities": "detected", "presidio_russian": "detected",
-            "presidio_contextual": "detected", "presidio_clean": "verified"}
+             "presidio_standard_entities": "detected", "presidio_russian": "detected",
+             "presidio_contextual": "detected", "presidio_clean": "verified",
+             "presidio_identifiers": "detected"}
 
 
 def audit(root: Path) -> dict[str, Any]:

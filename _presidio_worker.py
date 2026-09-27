@@ -7,13 +7,14 @@ from bisect import bisect_right
 from importlib import metadata
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
 from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
-from _presidio_seeds import SeedConfigError, read_seeds
+from _presidio_seeds import IdentifierConfigError, read_identifiers
 
 MAX_TEXT_BYTES = 512 * 1024
 
@@ -42,7 +43,7 @@ def unchanged(name: str, signature: tuple) -> bool:
     return file_signature(Path(name).stat(follow_symlinks=False)) == signature
 
 
-def analyzer(seeds: tuple[str, ...] = ()):
+def analyzer(seeds: tuple[str, ...] = (), patterns: tuple[re.Pattern[str], ...] = ()):
     """Load pinned local resources only; never download models during a check."""
     from presidio_analyzer import AnalyzerEngine
     from presidio_analyzer.nlp_engine import NlpEngineProvider
@@ -60,7 +61,7 @@ def analyzer(seeds: tuple[str, ...] = ()):
     if not engine.is_loaded() or set(engine.nlp) != {"en", "ru"}:
         raise RuntimeError("Required NLP models unavailable")
     analyzer_engine = AnalyzerEngine(nlp_engine=engine, supported_languages=["en", "ru"])
-    add_russian_recognizers(analyzer_engine, seeds)
+    add_russian_recognizers(analyzer_engine, seeds, patterns)
     verify_inventory(analyzer_engine)
     return analyzer_engine
 
@@ -71,11 +72,11 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
 
     report = {"scanned": [], "skipped": [], "findings": [], "failed": []}
     try:
-        seeds = read_seeds(config)
-    except SeedConfigError:
-        return report | {"error": "PRESIDIO_SEED_CONFIG_ERROR"}, 2
+        seeds, patterns = read_identifiers(config)
+    except IdentifierConfigError:
+        return report | {"error": "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}, 2
     try:
-        engine = analyzer(seeds) if seeds else analyzer()
+        engine = analyzer(seeds, patterns) if seeds or patterns else analyzer()
     except PresidioPolicyError:
         return report | {"error": "PRESIDIO_POLICY_MISMATCH"}, 2
     except Exception:
