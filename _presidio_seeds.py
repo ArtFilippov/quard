@@ -20,6 +20,23 @@ class SeedConfigError(IdentifierConfigError):
     code = "PRESIDIO_SEED_CONFIG_ERROR"
 
 
+def latin_ranges(pattern: str) -> str:
+    """Restrict explicit Latin letter classes without disabling Unicode elsewhere."""
+    parts = []
+    index = 0
+    while index < len(pattern):
+        if pattern[index] == "\\" and index + 1 < len(pattern):
+            parts.append(pattern[index:index + 2])
+            index += 2
+        elif pattern.startswith(("[a-z]", "[A-Z]"), index):
+            parts.append("(?a:" + pattern[index:index + 5] + ")")
+            index += 5
+        else:
+            parts.append(pattern[index])
+            index += 1
+    return "".join(parts)
+
+
 def read_identifiers(path: Path | None) -> tuple[tuple[str, ...], tuple[re.Pattern[str], ...]]:
     """Missing configuration is optional; present but invalid configuration fails."""
     if path is None:
@@ -48,7 +65,7 @@ def read_identifiers(path: Path | None) -> tuple[tuple[str, ...], tuple[re.Patte
                 any(char in value for char in "\r\n\0") for value in patterns)):
         raise IdentifierConfigError("Invalid Presidio identifier configuration")
     try:
-        compiled = tuple(re.compile(value, re.IGNORECASE) for value in patterns)
+        compiled = tuple(re.compile(latin_ranges(value), re.IGNORECASE) for value in patterns)
     except (re.error, RecursionError, OverflowError, ValueError):
         raise IdentifierConfigError("Invalid Presidio identifier configuration") from None
     return tuple(seeds), compiled

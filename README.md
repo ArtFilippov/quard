@@ -55,6 +55,7 @@ case-insensitive, including substrings; each occurrence is reported as
 `KNOWN_IDENTIFIER_SEED` with physical position and span length. Regex `patterns`
 are separate from literal seeds; each nonempty match is reported as
 `KNOWN_IDENTIFIER_PATTERN`, case-insensitively using Python's Unicode regex rules.
+Explicit `[a-z]` and `[A-Z]` ranges remain Latin-only under case-insensitive matching.
 Missing files or empty collections leave the general-purpose recognizers active.
 Invalid configuration
 fails the Presidio job (exit 2) with a value-free error. Keep the private config

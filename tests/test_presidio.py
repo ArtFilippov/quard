@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _reports import normalize_presidio, sorted_diagnostics
 from _presidio_policy import ENGLISH_ENTITIES, RUSSIAN_ENTITIES, PresidioPolicyError, verify_inventory
 from _presidio_worker import MAX_TEXT_BYTES, analyzer, scan
-from _presidio_seeds import seed_spans
+from _presidio_seeds import latin_ranges, seed_spans
 from check import execute_job, run_checks
 from test_infrastructure import create_repo, native_result
 
@@ -175,7 +175,7 @@ class PresidioTests(unittest.TestCase):
                           '"\\\\u0441\\\\u043e\\\\u043a\\\\u043e\\\\u043b"]\n',
                           encoding="utf-8")
         lines = ['# 12a_lia and 12A_LIA', 'default = "/models/12a_lia.pth"',
-                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12Ж_lia"',
+                 'tag = "pre12A_LIApost a.b a-b"', 'other = "9a_lia 12a_li 12K_lia 12İ_lia"',
                  'alias = "СОКОЛ"']
         source = self.root / "review/known.txt"
         source.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -212,6 +212,10 @@ class PresidioTests(unittest.TestCase):
         report = run_checks(self.root)
         self.assertNotIn("KNOWN_IDENTIFIER_PATTERN", {d["rule"] for d in report["diagnostics"]})
         self.assertIn("LOCAL_PATH_IDENTIFIER", {d["rule"] for d in report["diagnostics"]})
+
+    def test_latin_range_rewrite_does_not_change_escaped_literals(self):
+        self.assertEqual(latin_ranges(r"\[a-z] [a-z] \\ [A-Z]"),
+                         r"\[a-z] (?a:[a-z]) \\ (?a:[A-Z])")
 
     def test_empty_and_missing_seeds_keep_general_policy_active(self):
         self.assertEqual(run_checks(self.root)["exit_code"], 0)
