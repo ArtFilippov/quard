@@ -38,14 +38,14 @@ class CheckGroupsTests(unittest.TestCase):
             if "_presidio_worker.py" in " ".join(argv):
                 selected = json.loads(Path(argv[argv.index("--manifest") + 1]).read_text())
                 Path(argv[argv.index("--output") + 1]).write_text(
-                    json.dumps({"scanned": selected, "skipped": [], "failed": [], "findings": []}))
+                    json.dumps({"scanned": selected, "skipped": [], "excluded": [], "failed": [], "findings": []}))
                 return native_result(argv)
             if "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
             if "--secret-coverage" in argv:
                 selected = json.loads(Path(argv[argv.index("--secrets") + 1]).read_text())
                 Path(argv[argv.index("--secret-coverage") + 1]).write_text(
-                    json.dumps({"scanned": selected, "skipped": []}), encoding="utf-8")
+                    json.dumps({"scanned": selected, "skipped": [], "excluded": []}), encoding="utf-8")
             return native_result(argv, stdout='{"generalDiagnostics": []}' if "pyright" in argv else "")
         return run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
 
@@ -173,12 +173,12 @@ class CheckGroupsTests(unittest.TestCase):
                     output.write_text('{"messages": []}', encoding="utf-8")
                     coverage = Path(argv[argv.index("--secret-coverage") + 1])
                     if mode == "partial":
-                        coverage.write_text('{"scanned": ["review/a.txt"], "skipped": []}')
+                        coverage.write_text('{"scanned": ["review/a.txt"], "skipped": [], "excluded": []}')
                     elif mode == "malformed":
-                        coverage.write_text('{"scanned": "all", "skipped": []}')
+                        coverage.write_text('{"scanned": "all", "skipped": [], "excluded": []}')
                     elif mode != "missing":
                         coverage.write_text(json.dumps({"scanned": ["review/a.txt", "review/clean.ipynb"],
-                                                        "skipped": []}))
+                                                         "skipped": [], "excluded": []}))
                     result = native_result(argv, stdout="unexpected AKIAIOSFODNN7EXAMPLE" if mode == "unexpected" else "")
                     if mode == "nonzero":
                         result["exit_code"] = 4

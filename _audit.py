@@ -149,7 +149,7 @@ class Probe:
                 covered, native = None, ""
             if (not any(d["rule"] == "W9803" and d["path"] == secret_file.name and d["line"] == 2
                         for d in normalized["diagnostics"]) or
-                    covered != {"scanned": [secret_file.name], "skipped": []} or
+                    covered != {"scanned": [secret_file.name], "skipped": [], "excluded": []} or
                     secret in json.dumps(normalized) + native or result["stdout"] or result["stderr"] or
                     secret_file.read_bytes() != original_secret):
                 raise EryxError("PYLINT_SECRET_SMOKE_FAILED",
@@ -229,7 +229,9 @@ def smoke_secret(log_root: Path) -> dict[str, str]:
         original = source.read_bytes()
         (fixture / "input.py").write_text("", encoding="utf-8")
         write_json(fixture / "inputs.json", ["input.py"])
-        write_json(fixture / "secrets.json", [source.name])
+        archive = fixture / "bundle.txt.gz"
+        archive.write_bytes(f"aws_access_key_id = '{secret}'\n".encode())
+        write_json(fixture / "secrets.json", [source.name, archive.name])
         atomic_write(fixture / "anonymity-pylint.toml", ANONYMITY_PYLINT_CONFIG)
         output = fixture / "pylint.json"
         coverage = fixture / "secret-coverage.json"
@@ -248,9 +250,9 @@ def smoke_secret(log_root: Path) -> dict[str, str]:
         if (normalized["status"] != "violations" or result["exit_code"] != 4 or
                 [(item["rule"], item["path"], item["line"]) for item in normalized["diagnostics"]]
                 != [("W9803", source.name, 2)] or
-                covered != {"scanned": [source.name], "skipped": []} or
+                covered != {"scanned": [source.name], "skipped": [], "excluded": [archive.name]} or
                 secret in json.dumps(normalized) + native or result["stdout"] or result["stderr"] or
-                source.read_bytes() != original):
+                source.read_bytes() != original or archive.read_bytes() != f"aws_access_key_id = '{secret}'\n".encode()):
             raise EryxError("PYLINT_SECRET_SMOKE_FAILED",
                             "Secret checker failed its independent fixture or exposed its value; see install-probes.")
     return {"pylint_secret": "detected"}
@@ -276,12 +278,14 @@ def smoke_presidio(log_root: Path) -> dict[str, str]:
                    "sftp ivan@host.example"]
         source.write_text("\n".join(samples) + "\n", encoding="utf-8")
         original = source.read_bytes()
-        write_json(fixture / "manifest.json", [source.name])
+        checkpoint = fixture / "model.pth"
+        checkpoint.write_bytes(email.encode())
+        write_json(fixture / "manifest.json", [source.name, checkpoint.name])
         output = fixture / "presidio.json"
         result = probe([sys.executable, str(tool_dir() / "_presidio_worker.py"),
                         "--manifest", str(fixture / "manifest.json"), "--output", str(output)],
                        fixture, "presidio-smoke", log_root, sensitive=True)
-        normalized = normalize_presidio(result, fixture, output, [source.name])
+        normalized = normalize_presidio(result, fixture, output, [source.name, checkpoint.name])
         try:
             native = output.read_text(encoding="utf-8")
         except OSError:
@@ -302,9 +306,9 @@ def smoke_presidio(log_root: Path) -> dict[str, str]:
                      "Alex-7", "build_8", "otto", "ivan")
         if (normalized["status"] != "violations" or result["exit_code"] != 1 or
                 not expected <= found or
-                normalized["coverage"] != {"scanned": [source.name], "skipped": []} or
+                normalized["coverage"] != {"scanned": [source.name], "skipped": [], "excluded": [checkpoint.name]} or
                 any(value in native + json.dumps(normalized) for value in sensitive) or
-                source.read_bytes() != original):
+                source.read_bytes() != original or checkpoint.read_bytes() != email.encode()):
             raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio did not safely detect bilingual entities; see install-probes.")
         clean = fixture / "clean.txt"
         clean_text = ('A plain test file.\npath = "/usr/local/share"\n'
@@ -318,7 +322,7 @@ def smoke_presidio(log_root: Path) -> dict[str, str]:
                              fixture, "presidio-clean-smoke", log_root, sensitive=True)
         clean_normalized = normalize_presidio(clean_result, fixture, clean_output, [clean.name])
         if (clean_result["exit_code"] != 0 or clean_normalized["status"] != "passed" or
-                clean_normalized["coverage"] != {"scanned": [clean.name], "skipped": []} or
+                clean_normalized["coverage"] != {"scanned": [clean.name], "skipped": [], "excluded": []} or
                 clean.read_text(encoding="utf-8") != clean_text):
             raise EryxError("PRESIDIO_SMOKE_FAILED", "Presidio clean English probe failed; see install-probes.")
         config = fixture / "presidio.toml"

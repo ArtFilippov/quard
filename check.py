@@ -21,6 +21,7 @@ from _common import (SCHEMA, EryxError, atomic_write, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
 from _checks import (ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, ANONYMITY_PYLINT_CONFIG, covered_files,
                      in_working_directories, read_checks, selected_test_roots)
+from _content_policy import content_excluded
 from _policy import discover_files, discover_notebooks, limit_drift, pyright_config, read_scope
 from _reports import diagnostic, normalize, normalize_presidio, sorted_diagnostics
 from _tree_inventory import inventory, safe_paths
@@ -168,7 +169,8 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
         job["json_file"].unlink()
         write_json(job["json_file"], {"status": normalized["status"], "error": normalized["error"],
                                       "coverage": normalized["coverage"]}, root)
-    secret_coverage = {"scanned": [], "skipped": []}
+    secret_coverage = {"scanned": [], "skipped": [],
+                       "excluded": [path for path in job.get("secret_inputs", []) if content_excluded(path)]}
     if "secret_coverage" in job:
         if (result.get("exit_code") is None or
                 (result.get("exit_code") == 0 and normalized["diagnostics"]) or
@@ -181,15 +183,16 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
         try:
             data = read_json(job["secret_coverage"])
             expected = set(job["secret_inputs"])
-            if (not isinstance(data, dict) or set(data) != {"scanned", "skipped"} or
+            if (not isinstance(data, dict) or set(data) != {"scanned", "skipped", "excluded"} or
                     any(not isinstance(data[key], list) or
                         any(type(path) is not str for path in data[key]) or
-                        len(data[key]) != len(set(data[key])) for key in ("scanned", "skipped")) or
-                    set(data["scanned"]) & set(data["skipped"]) or
-                    not set(data["scanned"] + data["skipped"]) <= expected):
+                        len(data[key]) != len(set(data[key])) for key in ("scanned", "skipped", "excluded")) or
+                    sum(len(data[key]) for key in data) != len(set().union(*(set(data[key]) for key in data))) or
+                    set(data["excluded"]) != {path for path in expected if content_excluded(path)} or
+                    not set(data["scanned"] + data["skipped"] + data["excluded"]) <= expected):
                 raise ValueError("Invalid secret coverage")
             secret_coverage = data
-            if set(data["scanned"] + data["skipped"]) != expected:
+            if set(data["scanned"] + data["skipped"] + data["excluded"]) != expected:
                 raise ValueError("Incomplete secret coverage")
         except (OSError, ValueError, EryxError):
             normalized["status"] = "error"
@@ -223,12 +226,14 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     versions: dict[str, str | None] = {}
     files: dict[str, Any] = {"production": [], "tests": [], "excluded_directories": [],
                              "notebooks": [], "notebook_count": 0, "groups": [], "working_directories": [],
-                              "secret_inputs": [], "secret_scanned": [], "secret_count": 0,
-                              "secret_skipped": [], "secret_skipped_count": 0, "secret_unconfirmed": [],
+                             "secret_inputs": [], "secret_scanned": [], "secret_count": 0,
+                             "secret_skipped": [], "secret_skipped_count": 0, "secret_excluded": [],
+                             "secret_excluded_count": 0, "secret_unconfirmed": [],
                              "presidio_inputs": [], "presidio_scanned": [], "presidio_count": 0,
                              "presidio_skipped": [], "presidio_skipped_count": 0,
-                              "presidio_unconfirmed": [], "tree_objects": [], "tree_count": 0,
-                              "tree_incomplete_count": 0}
+                             "presidio_excluded": [], "presidio_excluded_count": 0,
+                             "presidio_unconfirmed": [], "tree_objects": [], "tree_count": 0,
+                             "tree_incomplete_count": 0}
     displays: dict[str, str] = {}
     identifiers = ((), ())
     hidden_identifiers = False
@@ -268,6 +273,10 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         files["secret_unconfirmed"] = files["secret_inputs"].copy()
         files["presidio_inputs"] = effective if "anonymity" in checks["groups"] else []
         files["presidio_unconfirmed"] = files["presidio_inputs"].copy()
+        for name in ("secret", "presidio"):
+            files[f"{name}_excluded"] = [path for path in files[f"{name}_inputs"] if content_excluded(path)]
+            files[f"{name}_excluded_count"] = len(files[f"{name}_excluded"])
+            files[f"{name}_unconfirmed"] = [path for path in files[f"{name}_inputs"] if not content_excluded(path)]
         eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
         versions, problems = versions_fn(root)
         diagnostics.extend(problems)
@@ -330,16 +339,20 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                     files["secret_count"] = len(coverage["scanned"])
                     files["secret_skipped"] = coverage["skipped"]
                     files["secret_skipped_count"] = len(coverage["skipped"])
+                    files["secret_excluded"] = coverage["excluded"]
+                    files["secret_excluded_count"] = len(coverage["excluded"])
                     files["secret_unconfirmed"] = sorted(
-                        set(files["secret_inputs"]) - set(coverage["scanned"] + coverage["skipped"]))
+                        set(files["secret_inputs"]) - set(coverage["scanned"] + coverage["skipped"] + coverage["excluded"]))
                 if "presidio_coverage" in result:
                     coverage = result.pop("presidio_coverage")
                     files["presidio_scanned"] = coverage["scanned"]
                     files["presidio_count"] = len(coverage["scanned"])
                     files["presidio_skipped"] = coverage["skipped"]
                     files["presidio_skipped_count"] = len(coverage["skipped"])
+                    files["presidio_excluded"] = coverage["excluded"]
+                    files["presidio_excluded_count"] = len(coverage["excluded"])
                     files["presidio_unconfirmed"] = sorted(
-                        set(files["presidio_inputs"]) - set(coverage["scanned"] + coverage["skipped"]))
+                        set(files["presidio_inputs"]) - set(coverage["scanned"] + coverage["skipped"] + coverage["excluded"]))
                 results.append(result)
         if "codestyle" in checks["groups"] and not architecture_ready:
             for name in ("tach", "tach-external"):
@@ -371,6 +384,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                 obj["content"] = {
                     name: ("scanned" if raw in files[f"{name}_scanned"] else
                            "skipped" if raw in files[f"{name}_skipped"] else
+                           "excluded_by_policy" if raw in files[f"{name}_excluded"] else
                            "unconfirmed" if raw in files.get(f"{name}_unconfirmed", []) else
                            "selected" if raw in files[f"{name}_inputs"] else "not_selected")
                     for name in ("presidio", "secret")}

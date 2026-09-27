@@ -18,18 +18,27 @@
         "kind": {"enum": ["file", "directory", "symlink", "other"]},
         "path_checked": {"type": "boolean"},
         "content": {"type": "object", "required": ["presidio", "secret"], "properties": {
-          "presidio": {"enum": ["scanned", "skipped", "unconfirmed", "selected", "not_selected"]},
-          "secret": {"enum": ["scanned", "skipped", "unconfirmed", "selected", "not_selected"]}}}
+          "presidio": {"enum": ["scanned", "skipped", "excluded_by_policy", "unconfirmed", "selected", "not_selected"]},
+          "secret": {"enum": ["scanned", "skipped", "excluded_by_policy", "unconfirmed", "selected", "not_selected"]}}}
       }}, "uniqueItems": true},
       "tree_count": {"type": "integer", "minimum": 0},
       "tree_incomplete_count": {"type": "integer", "minimum": 0},
       "presidio_inputs": {"type": "array", "items": {"type": "string"}},
       "presidio_scanned": {"type": "array", "items": {"type": "string"}},
       "presidio_skipped": {"type": "array", "items": {"type": "string"}},
+      "presidio_excluded": {"type": "array", "items": {"type": "string"}},
+      "presidio_excluded_count": {"type": "integer", "minimum": 0},
       "presidio_unconfirmed": {"type": "array", "items": {"type": "string"}},
       "presidio_count": {"type": "integer", "minimum": 0},
       "presidio_skipped_count": {"type": "integer", "minimum": 0},
-      "secret_unconfirmed": {"type": "array", "items": {"type": "string"}}
+      "secret_inputs": {"type": "array", "items": {"type": "string"}},
+      "secret_scanned": {"type": "array", "items": {"type": "string"}},
+      "secret_skipped": {"type": "array", "items": {"type": "string"}},
+      "secret_count": {"type": "integer", "minimum": 0},
+      "secret_skipped_count": {"type": "integer", "minimum": 0},
+      "secret_unconfirmed": {"type": "array", "items": {"type": "string"}},
+      "secret_excluded": {"type": "array", "items": {"type": "string"}},
+      "secret_excluded_count": {"type": "integer", "minimum": 0}
     }},
     "tools": {"type": "array", "items": {"type": "object", "required": ["name", "tool", "status"], "properties": {"status": {"enum": ["passed", "violations", "error", "blocked"]}}}},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},

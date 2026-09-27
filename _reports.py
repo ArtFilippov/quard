@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from _content_policy import content_excluded
 from _presidio_policy import ALL_ENTITIES
 
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
@@ -211,26 +212,28 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
 def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                        expected: list[str]) -> dict[str, Any]:
     """Accept only the worker's closed schema, never third-party prose or source text."""
-    coverage: dict[str, list[str]] = {"scanned": [], "skipped": []}
+    policy_excluded = [path for path in expected if content_excluded(path)]
+    coverage: dict[str, list[str]] = {"scanned": [], "skipped": [], "excluded": policy_excluded}
     items: list[dict[str, Any]] = []
     error = "PRESIDIO_SCAN_INCOMPLETE"
     try:
         data = json.loads(output.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or set(data) not in (
-                {"scanned", "skipped", "findings", "failed"},
-                {"scanned", "skipped", "findings", "failed", "error"}):
+                 {"scanned", "skipped", "excluded", "findings", "failed"},
+                 {"scanned", "skipped", "excluded", "findings", "failed", "error"}):
             raise ValueError("Invalid worker schema")
         if ("error" in data and data["error"] not in
                 {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
                  "PRESIDIO_SEED_CONFIG_ERROR", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}):
             raise ValueError("Invalid worker error")
-        for key in ("scanned", "skipped", "failed"):
+        for key in ("scanned", "skipped", "excluded", "failed"):
             if (not isinstance(data[key], list) or any(type(p) is not str for p in data[key]) or
                     len(data[key]) != len(set(data[key])) or not set(data[key]) <= set(expected)):
                 raise ValueError("Invalid worker coverage")
-        if (set(data["scanned"]) & set(data["skipped"]) or
-                set(data["scanned"]) & set(data["failed"]) or
-                set(data["skipped"]) & set(data["failed"])):
+        groups = [set(data[key]) for key in ("scanned", "skipped", "excluded", "failed")]
+        if (sum(map(len, groups)) != len(set().union(*groups)) or
+                ("error" not in data and set(data["excluded"]) != set(policy_excluded)) or
+                any(content_excluded(path) for path in data["scanned"] + data["skipped"] + data["failed"])):
             raise ValueError("Overlapping worker coverage")
         if not isinstance(data["findings"], list):
             raise ValueError("Invalid findings")
@@ -247,10 +250,13 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                                     f"Potential {entry['entity']} detected (score {entry['score']:.4f}).",
                                     path=entry["path"], line=entry["line"], column=entry["column"],
                                     score=entry["score"], span_length=entry["span_length"]))
-        if result.get("exit_code") in (0, 1, 2) and not result.get("error") and not result.get("stdout") and not result.get("stderr"):
-            coverage = {key: data[key] for key in ("scanned", "skipped")}
-        if (set(data["scanned"] + data["skipped"] + data["failed"]) == set(expected) and
-                not data["failed"] and data["scanned"] and "error" not in data and
+        if ("error" not in data and result.get("exit_code") in (0, 1, 2) and
+                not result.get("error") and not result.get("stdout") and not result.get("stderr")):
+            coverage = {key: data[key] for key in ("scanned", "skipped", "excluded")}
+        if (set(data["scanned"] + data["skipped"] + data["excluded"] + data["failed"]) == set(expected) and
+                not data["failed"] and (data["scanned"] or
+                                        (data["excluded"] and not data["skipped"])) and
+                "error" not in data and
                 result.get("exit_code") == (1 if items else 0) and not result.get("error") and
                 not result.get("stdout") and not result.get("stderr")):
             error = None
@@ -258,7 +264,7 @@ def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
                                    "PRESIDIO_SEED_CONFIG_ERROR", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}:
             error = data["error"]
     except (OSError, ValueError, KeyError, TypeError):
-        coverage = {"scanned": [], "skipped": []}
+        coverage = {"scanned": [], "skipped": [], "excluded": policy_excluded}
         items = []
     if result.get("error") or result.get("exit_code") not in (0, 1, 2) or result.get("stdout") or result.get("stderr"):
         items = []

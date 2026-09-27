@@ -92,7 +92,7 @@ class PylintOutputTest(unittest.TestCase):
             self.assertEqual([(d["rule"], d["path"], d["line"]) for d in result["diagnostics"]],
                              [("W9803", "src/sample.py", 1)])
             self.assertNotIn(secret, json.dumps(result))
-            self.assertEqual(result["secret_coverage"], {"scanned": ["src/sample.py"], "skipped": []})
+            self.assertEqual(result["secret_coverage"], {"scanned": ["src/sample.py"], "skipped": [], "excluded": []})
 
     def test_combined_group_rejects_disabled_secret_diagnostics(self):
         with TemporaryDirectory(prefix="eryx-disabled-secrets-") as directory:
@@ -110,7 +110,7 @@ class PylintOutputTest(unittest.TestCase):
                             architecture_ready=False, groups=["codestyle", "anonymity"])[0]
             result = execute_job(job, root, run_dir, timeout=30)
             self.assertEqual(result["status"], "error", result)
-            self.assertEqual(result["secret_coverage"], {"scanned": [], "skipped": []})
+            self.assertEqual(result["secret_coverage"], {"scanned": [], "skipped": [], "excluded": []})
             self.assertIn("SECRET_SCAN_INCOMPLETE", [d["rule"] for d in result["diagnostics"]])
 
 
@@ -135,7 +135,7 @@ class SecretCheckerTest(unittest.TestCase):
                             with patch("_secret_checker.Path.read_text", side_effect=OSError("AKIAIOSFODNN7EXAMPLE")):
                                 checker.open()
                         message.assert_called_once_with("secret-scan-failed", line=1, args=(str(source),))
-                    self.assertEqual(secret_coverage(), {"scanned": [], "skipped": []})
+                    self.assertEqual(secret_coverage(), {"scanned": [], "skipped": [], "excluded": []})
             self.assertEqual(source.read_bytes(), original)
 
 

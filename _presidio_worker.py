@@ -13,6 +13,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from _common import read_json, write_json
+from _content_policy import content_excluded
 from _presidio_policy import ALL_ENTITIES, PresidioPolicyError, add_russian_recognizers, verify_inventory
 from _presidio_seeds import IdentifierConfigError, read_identifiers
 
@@ -70,7 +71,7 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
     """Return structured, value-free findings and confirmed coverage."""
     from detect_secrets.filters.heuristic import is_non_text_file
 
-    report = {"scanned": [], "skipped": [], "findings": [], "failed": []}
+    report = {"scanned": [], "skipped": [], "excluded": [], "findings": [], "failed": []}
     try:
         seeds, patterns = read_identifiers(config)
     except IdentifierConfigError as exc:
@@ -83,6 +84,9 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
         # NLP initialization exceptions can include sensitive local paths or text.
         return report | {"error": "PRESIDIO_MODEL_UNAVAILABLE"}, 2
     for name in paths:
+        if content_excluded(name):
+            report["excluded"].append(name)
+            continue
         try:
             raw, signature = read_stable_file(name)
             if b"\0" in raw:
@@ -125,7 +129,9 @@ def scan(paths: list[str], config: Path | None = None) -> tuple[dict, int]:
         except Exception:
             # No source text, third-party messages or matched strings leave this worker.
             report["failed"].append(name)
-    return report, 2 if report["failed"] or not report["scanned"] else 1 if report["findings"] else 0
+    return report, (2 if report["failed"] or not (report["scanned"] or
+                                                    (report["excluded"] and not report["skipped"]))
+                    else 1 if report["findings"] else 0)
 
 
 def main() -> int:

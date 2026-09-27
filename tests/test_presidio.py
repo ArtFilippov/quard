@@ -354,7 +354,7 @@ class PresidioTests(unittest.TestCase):
     def test_same_start_different_spans_are_not_collapsed(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "native.json"
-            output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "failed": [],
+            output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "excluded": [], "failed": [],
                                           "findings": [{"path": "review/clean.txt", "line": 1,
                                                         "column": 1, "span_length": length,
                                                         "entity": "PERSON", "score": 0.85}
@@ -423,14 +423,14 @@ class PresidioTests(unittest.TestCase):
         def fake(argv, cwd, timeout):
             if "_presidio_worker.py" in " ".join(argv):
                 Path(argv[argv.index("--output") + 1]).write_text(
-                    json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "failed": [],
+                    json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "excluded": [], "failed": [],
                                 "findings": [], "extra": secret}), encoding="utf-8")
                 return native_result(argv, code=2, stderr=secret)
             if "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
                 selected = json.loads(Path(argv[argv.index("--secrets") + 1]).read_text())
                 Path(argv[argv.index("--secret-coverage") + 1]).write_text(
-                    json.dumps({"scanned": selected, "skipped": []}), encoding="utf-8")
+                    json.dumps({"scanned": selected, "skipped": [], "excluded": []}), encoding="utf-8")
             return native_result(argv)
 
         report = run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
@@ -445,16 +445,16 @@ class PresidioTests(unittest.TestCase):
     def test_partial_worker_coverage_and_timeout_are_not_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "native.json"
-            output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [],
+            output.write_text(json.dumps({"scanned": ["review/clean.txt"], "skipped": [], "excluded": [],
                                           "failed": ["review/broken.txt"], "findings": []}), encoding="utf-8")
             expected = ["review/clean.txt", "review/broken.txt"]
             partial = normalize_presidio({"exit_code": 2}, self.root, output, expected)
             self.assertEqual(partial["status"], "error")
-            self.assertEqual(partial["coverage"], {"scanned": ["review/clean.txt"], "skipped": []})
+            self.assertEqual(partial["coverage"], {"scanned": ["review/clean.txt"], "skipped": [], "excluded": []})
             timed_out = normalize_presidio({"exit_code": -15, "error": "TOOL_TIMEOUT"}, self.root,
                                            output, expected)
             self.assertEqual(timed_out["status"], "error")
-            self.assertEqual(timed_out["coverage"], {"scanned": [], "skipped": []})
+            self.assertEqual(timed_out["coverage"], {"scanned": [], "skipped": [], "excluded": []})
 
     def test_binary_headers_are_skipped_without_claiming_text_coverage(self):
         (self.root / "review/photo.png").write_bytes(b"\x89PNG\r\n\0")
@@ -465,19 +465,20 @@ class PresidioTests(unittest.TestCase):
         with patch("_presidio_worker.analyzer"):
             report, status = scan(paths)
         self.assertEqual(status, 2)
-        self.assertEqual(report["skipped"], paths)
+        self.assertEqual(report["skipped"], paths[:2])
+        self.assertEqual(report["excluded"], paths[2:])
         self.assertEqual(report["scanned"], [])
 
     def test_unconfirmed_presidio_does_not_cancel_other_jobs(self):
         def fake(argv, cwd, timeout):
             if "_presidio_worker.py" in " ".join(argv):
                 Path(argv[argv.index("--output") + 1]).write_text(
-                    '{"scanned": [], "skipped": [], "failed": [], "findings": []}', encoding="utf-8")
+                    '{"scanned": [], "skipped": [], "excluded": [], "failed": [], "findings": []}', encoding="utf-8")
             elif "--output" in argv:
                 Path(argv[argv.index("--output") + 1]).write_text('{"messages": []}', encoding="utf-8")
                 selected = json.loads(Path(argv[argv.index("--secrets") + 1]).read_text())
                 Path(argv[argv.index("--secret-coverage") + 1]).write_text(
-                    json.dumps({"scanned": selected, "skipped": []}), encoding="utf-8")
+                    json.dumps({"scanned": selected, "skipped": [], "excluded": []}), encoding="utf-8")
             return native_result(argv)
 
         report = run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
@@ -505,12 +506,12 @@ class PresidioTests(unittest.TestCase):
     def test_malformed_output_and_missing_model_are_failures_without_raw_prose(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "native.json"
-            for payload in ('{"scanned": ["review/clean.txt"], "skipped": [], "failed": [], '
+            for payload in ('{"scanned": ["review/clean.txt"], "skipped": [], "excluded": [], "failed": [], '
                             '"findings": [{"path": "review/clean.txt", "line": 1, '
                             '"entity": "PERSON", "score": 0.7, "value": "private"}]}',
-                            '{"scanned": [], "skipped": [], "failed": [], "findings": [], '
+                            '{"scanned": [], "skipped": [], "excluded": [], "failed": [], "findings": [], '
                              '"error": "PRESIDIO_MODEL_UNAVAILABLE"}',
-                             '{"scanned": [], "skipped": [], "failed": [], "findings": [], '
+                             '{"scanned": [], "skipped": [], "excluded": [], "failed": [], "findings": [], '
                              '"error": "PRESIDIO_POLICY_MISMATCH"}'):
                 output.write_text(payload, encoding="utf-8")
                 result = normalize_presidio({"exit_code": 2, "stderr": "private", "stdout": ""},

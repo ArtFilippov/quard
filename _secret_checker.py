@@ -4,22 +4,24 @@ from __future__ import annotations
 from pathlib import Path
 
 from pylint.checkers import BaseRawFileChecker
+from _content_policy import content_excluded
 
 _files: list[str] = []
 _scanned: list[str] = []
 _skipped: list[str] = []
+_excluded: list[str] = []
 
 
 def configure_secrets(paths: list[str]) -> None:
     """Supply the check's effective file scope to the Pylint worker."""
-    global _files, _scanned, _skipped
+    global _files, _scanned, _skipped, _excluded
     _files = paths
-    _scanned, _skipped = [], []
+    _scanned, _skipped, _excluded = [], [], []
 
 
 def secret_coverage() -> dict[str, list[str]]:
     """Return only files for which the scanner reached a definite outcome."""
-    return {"scanned": _scanned, "skipped": _skipped}
+    return {"scanned": _scanned, "skipped": _skipped, "excluded": _excluded}
 
 
 class SecretChecker(BaseRawFileChecker):
@@ -39,10 +41,16 @@ class SecretChecker(BaseRawFileChecker):
         with default_settings():
             if not get_plugins():
                 for path in _files:
+                    if content_excluded(path):
+                        _excluded.append(path)
+                        continue
                     self.linter.set_current_module(Path(path).stem, str(Path.cwd() / path))
                     self.add_message("secret-scan-failed", line=1, args=(path,))
                 return
             for path in _files:
+                if content_excluded(path):
+                    _excluded.append(path)
+                    continue
                 self.linter.set_current_module(Path(path).stem, str(Path.cwd() / path))
                 try:
                     source = Path(path)

@@ -81,6 +81,17 @@ not removed. Content scanning still follows the effective selected file scope;
 an inventoried object is **not** thereby a confirmed text scan. Archived worker JSON,
 manifests and reports use the same redacted display paths. An identifier in the
 enclosing checkout path alone does not create a tree finding.
+Archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.gz`, `.bz2`, `.tbz2`, `.xz`,
+`.txz`, `.7z`, `.rar`, `.zst` and their tar variants) and `.pth` checkpoints
+are **path checked / content excluded by policy**. Classification uses the
+case-insensitive filename suffix before either scanner opens the file or applies
+text-size limits. Neither scanner reads, decompresses, token-scans, hashes, or
+inspects embedded metadata in these files. They remain in the selected inputs
+and tree inventory; `presidio_excluded` / `secret_excluded` and their counts
+record them separately from confirmed text scans, unsupported binaries and
+unconfirmed failures. `tree_objects[*].content` uses `excluded_by_policy` for
+each job that confirms the exclusion. The two jobs retain independent outcomes;
+zero confirmed text scans still fail their respective check contracts.
 When code-style and anonymity groups run together, pydoclint receives selected
 document roots through a consumer-owned manifest rather than path-bearing process
 arguments.

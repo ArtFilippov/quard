@@ -103,6 +103,12 @@ limit per file. Larger/changed/unreadable inputs remain unconfirmed and force ex
 binary inputs are reported separately. JSON and notebook text use physical file
 lines. Archived Presidio worker JSON is replaced with validated status and coverage
 so malformed output cannot expose source text.
+Archives (including gzip text) and `.pth` checkpoints are selected and their tree
+paths inspected, but both Presidio and the secret scanner exclude their contents
+by filename policy before opening or measuring them. Per-job `*_excluded` and
+`*_excluded_count` are distinct from scans, binary skips, and failures. The worker
+coverage is validated against the selected path policy; a missing or misclassified
+exclusion fails rather than certifying a scan. Zero confirmed text scans still fail.
 
 ## Readability
 
