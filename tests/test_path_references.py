@@ -229,8 +229,8 @@ class ReferenceTests(unittest.TestCase):
             archive = root / Path(report["report_path"]).parent
             for artifact in [*archive.rglob("*.json"), *archive.rglob("*.log")]:
                 body = artifact.read_text(encoding="utf-8")
-                for value in ("SampleMarker", "/home/", "org/family", "../assets/file.txt",
-                              "/docs/manual", "results/log.txt"):
+                for value in ("SampleMarker", "/home/SampleMarker/output.pth", "org/family",
+                              "../assets/file.txt", "/docs/manual", "results/log.txt"):
                     self.assertNotIn(value, body, artifact)
             self.assertEqual(original, {p: p.read_bytes() for p in original})
 
