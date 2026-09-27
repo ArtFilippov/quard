@@ -13,12 +13,23 @@
     "duration_seconds": {"type": "number", "minimum": 0},
     "summary": {"type": "object", "required": ["diagnostics", "infrastructure_errors"], "properties": {"diagnostics": {"type": "integer", "minimum": 0}, "infrastructure_errors": {"type": "integer", "minimum": 0}}},
     "coverage": {"type": "object", "properties": {
-      "presidio_inputs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-      "presidio_scanned": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-      "presidio_skipped": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-      "presidio_unconfirmed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+      "tree_objects": {"type": "array", "items": {"type": "object", "required": ["object_id", "path", "kind", "path_checked"], "properties": {
+        "object_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"}, "path": {"type": "string"},
+        "kind": {"enum": ["file", "directory", "symlink", "other"]},
+        "path_checked": {"type": "boolean"},
+        "content": {"type": "object", "required": ["presidio", "secret"], "properties": {
+          "presidio": {"enum": ["scanned", "skipped", "unconfirmed", "selected", "not_selected"]},
+          "secret": {"enum": ["scanned", "skipped", "unconfirmed", "selected", "not_selected"]}}}
+      }}, "uniqueItems": true},
+      "tree_count": {"type": "integer", "minimum": 0},
+      "tree_incomplete_count": {"type": "integer", "minimum": 0},
+      "presidio_inputs": {"type": "array", "items": {"type": "string"}},
+      "presidio_scanned": {"type": "array", "items": {"type": "string"}},
+      "presidio_skipped": {"type": "array", "items": {"type": "string"}},
+      "presidio_unconfirmed": {"type": "array", "items": {"type": "string"}},
       "presidio_count": {"type": "integer", "minimum": 0},
-      "presidio_skipped_count": {"type": "integer", "minimum": 0}
+      "presidio_skipped_count": {"type": "integer", "minimum": 0},
+      "secret_unconfirmed": {"type": "array", "items": {"type": "string"}}
     }},
     "tools": {"type": "array", "items": {"type": "object", "required": ["name", "tool", "status"], "properties": {"status": {"enum": ["passed", "violations", "error", "blocked"]}}}},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
@@ -35,6 +46,8 @@
         "line": {"type": ["integer", "null"], "minimum": 1},
         "column": {"type": ["integer", "null"], "minimum": 1},
         "message": {"type": "string"}, "symbol": {"type": ["string", "null"]},
+        "object_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{24}$"},
+        "span_length": {"type": "integer", "minimum": 1},
         "documentation_url": {"type": ["string", "null"]}, "fingerprint": {"type": "string"},
         "is_infrastructure_error": {"type": "boolean"}, "rule_is_adapter_category": {"type": "boolean"}
       }

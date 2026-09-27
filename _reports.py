@@ -276,6 +276,8 @@ def sorted_diagnostics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique = []
     for item in items:
         identity = [item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"]]
+        if "object_id" in item:
+            identity.append(item["object_id"])
         if "span_length" in item:
             identity.append(item["span_length"])
         encoded = json.dumps(identity, ensure_ascii=False)

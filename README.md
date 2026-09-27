@@ -62,6 +62,25 @@ fails the Presidio job (exit 2) with a value-free error. Keep the private config
 out of the review package; identifiers and matched values are never passed in process
 arguments or emitted in reports or archived logs.
 
+Anonymity checks also inventory **every entry** below each selected directory before
+text exclusions: files, directories (including empty and ignored ones), dotfiles and
+symlinks (without following them). `coverage.tree_objects` lists each entry once with
+an opaque `object_id`, its kind, `path_checked` state and a relative display path with configured identifiers
+redacted. `tree_count` and `tree_incomplete_count` are independent of content-scan
+coverage; traversal errors fail the check. Path findings carry the object's ID,
+original relative-path character column (one-based) and span length.
+Content diagnostics also carry the source object's ID, and each file object records
+its independent Presidio and secret-scan selection/coverage state in `content`.
+Different objects can have the same redacted display path: correlate by ID, not
+by display string. Coverage path lists may therefore contain identical display strings.
+Python cache
+directories (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`,
+`.ipynb_checkpoints`), stray `.pyc`/`.pyo` and `.DS_Store` are presence violations,
+not removed. Content scanning still follows the effective selected file scope;
+an inventoried object is **not** thereby a confirmed text scan. Archived worker JSON,
+manifests and reports use the same redacted display paths. An identifier in the
+enclosing checkout path alone does not create a tree finding.
+
 An anonymity-only consumer needs no `src/`, native code-analysis configuration or
 accepted architecture. Code-style
 analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to

@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+import hashlib
 from importlib import metadata
 import json
 import os
@@ -22,6 +23,8 @@ from _checks import (ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, ANONYMITY_PY
                      in_working_directories, read_checks, selected_test_roots)
 from _policy import discover_files, discover_notebooks, limit_drift, pyright_config, read_scope
 from _reports import diagnostic, normalize, normalize_presidio, sorted_diagnostics
+from _tree_inventory import inventory, safe_paths
+from _presidio_seeds import IdentifierConfigError
 from init_architecture import validate_architecture_config
 
 
@@ -214,11 +217,13 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     versions: dict[str, str | None] = {}
     files: dict[str, Any] = {"production": [], "tests": [], "excluded_directories": [],
                              "notebooks": [], "notebook_count": 0, "groups": [], "working_directories": [],
-                             "secret_inputs": [], "secret_scanned": [], "secret_count": 0,
-                             "secret_skipped": [], "secret_skipped_count": 0,
+                              "secret_inputs": [], "secret_scanned": [], "secret_count": 0,
+                              "secret_skipped": [], "secret_skipped_count": 0, "secret_unconfirmed": [],
                              "presidio_inputs": [], "presidio_scanned": [], "presidio_count": 0,
                              "presidio_skipped": [], "presidio_skipped_count": 0,
-                             "presidio_unconfirmed": []}
+                              "presidio_unconfirmed": [], "tree_objects": [], "tree_count": 0,
+                              "tree_incomplete_count": 0}
+    displays: dict[str, str] = {}
     architecture_ready = False
     eryx_version = "unknown"
     results = []
@@ -227,11 +232,27 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         checks = read_checks(root)
         files["groups"] = checks["groups"]
         files["working_directories"] = checks["working_directories"]
+        if "anonymity" in checks["groups"]:
+            try:
+                objects, tree_findings, displays, incomplete = inventory(root, checks["working_directories"], run_id)
+                files["tree_objects"] = objects
+                files["tree_count"] = len(objects)
+                files["tree_incomplete_count"] = incomplete
+                diagnostics.extend(tree_findings)
+            except IdentifierConfigError as exc:
+                files["tree_incomplete_count"] = 1
+                objects, _, displays, _ = inventory(root, checks["working_directories"], run_id, hide_all=True)
+                files["tree_objects"] = objects
+                files["tree_count"] = len(objects)
+                diagnostics.append(diagnostic("tree", exc.code,
+                                              "Tree identifiers could not be checked: invalid identifier configuration.",
+                                              is_infrastructure_error=True))
         scope = read_scope(root)
         effective = covered_files(root, checks, scope["exclude_directory_names"])
         if not effective:
             raise EryxError("EMPTY_CHECK_SCOPE", "No files in selected working directories after exclusions.")
         files["secret_inputs"] = effective if "anonymity" in checks["groups"] else []
+        files["secret_unconfirmed"] = files["secret_inputs"].copy()
         files["presidio_inputs"] = effective if "anonymity" in checks["groups"] else []
         files["presidio_unconfirmed"] = files["presidio_inputs"].copy()
         eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
@@ -296,6 +317,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                     files["secret_count"] = len(coverage["scanned"])
                     files["secret_skipped"] = coverage["skipped"]
                     files["secret_skipped_count"] = len(coverage["skipped"])
+                    files["secret_unconfirmed"] = sorted(
+                        set(files["secret_inputs"]) - set(coverage["scanned"] + coverage["skipped"]))
                 if "presidio_coverage" in result:
                     coverage = result.pop("presidio_coverage")
                     files["presidio_scanned"] = coverage["scanned"]
@@ -317,7 +340,43 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
             diagnostics.append(diagnostic("presidio", "EMPTY_PRESIDIO_SCAN_SCOPE",
                 "No text files were confirmed scanned by Presidio.", is_infrastructure_error=True))
     except Exception as exc:
-        diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"), str(exc), is_infrastructure_error=True))
+        # Traversal/configuration errors can carry private path or config values.
+        message = ("Tree inventory or identifier configuration could not be completed."
+                   if files["groups"] and "anonymity" in files["groups"] else str(exc))
+        diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"), message,
+                                      is_infrastructure_error=True))
+    if "anonymity" in files["groups"]:
+        by_id = {obj["object_id"]: obj for obj in files["tree_objects"]}
+        object_ids = {raw: identity for raw in displays
+                      if (identity := hashlib.sha256((run_id + "\0" + raw).encode()).hexdigest()[:24]) in by_id}
+        for item in diagnostics:
+            if item.get("path") in object_ids:
+                item.setdefault("object_id", object_ids[item["path"]])
+        for raw, identity in object_ids.items():
+            obj = by_id[identity]
+            if obj["kind"] == "file":
+                obj["content"] = {
+                    name: ("scanned" if raw in files[f"{name}_scanned"] else
+                           "skipped" if raw in files[f"{name}_skipped"] else
+                           "unconfirmed" if raw in files.get(f"{name}_unconfirmed", []) else
+                           "selected" if raw in files[f"{name}_inputs"] else "not_selected")
+                    for name in ("presidio", "secret")}
+        def sanitized(value: str) -> str:
+            value = safe_paths(value, root, displays)
+            value = value.replace(json.dumps(str(root))[1:-1], "<consumer-root>")
+            return value.replace(str(root), "<consumer-root>")
+        # Workers need raw paths while running. Once they finish, every persisted
+        # artifact (including native JSON, manifests, coverage and report fields)
+        # uses the same safe display spelling as the tree inventory.
+        for artifact in run_dir.rglob("*"):
+            if artifact.is_file() and artifact.suffix in {".json", ".log"}:
+                original = artifact.read_text(encoding="utf-8")
+                safe = sanitized(original)
+                if safe != original:
+                    atomic_write(artifact, safe, root)
+        files = json.loads(sanitized(json.dumps(files, ensure_ascii=False)))
+        results = json.loads(sanitized(json.dumps(results, ensure_ascii=False)))
+        diagnostics = json.loads(sanitized(json.dumps(diagnostics, ensure_ascii=False)))
     diagnostics = sorted_diagnostics(diagnostics)
     has_error = any(item.get("is_infrastructure_error") for item in diagnostics) or any(result["status"] == "error" for result in results)
     code = 2 if has_error else (1 if diagnostics else 0)

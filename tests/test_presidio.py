@@ -250,7 +250,10 @@ class PresidioTests(unittest.TestCase):
                 self.assertEqual((report["exit_code"], presidio["status"], presidio["exit_code"]),
                                  (2, "error", 2), report)
                 self.assertEqual(secret["status"], "passed", report)
-                self.assertEqual(report["coverage"]["presidio_unconfirmed"], ["review/clean.txt"])
+                # Without a valid identifier configuration, path display fails
+                # closed, but coverage still records the unconfirmed object.
+                self.assertEqual(report["coverage"]["presidio_unconfirmed"],
+                                 ["[REDACTED]/[REDACTED]"])
                 expected_error = ("PRESIDIO_IDENTIFIER_CONFIG_ERROR" if invalid.startswith("patterns") else
                                   "PRESIDIO_SEED_CONFIG_ERROR")
                 self.assertIn(expected_error, {d["rule"] for d in report["diagnostics"]})
