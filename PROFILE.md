@@ -23,105 +23,8 @@ Production is `src/`; tests are `tests/` and the test directory basenames config
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
 reports. `.pyi` files are checked by Pyright; other tools use their native scope.
-`__init__.py` is included. Root scripts are outside the Python source scope.
-Notebooks are discovered project-wide (excluding configured directory names,
-tooling, environments and caches); the production Pylint worker checks them once
-with `nbstripout --verify` without rewriting them. Coverage lists notebook paths
-and count. Eryx's own code is verified by its autonomous test suite.
-When `.eryx/checks.toml` is present, notebook discovery is limited to its
-`working_directories`. `anonymity` scans selected files with pinned `detect-secrets`
-and reports potential-secret types and locations without values. It requires no
-secrets baseline or verification service. `anonymity` alone runs a minimal Pylint worker
-without the native code-style or architecture analyzers. Secret coverage records
-confirmed text-file scans separately from unsupported binary files and selected
-inputs. Unreadable text, partial scans and zero text-file coverage are errors.
-The installer verifies an intentional secret in an isolated fixture. An independent
-Presidio job checks both languages in the pinned analyzer 2.2.360 with pinned local
-`en_core_web_sm` and `ru_core_news_sm` 3.8.0 models and no downloads during a check.
-The expected active inventory is checked on both installation and each scan: exactly
-20 English recognizers and 26 entity types (see `_presidio_policy.py` for the
-exact per-recognizer mapping, including the spaCy NER mapping):
-
-| Recognizers | Standard English entities |
-|---|---|
-| spaCy NER | AGE, DATE_TIME, EMAIL, ID, LOCATION, NRP, ORGANIZATION, PERSON, PHONE_NUMBER |
-| Date, Email, Phone, URL, IP | DATE_TIME, EMAIL_ADDRESS, PHONE_NUMBER, URL, IP_ADDRESS |
-| Credit card, crypto, IBAN, medical license | CREDIT_CARD, CRYPTO, IBAN_CODE, MEDICAL_LICENSE |
-| UK NHS | UK_NHS |
-| US bank, driver license, ITIN, passport, SSN | US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN |
-| Contextual local path / remote account | LOCAL_PATH_IDENTIFIER, REMOTE_ACCOUNT |
-| Optional consumer literal seeds | KNOWN_IDENTIFIER_SEED |
-| Optional consumer regex patterns | KNOWN_IDENTIFIER_PATTERN |
-
-All applicable recognizers run for each selected file, with no Eryx entity allowlist,
-minimum score cutoff, baseline or value suppression. This inventory includes the
-installed standard medical *license* identifier; optional clinical/medical NLP
-models are not installed. A missing or unexpected recognizer, NER mapping or nonzero
-threshold fails the scan (exit 2), rather than silently changing coverage. The job
-confirms selected text and skipped binary coverage, rejects unconfirmed inputs, and
-records only entity types and physical locations (and scores). The installer probes
-name, contact, date, URL, network and country-specific identifiers as well as clean
-input. `codestyle` retains
-the `src/` layout and architecture requirements.
-
-`LOCAL_PATH_IDENTIFIER` marks only the account component in `/home/<account>`,
-`/Users/<account>`, `/scratch/<account>` and `/mnt/scratch/<account>`;
-common shared directory names are excluded. `REMOTE_ACCOUNT` marks only the
-account in `user@host` operands of SSH, SCP and SFTP commands (SCP requires
-the remote `host:path` form). Other absolute paths and ordinary commands do
-not become contextual findings. The installer probes both contextual types and
-clean counterexamples with synthetic data.
-
-The Russian inventory contains the eight shared Presidio pattern recognizers
-(CRYPTO, DATE_TIME, EMAIL_ADDRESS, IBAN_CODE, IP_ADDRESS, MEDICAL_LICENSE,
-PHONE_NUMBER, URL), the seven English country-specific/credit-card recognizers
-also applicable to identifiers in Russian prose (CREDIT_CARD, UK_NHS,
-US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_SSN), Russian spaCy
-NER (PERSON, LOCATION, ORGANIZATION), a Russian month-name date pattern and
-three Russian domestic identifier patterns: RU_INN (10/12 digits), RU_SNILS
-(3-3-3-2 digits), RU_PASSPORT (4 + 6 digits).
-All 24 Russian recognizers and their 25 entity types are verified at install and
-check time alongside the 20 English recognizers. The Russian model's only NER
-labels are PER, LOC and ORG; dates, nationality, age, ID, email and phone are not
-claimed as Russian NER categories. Dates and contact details instead use pattern
-recognizers. Identifier patterns indicate *potential* identifiers, not checksum
-validation. Findings from both passes are deduplicated by span and entity type;
-physical columns and span lengths keep distinct observations on the same line.
-When configured, literal seeds in the consumer's `.eryx/presidio.toml` produce
-`KNOWN_IDENTIFIER_SEED` findings anywhere, including unusual paths, command operands,
-comments and compound names. Case folding is mapped back to original character offsets;
-variants and transliterations must be listed explicitly. Separately configured regex
-`patterns` produce `KNOWN_IDENTIFIER_PATTERN` with original positions and case-insensitive
-Unicode regex matching; explicit `[a-z]`/`[A-Z]` ranges remain Latin-only.
-Invalid patterns fail with a value-free
-`PRESIDIO_IDENTIFIER_CONFIG_ERROR`; seed-only failures retain
-`PRESIDIO_SEED_CONFIG_ERROR`. Missing or empty collections do not disable
-general-purpose recognition.
-
-Each file is analyzed whole (no chunk-boundary omissions) with a 512 KiB raw-byte
-limit per file. Larger/changed/unreadable inputs remain unconfirmed and force exit 2;
-binary inputs are reported separately. JSON and notebook text use physical file
-lines. Archived Presidio worker JSON is replaced with validated status and coverage
-so malformed output cannot expose source text.
-Archives (including gzip text) and `.pth` checkpoints are selected and their tree
-paths inspected, but both Presidio and the secret scanner exclude their contents
-by filename policy before opening or measuring them. Per-job `*_excluded` and
-`*_excluded_count` are distinct from scans, binary skips, and failures. The worker
-coverage is validated against the selected path policy; a missing or misclassified
-exclusion fails rather than certifying a scan. Zero confirmed text scans still fail.
-The Presidio text job also extracts primitive POSIX-like path references from
-confirmed UTF-8 text. Candidate records include safe source identities, original
-positions, spans and absolute flags, not reference text. Absolute candidates
-produce `ABSOLUTE_PATH_REFERENCE` diagnostics; relative candidates remain
-observable in `coverage.path_references`. This heuristic includes output paths
-and slash-containing model IDs, with no runtime or file-access semantics.
-Correlation uses the longest case-sensitive trailing component suffix against
-the complete tree inventory. Unique best matches link to object IDs; ties
-produce `AMBIGUOUS_PATH_REFERENCE` with all best IDs, and no match produces
-`POSSIBLE_MISSING_PATH_REFERENCE`. Absolute findings persist when linked.
-`coverage.path_groups` joins objects, occurrences and diagnostic fingerprints
-without disclosing reference values. These outcomes are heuristic aids for
-manual review, not confirmed reads or a rename/repair plan.
+`__init__.py` is included. Root scripts, notebooks and Eryx itself are outside the
+consumer's source scope. Eryx's own code is verified by its autonomous test suite.
 
 ## Readability
 
@@ -205,7 +108,7 @@ Tach's public import surface and typing.Protocol are distinct contracts.
 
 ## Limitations
 
-No source rewriting, formatting, dependency vulnerability scanning, runtime tests, community
+No source rewriting, formatting, security scanning, runtime tests, community
 discovery, physical function-line metric, spellchecker or universal Protocol-only
 proof is part of `check.py`. Suppressions are governed by native analyzers,
 including unused-suppression diagnostics and required Tach reasons. Exclusions

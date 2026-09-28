@@ -7,9 +7,6 @@ from pathlib import Path
 import re
 from typing import Any
 
-from _content_policy import content_excluded
-from _presidio_policy import ALL_ENTITIES
-
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
@@ -72,9 +69,7 @@ def parse_pylint(text: str, root: Path) -> tuple[list[dict[str, Any]], str | Non
             line=entry.get("line") if isinstance(entry.get("line"), int) and entry["line"] > 0 else None, column=(entry["column"] + 1) if isinstance(entry.get("column"), int) else None,
             severity={"convention": "warning", "refactor": "warning", "fatal": "error"}.get(raw_type, raw_type),
             symbol=symbol, native_severity=raw_type,
-            is_infrastructure_error=rule in {"F9802", "F9804"},
-            documentation_url=("https://github.com/Yelp/detect-secrets" if rule in {"W9803", "F9804"}
-                               else "https://pylint.readthedocs.io/en/stable/user_guide/messages/messages_overview.html"
+            documentation_url=("https://pylint.readthedocs.io/en/stable/user_guide/messages/messages_overview.html"
                                if not rule[1:3] in {"90", "91", "92", "93", "95", "96"}
                                else "https://github.com/noah-goodrich/pylint-clean-architecture/blob/main/RULES.md"),
         ))
@@ -209,130 +204,14 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             "diagnostics": items, "error": error}
 
 
-def normalize_presidio(result: dict[str, Any], root: Path, output: Path,
-                       expected: list[str], tree_ids: set[str] | None = None) -> dict[str, Any]:
-    """Accept only the worker's closed schema, never third-party prose or source text."""
-    policy_excluded = [path for path in expected if content_excluded(path)]
-    coverage: dict[str, list[str]] = {"scanned": [], "skipped": [], "excluded": policy_excluded}
-    items: list[dict[str, Any]] = []
-    candidates: list[dict[str, Any]] = []
-    error = "PRESIDIO_SCAN_INCOMPLETE"
-    try:
-        data = json.loads(output.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or set(data) not in (
-                {"scanned", "skipped", "excluded", "findings", "references", "failed"},
-                {"scanned", "skipped", "excluded", "findings", "references", "failed", "error"}):
-            raise ValueError("Invalid worker schema")
-        if ("error" in data and data["error"] not in
-                {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
-                 "PRESIDIO_SEED_CONFIG_ERROR", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}):
-            raise ValueError("Invalid worker error")
-        for key in ("scanned", "skipped", "excluded", "failed"):
-            if (not isinstance(data[key], list) or any(type(p) is not str for p in data[key]) or
-                    len(data[key]) != len(set(data[key])) or not set(data[key]) <= set(expected)):
-                raise ValueError("Invalid worker coverage")
-        groups = [set(data[key]) for key in ("scanned", "skipped", "excluded", "failed")]
-        if (sum(map(len, groups)) != len(set().union(*groups)) or
-                ("error" not in data and set(data["excluded"]) != set(policy_excluded)) or
-                any(content_excluded(path) for path in data["scanned"] + data["skipped"] + data["failed"])):
-            raise ValueError("Overlapping worker coverage")
-        if not isinstance(data["findings"], list):
-            raise ValueError("Invalid findings")
-        for entry in data["findings"]:
-            if (not isinstance(entry, dict) or set(entry) !=
-                    {"path", "line", "column", "span_length", "entity", "score"} or
-                    entry["path"] not in data["scanned"] or type(entry["line"]) is not int or
-                    entry["line"] < 1 or type(entry["column"]) is not int or entry["column"] < 1 or
-                    type(entry["span_length"]) is not int or entry["span_length"] < 1 or
-                    entry["entity"] not in ALL_ENTITIES or
-                    type(entry["score"]) not in (int, float) or not 0 <= entry["score"] <= 1):
-                raise ValueError("Invalid finding")
-            items.append(diagnostic("presidio", entry["entity"],
-                                    f"Potential {entry['entity']} detected (score {entry['score']:.4f}).",
-                                    path=entry["path"], line=entry["line"], column=entry["column"],
-                                    score=entry["score"], span_length=entry["span_length"]))
-        candidates = data["references"]
-        if not isinstance(candidates, list):
-            raise ValueError("Invalid references")
-        for entry in candidates:
-            if (not isinstance(entry, dict) or set(entry) !=
-                     {"path", "line", "column", "span_length", "absolute",
-                      "suffix_components", "candidate_object_ids"} or
-                    type(entry["path"]) is not str or entry["path"] not in data["scanned"] or
-                    type(entry["line"]) is not int or entry["line"] < 1 or
-                    type(entry["column"]) is not int or entry["column"] < 1 or
-                    type(entry["span_length"]) is not int or entry["span_length"] < 2 or
-                     type(entry["absolute"]) is not bool or
-                     type(entry["suffix_components"]) is not int or entry["suffix_components"] < 0 or
-                     not isinstance(entry["candidate_object_ids"], list) or
-                     any(type(identity) is not str or not re.fullmatch(r"[0-9a-f]{24}", identity)
-                         for identity in entry["candidate_object_ids"]) or
-                     entry["candidate_object_ids"] != sorted(set(entry["candidate_object_ids"])) or
-                     (tree_ids is not None and not set(entry["candidate_object_ids"]) <= tree_ids) or
-                     (entry["suffix_components"] == 0) != (not entry["candidate_object_ids"]) or
-                     entry["suffix_components"] > entry["span_length"]):
-                raise ValueError("Invalid reference")
-        if len({(e["path"], e["line"], e["column"], e["span_length"])
-                for e in candidates}) != len(candidates):
-            raise ValueError("Duplicate reference")
-        for entry in candidates:
-            if entry["absolute"]:
-                items.append(diagnostic("presidio", "ABSOLUTE_PATH_REFERENCE",
-                                        "Possible absolute path reference in scanned text.",
-                                        path=entry["path"], line=entry["line"],
-                                         column=entry["column"], span_length=entry["span_length"]))
-            if len(entry["candidate_object_ids"]) != 1:
-                rule = ("AMBIGUOUS_PATH_REFERENCE" if entry["candidate_object_ids"] else
-                        "POSSIBLE_MISSING_PATH_REFERENCE")
-                items.append(diagnostic("presidio", rule,
-                                        "Multiple tree objects share the longest matching path suffix."
-                                        if entry["candidate_object_ids"] else
-                                        "Possible external or missing path reference in scanned text.",
-                                        path=entry["path"], line=entry["line"],
-                                        column=entry["column"], span_length=entry["span_length"]))
-        if ("error" not in data and result.get("exit_code") in (0, 1, 2) and
-                not result.get("error") and not result.get("stdout") and not result.get("stderr")):
-            coverage = {key: data[key] for key in ("scanned", "skipped", "excluded")}
-        if (set(data["scanned"] + data["skipped"] + data["excluded"] + data["failed"]) == set(expected) and
-                not data["failed"] and (data["scanned"] or
-                                        (data["excluded"] and not data["skipped"])) and
-                "error" not in data and
-                result.get("exit_code") == (1 if items else 0) and not result.get("error") and
-                not result.get("stdout") and not result.get("stderr")):
-            error = None
-        elif data.get("error") in {"PRESIDIO_MODEL_UNAVAILABLE", "PRESIDIO_POLICY_MISMATCH",
-                                   "PRESIDIO_SEED_CONFIG_ERROR", "PRESIDIO_IDENTIFIER_CONFIG_ERROR"}:
-            error = data["error"]
-    except (OSError, ValueError, KeyError, TypeError):
-        coverage = {"scanned": [], "skipped": [], "excluded": policy_excluded}
-        items = []
-        candidates = []
-    if result.get("error") or result.get("exit_code") not in (0, 1, 2) or result.get("stdout") or result.get("stderr"):
-        items = []
-    if error:
-        items.append(diagnostic("presidio", error,
-                                "Presidio could not confirm the selected text scan; check identifier configuration, pinned models, recognizer inventory and worker status.",
-                                is_infrastructure_error=True))
-    return {"status": "error" if error else ("violations" if items else "passed"),
-            "error": error, "diagnostics": items, "coverage": coverage,
-            "references": candidates if not (result.get("error") or result.get("stdout") or
-                                             result.get("stderr") or
-                                             result.get("exit_code") not in (0, 1, 2)) else []}
-
-
 def sorted_diagnostics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # Only remove byte-identical observations of the same native diagnostic.
     seen = set()
     unique = []
     for item in items:
-        identity = [item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"]]
-        if "object_id" in item:
-            identity.append(item["object_id"])
-        if "span_length" in item:
-            identity.append(item["span_length"])
-        encoded = json.dumps(identity, ensure_ascii=False)
+        encoded = json.dumps([item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"]], ensure_ascii=False)
         item["fingerprint"] = hashlib.sha256(encoded.encode()).hexdigest()[:24]
-        key = tuple(identity)
+        key = (item["tool"], item["rule"], item["path"], item["line"], item["column"], item["message"])
         if key not in seen:
             seen.add(key)
             unique.append(item)

@@ -33,21 +33,13 @@ uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
 ```
 
-The default suite skips `LifecycleTests`. Run them only when the user explicitly
-requests them; setting `ERYX_RUN_LIFECYCLE=1` opts in. Do not run them as a routine
-post-change check. Test fixtures must not require access to a private consumer.
-Run the affected consumer's full static and relevant runtime checks too. Keep
-ordinary install/check/apply/accept writes inside the consumer; verify the
-submodule remains clean.
+This includes native regression and real installation/smoke tests. Test fixtures
+must not require access to a private consumer. Run the affected consumer's full
+static and relevant runtime checks too. Keep ordinary install/check/apply/accept
+writes inside the consumer; verify the submodule remains clean.
 
 Develop directly in a consumer submodule or separate clone: branch first if HEAD
-is detached, reproduce, fix, add an autonomous regression and test. Commit Eryx
-changes in Eryx. After testing the actual local revision (including a local merge
-result, if used), the consumer may pin its SHA in a separate consumer change and
-run integration checks immediately. Record the exact Eryx SHA, checkout state,
-test outcomes, and PR link (or publication pending). Local completion depends on
-implementation and verification, not external review or merge. Publish tool changes
-in an Eryx PR through `gh`; track publication, review and merge separately. Once
-upstream merges, synchronize the consumer gitlink to the reachable merged SHA in
-a separate follow-up, rerun affected checks, and link the PR. Keep the two
-repository histories separate.
+is detached, reproduce, fix, add an autonomous regression, test, commit/push and
+open a PR **in Eryx** through `gh`. After CI/review/merge, pin the merged SHA in a
+**separate consumer PR**, with integration updates and a link to the tool PR.
+Never combine the two repository histories or publish an unreachable gitlink.

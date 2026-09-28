@@ -16,33 +16,24 @@ from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from _common import (EryxError, atomic_write, capture, emit_event, error_exit,
                      load_toml, read_json, repo_lock, require_runtime, project_dir,
                      safe_target, tool_dir, write_json)
-from _checks import ANONYMITY_DEPENDENCIES, PRESIDIO_DEPENDENCIES, covered_files, read_checks
 
 STATE_FILES = ["readability.toml", "scope.toml", "architecture.ready.json",
                "pylint-catalog.json", "pylint-tests.toml", "policy-notes.json", "installation.json"]
 
 
-def dependency_specs(tool: Path, groups: list[str] | None = None) -> list[str]:
+def dependency_specs(tool: Path) -> list[str]:
     manifest = read_json(tool / "tools.json")
     specs = []
     for name, version in manifest["dependencies"].items():
-        if groups is not None and "anonymity" not in groups and name in PRESIDIO_DEPENDENCIES:
-            continue
-        if groups is not None and "codestyle" not in groups and name not in ANONYMITY_DEPENDENCIES:
-            continue
         extras = manifest.get("extras", {}).get(name)
-        source = manifest.get("sources", {}).get(name)
-        specs.append(name + (" @ " + source if source else
-                             ("[" + ",".join(extras) + "]" if extras else "") + "==" + version))
+        specs.append(name + ("[" + ",".join(extras) + "]" if extras else "") + "==" + version)
     return specs
 
 
-def initialize_state(root: Path, tool: Path, groups: list[str] | None = None) -> None:
+def initialize_state(root: Path, tool: Path) -> None:
     # Legacy files are read only for migration; removal is a consumer Git change.
     # Existing .eryx files always win, even if installation.json is absent.
     for name in STATE_FILES:
-        if groups is not None and "codestyle" not in groups and name not in {"scope.toml", "installation.json"}:
-            continue
         destination = root / ".eryx" / name
         if destination.exists():
             continue
@@ -67,7 +58,7 @@ def validate_project(root: Path) -> dict[str, Any]:
         raise EryxError("UNSUPPORTED_PROJECT", "A named [project] table is required.")
     if "workspace" in project.get("tool", {}).get("uv", {}):
         raise EryxError("WORKSPACES_UNSUPPORTED", "This installer supports one project, not a uv workspace.")
-    if "codestyle" in read_checks(root)["groups"] and (not (root / "src").is_dir() or (root / "src").is_symlink()):
+    if not (root / "src").is_dir() or (root / "src").is_symlink():
         raise EryxError("SRC_LAYOUT_REQUIRED", "Expected a real src/ directory.")
     spec_text = project["project"].get("requires-python", ">=3.12")
     try:
@@ -124,19 +115,13 @@ def install(root: Path, tool: Path, *, dry_run: bool = False, progress: bool = T
             extras: list[str] | None = None) -> dict[str, Any]:
     require_runtime()
     validate_project(root)
-    checks = read_checks(root)
-    from _policy import read_scope
-    scope_path = root / ".eryx/scope.toml"
-    scope = read_scope(root) if scope_path.exists() else load_toml(tool / "defaults/scope.toml")
-    if not covered_files(root, checks, scope["exclude_directory_names"]):
-        raise EryxError("EMPTY_CHECK_SCOPE", "No files in selected working directories after exclusions.")
     uv = shutil.which("uv")
     if not uv:
         raise EryxError("UV_NOT_FOUND", "uv must already be installed and available on PATH.")
     managed = sorted([f".eryx/{name}" for name in STATE_FILES] +
                      ["pyproject.toml", "pyrightconfig.json", "uv.lock", "tach.toml", ".gitignore"])
     saved = snapshot(root, managed)
-    specs = dependency_specs(tool, checks["groups"])
+    specs = dependency_specs(tool)
     previous_path = root / ".eryx/installation.json"
     previous = read_json(previous_path) if previous_path.exists() else {}
     selected_extras = sorted(set(extras if extras is not None else previous.get("extras", [])))
@@ -145,7 +130,7 @@ def install(root: Path, tool: Path, *, dry_run: bool = False, progress: bool = T
         raise EryxError("UNKNOWN_EXTRA", f"Unknown project extra in {selected_extras}")
     extra_args = [arg for extra in selected_extras for arg in ("--extra", extra)]
     plan = {"project": str(root), "dependencies": specs, "extras": selected_extras, "managed_files": managed,
-            "architecture_initialization": "separate; no source layout is changed" if "codestyle" in checks["groups"] else "not required"}
+            "architecture_initialization": "separate; no source layout is changed"}
     if dry_run:
         return {"status": "planned", **plan, "exit_code": 0}
     safe_target(root / ".eryx/logs/install-probes", root)
@@ -154,9 +139,9 @@ def install(root: Path, tool: Path, *, dry_run: bool = False, progress: bool = T
     try:
         if progress:
             print("Installing Eryx configuration and exact dev dependencies...", file=sys.stderr)
-        initialize_state(root, tool, checks["groups"])
+        initialize_state(root, tool)
         from _policy import discover_files, read_scope
-        if "codestyle" in checks["groups"] and not discover_files(root, read_scope(root))["production"]:
+        if not discover_files(root, read_scope(root))["production"]:
             raise EryxError("EMPTY_SOURCE_SCOPE", "No Python files under src/.")
         prepare_project(root)
         commands = [
@@ -177,24 +162,21 @@ def install(root: Path, tool: Path, *, dry_run: bool = False, progress: bool = T
                     (result["stdout"] + "\n" + result["stderr"])[-8000:])
         ignore_path = root / ".gitignore"
         old_ignore = ignore_path.read_text(encoding="utf-8") if ignore_path.exists() else ""
-        ignored = ("/.eryx/reports/", "/.eryx/logs/", "/.eryx/cache/") + (("/.tach/",) if "codestyle" in checks["groups"] else ())
-        additions = [line for line in ignored if line not in old_ignore.splitlines()]
+        additions = [line for line in ("/.eryx/reports/", "/.eryx/logs/", "/.eryx/cache/", "/.tach/") if line not in old_ignore.splitlines()]
         if additions:
             atomic_write(ignore_path, old_ignore.rstrip("\n") + ("\n" if old_ignore else "") + "\n# Local Eryx reports, logs and native cache\n" + "\n".join(additions) + "\n", root)
         audit_result = read_json(root / ".eryx/logs/install-probes/result.json")
         marker = root / ".eryx/architecture.ready.json"
         installation = {"eryx_version": read_json(tool / "tools.json")["eryx_version"], "extras": selected_extras,
-                         "dependencies": specs, "source_layout": "src" if "codestyle" in checks["groups"] else None,
-                         "groups": checks["groups"], "working_directories": checks["working_directories"],
-                         "mode": "strict", "architecture_initialization_required":
-                         "codestyle" in checks["groups"] and not (marker.exists() and read_json(marker).get("accepted"))}
+                        "dependencies": specs, "source_layout": "src", "mode": "strict",
+                        "architecture_initialization_required": not (marker.exists() and read_json(marker).get("accepted"))}
         write_json(root / ".eryx/installation.json", installation, root)
         modified = [name for name, old in saved.items() if ((root / name).read_bytes() if (root / name).exists() else None) != (old[0] if old else None)]
         return {"status": "installed", "project": str(root), "modified_files": sorted(modified),
                 "versions": audit_result["versions"], "smoke_tests": audit_result["smoke_tests"],
                 "architecture_initialization_required": installation["architecture_initialization_required"],
                 "instructions": str(tool / "README.md"), "agent_instructions": str(tool / "AGENTS.md"),
-                 "next_command": "uv run --locked --group dev python eryx/init_architecture.py" if "codestyle" in checks["groups"] else "uv run --locked --group dev python eryx/check.py", "exit_code": 0}
+                "next_command": "uv run --locked --group dev python eryx/init_architecture.py", "exit_code": 0}
     except BaseException as exc:
         errors = rollback(root, saved)
         error_data = {"status": "error", "code": getattr(exc, "code", "INSTALL_FAILED"), "message": str(exc),

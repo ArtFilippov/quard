@@ -345,24 +345,9 @@ class RunnerTests(unittest.TestCase):
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
         self.assertEqual(len(seen), 6)
-        self.assertEqual(report["coverage"]["notebooks"], [])
-        self.assertEqual(report["coverage"]["notebook_count"], 0)
-        self.assertIn("No notebooks discovered; notebook anonymity was not verified.", report["notes"])
         self.assertTrue((self.root / report["latest_report_path"]).is_file())
         import jsonschema
         jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))
-
-    def test_notebook_coverage_reaches_only_production_worker(self):
-        (self.root / "research").mkdir()
-        (self.root / "research/notes.ipynb").write_text("{}", encoding="utf-8")
-        (self.root / ".venv").mkdir()
-        (self.root / ".venv/ignored.ipynb").write_text("{}", encoding="utf-8")
-        fake, _ = self.fake_tools()
-        report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
-        self.assertEqual(report["coverage"]["notebooks"], ["research/notes.ipynb"])
-        self.assertEqual(report["coverage"]["notebook_count"], 1)
-        pylint = [tool for tool in report["tools"] if tool["tool"] == "pylint"]
-        self.assertEqual(["--notebooks" in tool["argv"] for tool in pylint], [True, False])
 
     def test_no_fail_fast_and_error_precedence(self):
         fake, seen = self.fake_tools({"pyright": {"stdout": "broken", "code": 2},
