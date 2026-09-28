@@ -165,6 +165,31 @@ def discover_files(root: Path, scope: dict[str, list[str]]) -> dict[str, list[st
     return {"production": sorted(production), "tests": sorted(tests), "excluded_directories": sorted(excluded)}
 
 
+def discover_notebooks(root: Path, scope: dict[str, list[str]]) -> tuple[list[str], list[str]]:
+    """Search the whole consumer without descending into tooling or excluded directories."""
+    import os
+    from _common import tool_dir
+    from _checks import IGNORED_DIRECTORIES
+
+    excluded_names = set(scope["exclude_directory_names"]) | IGNORED_DIRECTORIES
+    notebooks: list[str] = []
+    excluded: list[str] = []
+    for parent, dirs, files in os.walk(root, followlinks=False):
+        kept = []
+        for dirname in sorted(dirs):
+            path = Path(parent) / dirname
+            if dirname in excluded_names or path.resolve() == tool_dir() or path.is_symlink():
+                excluded.append(path.relative_to(root).as_posix() + "/")
+            else:
+                kept.append(dirname)
+        dirs[:] = kept
+        for name in sorted(files):
+            path = Path(parent) / name
+            if path.suffix == ".ipynb" and not path.is_symlink():
+                notebooks.append(path.relative_to(root).as_posix())
+    return sorted(notebooks), sorted(excluded)
+
+
 def apply_limits(config: dict[str, Any], limits: dict[str, int]) -> None:
     for key, (section, option) in LIMIT_MAP.items():
         config.setdefault(section, {})[option] = limits[key]
@@ -186,9 +211,12 @@ def base_pylint(plugins: list[str], scope: dict[str, list[str]]) -> dict[str, An
     }
 
 
-def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]]) -> dict[str, Any]:
+def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]],
+                   test_roots: list[str] | None = None) -> dict[str, Any]:
+    roots = test_roots if test_roots is not None else ["tests"]
     config: dict[str, Any] = {
-        "include": ["src"] + (["tests"] if any(path.startswith("tests/") for path in files["tests"]) else []),
+        "include": ["src"] + [directory for directory in roots
+                              if any(path.startswith(directory + "/") for path in files["tests"])],
         "exclude": exclude_globs(scope), "ignore": exclude_globs(scope),
         "typeCheckingMode": "strict", "pythonPlatform": "Linux", "extraPaths": ["src"],
         "pythonVersion": f"{sys.version_info.major}.{sys.version_info.minor}",
@@ -271,9 +299,17 @@ def policy_notes(plugins: list[str]) -> dict[str, Any]:
 
 def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = None,
               catalog: dict[str, Any] | None = None) -> list[str]:
+    from _checks import in_working_directories, read_checks, selected_test_roots
+    checks = read_checks(root)
+    if "codestyle" not in checks["groups"]:
+        return []
     limits = read_limits(root)
     scope = read_scope(root)
     files = discover_files(root, scope)
+    if not checks["legacy"]:
+        files["tests"] = [path for path in files["tests"]
+                          if in_working_directories(path, checks["working_directories"])]
+    test_roots = selected_test_roots(root, checks)
     project_path = root / "pyproject.toml"
     try:
         doc = tomlkit.parse(project_path.read_text(encoding="utf-8"))
@@ -286,10 +322,13 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         # Initialize missing sections only. Reinstallation preserves native policy,
         # reviewed layers, stubPath and other project-specific settings.
         tool.setdefault("pylint", base_pylint(plugins, scope))
-        tool.setdefault("pyright", pyright_config(scope, files))
+        tool.setdefault("pyright", pyright_config(scope, files, test_roots))
         tool.setdefault("pydoclint", pydoclint_config(scope))
         tool.setdefault("clean-arch", clean_config())
-        tool["pylint"].setdefault("main", {})["load-plugins"] = plugins
+        selected_plugins = [*plugins, "_notebook_checker"]
+        if "anonymity" in checks["groups"]:
+            selected_plugins.append("_secret_checker")
+        tool["pylint"].setdefault("main", {})["load-plugins"] = list(dict.fromkeys(selected_plugins))
         native_pyright = root / "pyrightconfig.json"
         if native_pyright.exists():
             for key, value in read_json(native_pyright).items():
@@ -297,13 +336,18 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
                     tool["pyright"][key] = value
     elif "pylint" not in tool:
         raise EryxError("NOT_INSTALLED", "Missing [tool.pylint]; run the installer first.")
+    loaded = tool["pylint"].setdefault("main", {}).setdefault("load-plugins", [])
+    if "_notebook_checker" not in loaded:
+        loaded.append("_notebook_checker")
+    if "anonymity" in checks["groups"] and "_secret_checker" not in loaded:
+        loaded.append("_secret_checker")
     apply_limits(tool["pylint"], limits["production"])
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]
     if "pyright" in tool:
         tool["pyright"]["exclude"] = exclude_globs(scope)
         tool["pyright"]["ignore"] = exclude_globs(scope)
-        discovered = pyright_config(scope, files)
+        discovered = pyright_config(scope, files, test_roots)
         tool["pyright"]["include"] = discovered["include"]
         if tool["pyright"].get("executionEnvironments") != discovered["executionEnvironments"]:
             tool["pyright"]["executionEnvironments"] = discovered["executionEnvironments"]
@@ -350,6 +394,9 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
 
 
 def limit_drift(root: Path) -> list[str]:
+    from _checks import read_checks
+    if "codestyle" not in read_checks(root)["groups"]:
+        return []
     limits = read_limits(root)
     production = load_toml(root / "pyproject.toml").get("tool", {}).get("pylint", {})
     tests = load_toml(root / ".eryx/pylint-tests.toml").get("tool", {}).get("pylint", {})

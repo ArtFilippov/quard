@@ -1,8 +1,133 @@
 # Eryx
 
-Pinned native Python analysis for Linux `uv` projects with a `src/` layout.
+Pinned native analysis for Linux `uv` projects; code-style checks use a `src/` layout.
 Named after *Eryx jayakari*. Tools run in the **consumer's environment**;
 Eryx is versioned independently and normally attached as a Git submodule.
+
+## Select check groups (optional)
+
+Without `.eryx/checks.toml`, existing consumers retain the code-style workflow
+and project-wide notebook verification. To select groups and directories, create
+the consumer-owned file **before installation**:
+
+```toml
+groups = ["anonymity"]
+working_directories = ["review_target"]
+```
+
+The only groups are `codestyle` and `anonymity`; list both to enable both.
+Directories must exist inside the consumer and cannot be symlinks. Directory
+exclusions in `.eryx/scope.toml` still apply; an empty effective file scope is an
+error. `anonymity` verifies notebooks with `nbstripout` and scans selected files
+for potential secrets with `detect-secrets`, both through Pylint. Findings include
+the file and line but not the secret value. Zero notebooks are explicitly reported,
+not counted as verified. Reports distinguish selected `secret_inputs`, confirmed
+`secret_scanned` / `secret_count`, and unsupported binary `secret_skipped` /
+`secret_skipped_count`. An independent Presidio job scans the same effective file
+scope in both English and Russian (including country-specific identifiers, dates,
+URLs and IP addresses), using pinned local `en_core_web_sm` and `ru_core_news_sm`
+models. It also reports `LOCAL_PATH_IDENTIFIER` for the account component of
+conventional home, Users and scratch directories, and `REMOTE_ACCOUNT` for
+user@host operands in SSH, SCP and SFTP commands. It reports entity type,
+relative path, physical line/column, confidence score and span length without
+matched values. `presidio_inputs`, `presidio_scanned` /
+`presidio_count`, `presidio_skipped` / `presidio_skipped_count` and
+`presidio_unconfirmed` separately describe selected, confirmed text, unsupported
+binary and unconfirmed inputs. Missing resources, partial coverage and zero
+scanned text files fail the check (exit 2), rather than claiming a clean scan. Each
+text file is analyzed whole in both languages, up to 512 KiB of raw
+UTF-8; larger files are unconfirmed and cause exit 2, without splitting an entity
+across model windows. The worker checks file identity and timestamps around the
+read and after analysis to reject changed files. Raw structured files and notebook
+JSON are scanned as text, with physical file lines. Archived Presidio native output
+contains only normalized status and coverage, never unvalidated worker output.
+To flag known identifiers even inside comments, strings, compound names or
+unusual paths and remote commands, optionally create consumer-owned
+`.eryx/presidio.toml` outside the review target:
+
+```toml
+seeds = ["ExampleAlias", "ПримерПсевдоним"]
+patterns = ["[0-9]{2}[a-z]_[a-z]{3}"]
+```
+
+List spelling variants and transliterations explicitly. Matching is literal and
+case-insensitive, including substrings; each occurrence is reported as
+`KNOWN_IDENTIFIER_SEED` with physical position and span length. Regex `patterns`
+are separate from literal seeds; each nonempty match is reported as
+`KNOWN_IDENTIFIER_PATTERN`, case-insensitively using Python's Unicode regex rules.
+Explicit `[a-z]` and `[A-Z]` ranges remain Latin-only under case-insensitive matching.
+Missing files or empty collections leave the general-purpose recognizers active.
+Invalid configuration
+fails the Presidio job (exit 2) with a value-free error. Keep the private config
+out of the review package; identifiers and matched values are never passed in process
+arguments or emitted in reports or archived logs.
+
+Anonymity checks also inventory **every entry** below each selected directory before
+text exclusions: files, directories (including empty and ignored ones), dotfiles and
+symlinks (without following them). `coverage.tree_objects` lists each entry once with
+an opaque `object_id`, its kind, `path_checked` state and a relative display path with configured identifiers
+redacted. `tree_count` and `tree_incomplete_count` are independent of content-scan
+coverage; traversal errors fail the check. Invalid identifier configuration marks
+path checks incomplete and uses opaque display for all entries. Path findings carry the object's ID,
+original relative-path character column (one-based) and span length.
+Content diagnostics also carry the source object's ID, and each file object records
+its independent Presidio and secret-scan selection/coverage state in `content`.
+Different objects can have the same redacted display path: correlate by ID, not
+by display string. Coverage path lists may therefore contain identical display strings.
+Python cache
+directories (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`,
+`.ipynb_checkpoints`), stray `.pyc`/`.pyo` and `.DS_Store` are presence violations,
+not removed. Content scanning still follows the effective selected file scope;
+an inventoried object is **not** thereby a confirmed text scan. Archived worker JSON,
+manifests and reports use the same redacted display paths. An identifier in the
+enclosing checkout path alone does not create a tree finding.
+Archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.gz`, `.bz2`, `.tbz2`, `.xz`,
+`.txz`, `.7z`, `.rar`, `.zst` and their tar variants) and `.pth` checkpoints
+are **path checked / content excluded by policy**. Classification uses the
+case-insensitive filename suffix before either scanner opens the file or applies
+text-size limits. Neither scanner reads, decompresses, token-scans, hashes, or
+inspects embedded metadata in these files. They remain in the selected inputs
+and tree inventory; `presidio_excluded` / `secret_excluded` and their counts
+record them separately from confirmed text scans, unsupported binaries and
+unconfirmed failures. `tree_objects[*].content` uses `excluded_by_policy` for
+each job that confirms the exclusion. The two jobs retain independent outcomes;
+zero confirmed text scans still fail their respective check contracts.
+Scanned UTF-8 text also yields `coverage.path_references` (and
+`path_reference_count`): opaque reference and source-object IDs, redacted source
+path, original physical line/column and span length, and an `absolute` flag.
+Each absolute candidate emits `ABSOLUTE_PATH_REFERENCE` with its reference ID;
+relative candidates are recorded for manual inspection even without a diagnostic.
+The heuristic recognizes POSIX-style `/a/b`, `./a/b`, `../a/b` and `a/b` forms
+in text, including defaults, comments, docs, shell and config files. It does
+not interpret APIs, follow runtime arguments, inspect excluded content or
+distinguish outputs and slash-containing model IDs from resource paths. URL
+and remote-command operands are avoided where recognizable; unusual quoting,
+spaces, escapes and other path grammars can be missed. Candidate text is never
+included in reports or archived logs; an absolute reference is a potential
+portability concern, not evidence of a runtime read.
+Each candidate is compared to inventoried tree paths by the greatest number of
+equal trailing **components**, with filesystem-case-sensitive spelling. A unique
+nonempty best suffix links to an opaque tree object ID (including path-only
+archives/checkpoints); tied best suffixes produce `AMBIGUOUS_PATH_REFERENCE`
+with every tied ID retained. No common trailing component produces
+`POSSIBLE_MISSING_PATH_REFERENCE` (a possible external or missing dependency,
+not a proven file read). An absolute candidate remains a finding even when linked.
+`path_references[*]` records the outcome, suffix length and candidate IDs;
+`path_groups` relates every tree object to source and linked reference IDs and
+individual diagnostic fingerprints. Redacted display paths are for humans,
+never matching keys. Every diagnostic affects the normal check status; no repair
+is attempted.
+When code-style and anonymity groups run together, pydoclint receives selected
+document roots through a consumer-owned manifest rather than path-bearing process
+arguments.
+
+An anonymity-only consumer needs no `src/`, native code-analysis configuration or
+accepted architecture. Code-style
+analysis continues to require `src/` (or `.`) in `working_directories`; add `tests/` to
+include root test files. Other selected directories participate in notebook
+verification, while native code analyzers retain their `src/` and `tests/` scope.
+The production Pylint worker verifies each notebook only once when both groups
+are enabled. Run `eryx/apply.py` after changing selected code-style directories.
 
 ## Install
 
@@ -86,6 +211,9 @@ Every native severity fails the check. Unknown failed output never becomes succe
 Full diagnostics and per-tool statuses: `.eryx/reports/latest.json`. Archived reports
 and raw stdout/stderr/native JSON: `.eryx/reports/<run-id>/`. The report contains
 `eryx.commit` and `eryx.dirty` for the **running checkout** (null when unavailable).
+For secret-enabled Pylint and Presidio workers, stdout/stderr are withheld from archived logs
+because third-party failures can include source contents; structured status and
+diagnostics remain in the report.
 Schemas: `eryx-report/v1` in `report.schema.json`, events: `eryx-event/v1`.
 Positions are one-based; unavailable positions are null. Diagnostics retain native
 rule IDs or explicit adapter categories, stable fingerprints and tool/profile identity.
@@ -96,6 +224,7 @@ rule IDs or explicit adapter categories, stable fingerprints and tool/profile id
 consumer/
   eryx/                    # immutable gitlink; tool code, pins, defaults, tests
   .eryx/                   # versioned consumer settings and integration state
+    presidio.toml          # optional private literal seeds and regex patterns
     readability.toml
     scope.toml
     architecture.ready.json
@@ -112,7 +241,8 @@ consumer/
   tach.toml
 ```
 
-Commit `.gitmodules`, the Eryx gitlink, `.eryx/` settings and native configs.
+Commit `.gitmodules`, the Eryx gitlink, non-private `.eryx/` settings and native configs;
+keep private seeds outside the published review package.
 Ignore only runtime directories, not `.eryx/` wholesale. Analyzer caches and logs
 are consumer-owned; uv retains its normal package cache. Tach may use `.tach/` in
 the consumer. A normal install/check/apply/accept leaves the tool checkout clean.
@@ -138,23 +268,34 @@ consumer in its integration PR after verifying migration. See [ORIGIN.md](ORIGIN
 3. Run Eryx tests and the consumer's checks/runtime tests. From the consumer:
    `uv run --locked --group dev python -B -m unittest discover -s eryx/tests`.
    Tests also need `jsonschema`, supplied by Eryx's own dev group.
-4. Commit/push the tool branch, then use `gh pr create --repo ArtFilippov/eryx`.
-   Include reproduction and verification. Pass CI and review, then merge this PR.
-5. Create a consumer branch **after** the tool PR merges. Fetch Eryx, select the
-   exact merged SHA, reinstall if configs/dependencies changed, and run checks.
-6. Open a **separate consumer PR** with the gitlink and integration changes,
-   linking the Eryx PR. Never point a consumer update at an unpublished commit.
+4. Commit the tool branch in Eryx. After testing the actual local revision
+   (including a local merge result, if applicable), pin its exact SHA in a
+   separate consumer change and run the consumer checks immediately. Reinstall
+   if configs/dependencies changed. Record the running SHA, gitlink, checkout
+   state and test outcomes. The consumer and Eryx remain separate repositories.
+5. Publish the tool changes in an Eryx PR with `gh pr create --repo ArtFilippov/eryx`
+   (or update the existing PR). Include reproduction and verification; record
+   the PR link, or publication pending until it exists. Local integration and
+   completion depend on implementation and verification, not external PR review
+   or merge. Distinguish publication, review and merge in status reports.
+6. After upstream merge, fetch Eryx and synchronize the consumer gitlink to the
+   reachable merged SHA in a separate follow-up. Rerun affected checks and link
+   the Eryx PR. A tested local pin is locally integrated, not a claim of upstream
+   merge.
 
 Standalone development:
 
 ```bash
 uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
+# Only when explicitly requested, run the slower real install/reinstall tests:
+ERYX_RUN_LIFECYCLE=1 uv run --locked --group dev python -B -m unittest discover -s tests -p test_lifecycle.py -v
 ```
 
-CI runs offline orchestration tests, real compatibility regressions and real uv
-installation/native smoke tests on isolated public fixtures; access to `tai` is not
-needed. Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
+The default suite skips the slow `LifecycleTests`; run them only on an explicit
+request. Offline orchestration and real compatibility regressions still run by
+default; access to `tai` is not needed. Eryx's lockfile fixes its test environment;
+consumer lockfiles fix theirs.
 
 Profile/limits: [PROFILE.md](PROFILE.md). Compatibility rationale and provenance:
 [COMPATIBILITY.md](COMPATIBILITY.md). Agent instructions: [AGENTS.md](AGENTS.md).

@@ -41,15 +41,34 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--notebooks")
+    parser.add_argument("--secrets")
+    parser.add_argument("--secret-coverage")
+    parser.add_argument("--notebook-only", action="store_true")
     args = parser.parse_args()
     files = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     if not files:
         raise ValueError("No files for Pylint")
     from pylint.lint import Run
-    patch_pathlib_alias_check()
-    install_architecture_compat()
+    if args.notebooks:
+        from _notebook_checker import configure_notebooks
+        configure_notebooks(json.loads(Path(args.notebooks).read_text(encoding="utf-8")))
+    if args.secrets:
+        from _secret_checker import configure_secrets
+        configure_secrets(json.loads(Path(args.secrets).read_text(encoding="utf-8")))
+    if not args.notebook_only:
+        patch_pathlib_alias_check()
+        install_architecture_compat()
     result = Run(["--rcfile=" + args.config, "--output-format=json2", "--output=" + args.output,
                   "--jobs=1", *files], exit=False)
+    if args.secrets:
+        from _secret_checker import secret_coverage
+        if not args.secret_coverage:
+            raise ValueError("Secret coverage output is required")
+        if not all(result.linter.is_message_enabled(symbol) for symbol in
+                   ("potential-secret", "secret-scan-failed")):
+            raise ValueError("Secret scanner messages are disabled in the Pylint configuration")
+        Path(args.secret_coverage).write_text(json.dumps(secret_coverage()), encoding="utf-8")
     return result.linter.msg_status
 
 
