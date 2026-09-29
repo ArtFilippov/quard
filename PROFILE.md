@@ -29,11 +29,23 @@ consumer's source scope. Eryx's own code is verified by its autonomous test suit
 
 ## Basic LCOM4
 
-Every class in discovered production and test `.py` files is checked, including
-fixtures and classes with no methods; `.pyi` stubs are skipped. An eligible method
-is a function or async function declared directly in the class body (including
-dunder methods and individual property getters, setters and deleters). Its score
-is the number of connected method groups. Direct calls through the bound receiver
+Every eligible concrete class in discovered production and test `.py` files is checked,
+including fixtures, data-only classes and concrete ABCs; `.pyi` stubs are skipped.
+Protocol declarations and ABCs with outstanding abstract methods are skipped.
+Concrete subclasses of Protocol declarations are checked. Abstract status follows
+statically identifiable local inheritance and explicit `abc`/`typing` imports;
+unresolved third-party abstract bases do not exempt a class. An abstractmethod
+decorator outside an ABC does not by itself exempt a class.
+
+An eligible method is a function or async function declared directly in the class
+body, excluding Python-recognized special methods (not arbitrary user-defined
+dunders), `typing`/`typing_extensions` overload signatures, methods with `abc`
+abstract decorators even with substantive bodies, and no-op methods. No-op means `pass`,
+`...`, a docstring alone, `return None`, or `raise NotImplementedError` (including
+an instance), with an optional leading docstring. Individual substantive property
+getters, setters and deleters remain distinct vertices. No separate diagnostic is
+issued for excluded methods; a concrete class with none scores 0 and fails.
+The score is the number of connected method groups. Direct calls through the bound receiver
 or lexical class name connect to methods declared in that class. Access to the same
 direct instance field connects methods, as does access to the same direct class
 field; instance and class fields remain distinct even when their names match.
@@ -47,8 +59,9 @@ classes are scored independently. A class with no eligible methods scores 0; a
 connected class scores 1. Scores other than 1 produce class-location diagnostics with the
 score and disconnected groups, without a baseline or exemptions.
 
-This pass is syntactic: it does not resolve receiver aliases, inheritance, indirect
-calls, dynamic attributes (`getattr`), qualified decorators, or runtime dispatch.
+This pass is syntactic: it does not resolve receiver aliases, external inheritance, indirect
+calls, dynamic attributes (`getattr`), decorators beyond explicit `abc`/`typing`
+imports, or runtime dispatch.
 An undeclared receiver call is not assumed to be a field access (it may be an
 inherited method); callable fields invoked this way do not create field edges.
 Methods with the same name are treated as distinct declarations. Parser and worker

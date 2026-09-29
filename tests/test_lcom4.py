@@ -74,10 +74,10 @@ class Nested:
             self.two()
         return deferred
     def two(self):
-        pass
+        return 2
 ''')
         self.put("src/demo/tests/fixture.py", "class TestFixture:\n    pass\n")
-        self.put("tests/test_example.py", "class TestExample:\n    def a(self): pass\n    def b(self): pass\n")
+        self.put("tests/test_example.py", "class TestExample:\n    def a(self): return 1\n    def b(self): return 2\n")
         self.put("src/demo/generated/bad.py", "class Excluded:\n    pass\n")
         self.put("src/demo/stub.pyi", "class Stub: ...\n")
         result, raw, files = self.run_worker()
@@ -102,10 +102,10 @@ class Accessors:
         return 1
     @value.setter
     def value(self, new):
-        pass
+        return new
     @value.deleter
     def value(self):
-        pass
+        return 2
     def read(self):
         return self.value
 
@@ -150,7 +150,7 @@ class ClassCalls:
         klass.second()
     @staticmethod
     def second():
-        pass
+        return 1
 
 class NamedClassCalls:
     @staticmethod
@@ -158,7 +158,7 @@ class NamedClassCalls:
         NamedClassCalls.second()
     @staticmethod
     def second():
-        pass
+        return 1
 
 class DistinctFields:
     shared = 1
@@ -181,11 +181,11 @@ class StaticCallArgument:
         cls.second()
     @staticmethod
     def second():
-        pass
+        return 1
 
 class Parent:
     def inherited(self):
-        pass
+        return 1
 
 class Child(Parent):
     def first(self):
@@ -207,13 +207,13 @@ class Scopes:
         def deferred():
             receiver.third()
         class Nested:
-            def a(self): pass
-            def b(self): pass
+            def a(self): return 1
+            def b(self): return 2
         return [receiver.field for _ in range(1)]
     def second(receiver):
         return receiver.field
     def third(receiver):
-        pass
+        return 3
 ''')
         result, _, _ = self.run_worker()
         self.assertEqual({d["symbol"]: d["groups"] for d in result["diagnostics"]},
@@ -224,6 +224,125 @@ class Scopes:
                           "UnknownCall": [["first"], ["second"]],
                           "Scopes": [["first", "second"], ["third"]],
                           "Scopes.Nested": [["a"], ["b"]]})
+
+    def test_python_methods_and_placeholders_are_not_vertices(self):
+        self.put("src/demo/eligibility.py", '''
+from abc import abstractmethod as abstract
+from typing import overload as signature
+import typing_extensions as te
+
+class OnlyHooks:
+    def __init__(self): self.value = 1
+    def __iter__(self): return iter(())
+    def __made_up__(self): return 1
+
+class Placeholders:
+    def a(self): pass
+    def b(self): ...
+    def c(self): """documented"""
+    def d(self): """documented"""; return None
+    async def e(self): """documented"""; raise NotImplementedError('later')
+    def f(self): raise NotImplementedError
+    @signature
+    def overloaded(self, value: int): ...
+    @te.overload
+    def overloaded(self, value: str): ...
+    @abstract
+    def abstract(self): return 1
+
+class Concrete:
+    def __init__(self): self.one()
+    def one(self): return 1
+    def two(self): return 2
+
+class UserDunder:
+    def __custom__(self): return 1
+    def other(self): return 2
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual({d["symbol"]: (d["score"], d["groups"])
+                          for d in result["diagnostics"]},
+                         {"Placeholders": (0, []),
+                          "Concrete": (2, [["one"], ["two"]]),
+                          "UserDunder": (2, [["__custom__"], ["other"]])})
+
+    def test_abstract_abc_protocol_and_unresolved_external_bases(self):
+        self.put("tests/test_abstract.py", '''
+from abc import ABC as AbstractBase, abstractmethod as abstract, ABCMeta as Meta, abstractproperty
+from typing import Protocol as Contract
+import abc
+from external_package import Unresolved
+
+class ContractBase(Contract):
+    def work(self): ...
+
+class ExtendedContract(ContractBase, Contract):
+    def other(self): ...
+
+class ContractImpl(ContractBase):
+    def work(self): return 1
+    def other(self): return 2
+
+class Base(AbstractBase):
+    @abstract
+    def one(self): return 1
+    @abc.abstractmethod
+    def two(self): raise NotImplementedError
+
+class Partial(Base):
+    def one(self): return 1
+
+class Full(Partial):
+    def two(self): return 2
+    def three(self): return 3
+
+class ImplementedButEmpty(Partial):
+    def two(self): pass
+
+class Direct(metaclass=Meta):
+    @abstract
+    def one(self): ...
+
+class Legacy(AbstractBase):
+    @abstractproperty
+    def value(self): return 1
+
+class Ready(metaclass=abc.ABCMeta):
+    def a(self): return 1
+    def b(self): return 2
+
+class NonABC:
+    @abstract
+    def one(self): return 1
+    def two(self): return 2
+
+class Unknown(Unresolved):
+    def a(self): return 1
+    def b(self): return 2
+
+class DataOnly(AbstractBase):
+    value = 1
+
+class EmptyImpl(ContractBase):
+    pass
+
+if True:
+    class Conditional(AbstractBase):
+        @abstract
+        def pending(self): return 1
+        class Nested:
+            def one(self): return 1
+            def two(self): return 2
+''')
+        result, raw, _ = self.run_worker()
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual({d["symbol"]: d["score"] for d in result["diagnostics"]},
+                         {"ContractImpl": 2, "Full": 2, "Ready": 2,
+                          "Unknown": 2, "DataOnly": 0, "EmptyImpl": 0,
+                          "ImplementedButEmpty": 0,
+                          "Conditional.Nested": 2})
 
     def test_syntax_failure_is_infrastructure_error_and_preserves_other_results(self):
         self.put("src/demo/bad.py", "class Broken(\n")
