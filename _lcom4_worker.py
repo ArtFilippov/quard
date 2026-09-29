@@ -11,22 +11,40 @@ import sys
 class MethodReferences(ast.NodeVisitor):
     """References in one method body, excluding deferred nested scopes."""
 
-    def __init__(self, receivers: set[str], methods: set[str]):
-        self.receivers = receivers
+    def __init__(self, instance_receiver: str | None, class_receivers: set[str],
+                 methods: set[str]):
+        self.instance_receiver = instance_receiver
+        self.class_receivers = class_receivers
         self.methods = methods
         self.calls: set[str] = set()
-        self.fields: set[str] = set()
+        self.fields: set[tuple[str, str]] = set()
+
+    def receiver_kind(self, name: str) -> str | None:
+        if name == self.instance_receiver:
+            return "instance"
+        if name in self.class_receivers:
+            return "class"
+        return None
 
     def visit_Call(self, node: ast.Call) -> None:
         if (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in self.receivers and node.func.attr in self.methods):
-            self.calls.add(node.func.attr)
-        self.generic_visit(node)
+                and self.receiver_kind(node.func.value.id) is not None):
+            if node.func.attr in self.methods:
+                self.calls.add(node.func.attr)
+            # An undeclared call could be inherited or dynamically supplied; its
+            # target is not evidence of a field shared with another method.
+            for arg in node.args:
+                self.visit(arg)
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+        else:
+            self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if (isinstance(node.value, ast.Name) and node.value.id in self.receivers
-                and node.attr not in self.methods):
-            self.fields.add(node.attr)
+        if isinstance(node.value, ast.Name) and node.attr not in self.methods:
+            kind = self.receiver_kind(node.value.id)
+            if kind is not None:
+                self.fields.add((kind, node.attr))
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -47,12 +65,19 @@ def components(node: ast.ClassDef) -> list[list[str]]:
     names = {item.name for item in methods}
     references = []
     for method in methods:
-        receivers = {node.name}
-        if method.args.posonlyargs or method.args.args:
-            if not any(isinstance(decorator, ast.Name) and decorator.id == "staticmethod"
-                       for decorator in method.decorator_list):
-                receivers.add((method.args.posonlyargs + method.args.args)[0].arg)
-        refs = MethodReferences(receivers, names)
+        instance_receiver = None
+        class_receivers = {node.name}
+        arguments = method.args.posonlyargs + method.args.args
+        static = any(isinstance(decorator, ast.Name) and decorator.id == "staticmethod"
+                     for decorator in method.decorator_list)
+        classmethod = any(isinstance(decorator, ast.Name) and decorator.id == "classmethod"
+                          for decorator in method.decorator_list)
+        if arguments and not static:
+            if classmethod:
+                class_receivers.add(arguments[0].arg)
+            else:
+                instance_receiver = arguments[0].arg
+        refs = MethodReferences(instance_receiver, class_receivers, names)
         for statement in method.body:
             refs.visit(statement)
         references.append(refs)

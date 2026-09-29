@@ -32,17 +32,26 @@ consumer's source scope. Eryx's own code is verified by its autonomous test suit
 Every class in discovered production and test `.py` files is checked, including
 fixtures and classes with no methods; `.pyi` stubs are skipped. An eligible method
 is a function or async function declared directly in the class body (including
-dunder methods). Its score is the number of connected method groups: direct
-`self`/`cls`/class-name method calls and access to the same `self`/`cls`/class-name
-field connect methods. The first positional parameter is treated as the receiver
-except for a directly decorated `@staticmethod`. Nested function bodies do not
-contribute references. A class with no eligible methods scores 0; a connected
-class scores 1. Scores other than 1 produce class-location diagnostics with the
+dunder methods and individual property getters, setters and deleters). Its score
+is the number of connected method groups. Direct calls through the bound receiver
+or lexical class name connect to methods declared in that class. Access to the same
+direct instance field connects methods, as does access to the same direct class
+field; instance and class fields remain distinct even when their names match.
+The first positional parameter is the instance receiver (whatever its name), or
+the class receiver for a directly decorated `@classmethod`. Directly decorated
+`@staticmethod` functions have no bound receiver, but can access fields through
+the class name. Property access alone does not create a getter/setter call edge;
+accessors with the same name are distinct vertices. Comprehensions in method bodies
+contribute references; nested function, lambda and class bodies do not. Nested
+classes are scored independently. A class with no eligible methods scores 0; a
+connected class scores 1. Scores other than 1 produce class-location diagnostics with the
 score and disconnected groups, without a baseline or exemptions.
 
-This first pass is syntactic: it does not resolve aliases, inheritance, indirect
-calls, dynamic attributes, qualified decorators, or runtime dispatch. Methods
-with the same name are treated as distinct declarations. Parser and worker
+This pass is syntactic: it does not resolve receiver aliases, inheritance, indirect
+calls, dynamic attributes (`getattr`), qualified decorators, or runtime dispatch.
+An undeclared receiver call is not assumed to be a field access (it may be an
+inherited method); callable fields invoked this way do not create field edges.
+Methods with the same name are treated as distinct declarations. Parser and worker
 failures are infrastructure errors (exit 2), not passing results.
 
 ## Readability

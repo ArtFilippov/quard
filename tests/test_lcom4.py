@@ -94,6 +94,137 @@ class Nested:
         self.assertEqual(len(raw["diagnostics"]), 5)
         self.assertIsNone(raw["execution_error"])
 
+    def test_accessors_are_distinct_vertices_without_implicit_property_edges(self):
+        self.put("src/demo/accessors.py", '''
+class Accessors:
+    @property
+    def value(self):
+        return 1
+    @value.setter
+    def value(self, new):
+        pass
+    @value.deleter
+    def value(self):
+        pass
+    def read(self):
+        return self.value
+
+class SharedBackingField:
+    @property
+    def value(self):
+        return self._value
+    @value.setter
+    def value(self, new):
+        self._value = new
+    @value.deleter
+    def value(self):
+        del self._value
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual(result["status"], "violations")
+        self.assertEqual({d["symbol"]: d["groups"] for d in result["diagnostics"]},
+                         {"Accessors": [["value"], ["value"], ["value"], ["read"]]})
+
+    def test_receiver_calls_field_kinds_scopes_and_inheritance(self):
+        self.put("src/demo/relationships.py", '''
+class Renamed:
+    def first(this):
+        this.second()
+    def second(this):
+        this.field = 1
+    async def third(other):
+        return other.field
+
+class ClassAndStatic:
+    shared = 1
+    @classmethod
+    def first(klass):
+        return klass.shared
+    @staticmethod
+    def second(arg):
+        return ClassAndStatic.shared
+
+class ClassCalls:
+    @classmethod
+    def first(klass):
+        klass.second()
+    @staticmethod
+    def second():
+        pass
+
+class NamedClassCalls:
+    @staticmethod
+    def first(arg):
+        NamedClassCalls.second()
+    @staticmethod
+    def second():
+        pass
+
+class DistinctFields:
+    shared = 1
+    def first(self):
+        return self.shared
+    @classmethod
+    def second(cls):
+        return cls.shared
+
+class StaticArgument:
+    @staticmethod
+    def first(self):
+        return self.shared
+    def second(instance):
+        return instance.shared
+
+class StaticCallArgument:
+    @staticmethod
+    def first(cls):
+        cls.second()
+    @staticmethod
+    def second():
+        pass
+
+class Parent:
+    def inherited(self):
+        pass
+
+class Child(Parent):
+    def first(self):
+        alias = self
+        alias.second()
+        self.inherited()
+        getattr(self, "second")()
+    def second(self):
+        self.inherited()
+
+class UnknownCall:
+    def first(self):
+        self.external()
+    def second(self):
+        self.external()
+
+class Scopes:
+    def first(receiver):
+        def deferred():
+            receiver.third()
+        class Nested:
+            def a(self): pass
+            def b(self): pass
+        return [receiver.field for _ in range(1)]
+    def second(receiver):
+        return receiver.field
+    def third(receiver):
+        pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({d["symbol"]: d["groups"] for d in result["diagnostics"]},
+                         {"DistinctFields": [["first"], ["second"]],
+                          "StaticArgument": [["first"], ["second"]],
+                          "StaticCallArgument": [["first"], ["second"]],
+                          "Child": [["first"], ["second"]],
+                          "UnknownCall": [["first"], ["second"]],
+                          "Scopes": [["first", "second"], ["third"]],
+                          "Scopes.Nested": [["a"], ["b"]]})
+
     def test_syntax_failure_is_infrastructure_error_and_preserves_other_results(self):
         self.put("src/demo/bad.py", "class Broken(\n")
         self.put("tests/test_fixture.py", "class StillChecked: pass\n")
