@@ -78,6 +78,30 @@ with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing
 LCOM4 runs as an independent job over discovered production and test `.py` classes;
 see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
 
+### Greenfield per-change LCOM4 checks
+
+After any change in a greenfield project, run the normal check with `--lcom_files`
+set to the changed Python files, or `--lcom_files ""` when no Python files changed:
+
+```bash
+uv run --locked --group dev python eryx/check.py --lcom_files "src/example.py tests/test_example.py"
+uv run --locked --group dev python eryx/check.py --lcom_files ""
+```
+
+Pass project-relative `.py` paths under `src/` or `tests/`, separated by whitespace;
+quote individual paths containing spaces inside the argument. Paths must exist and
+belong to Eryx's discovered, non-excluded source scope. Repeated paths are checked
+once. Only LCOM4 is narrowed: Pylint, Pyright, pydoclint and Tach keep their normal
+project-wide coverage. An empty argument marks LCOM4 **skipped**, not passed.
+The report's `coverage.lcom4` records the requested value, selected paths and
+paths successfully analyzed; `tools` records the LCOM4 job status.
+
+Run the **full check without `--lcom_files` before merge and in CI**:
+
+```bash
+uv run --locked --group dev python eryx/check.py
+```
+
 | Exit | Meaning |
 |---:|---|
 | 0 | All checks completed, no diagnostics |

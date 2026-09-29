@@ -10,6 +10,7 @@ from importlib import metadata
 import json
 import os
 from pathlib import Path
+import shlex
 import sys
 sys.dont_write_bytecode = True
 import time
@@ -45,7 +46,34 @@ def binary(name: str) -> str:
     return str(Path(sys.executable).parent / name)
 
 
-def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architecture_ready: bool) -> list[dict[str, Any]]:
+def select_lcom_files(files: dict[str, list[str]], requested: str | None) -> list[str]:
+    """Resolve explicit paths against the same discovered scope as the full check."""
+    available = {path for profile in ("production", "tests") for path in files[profile]
+                 if path.endswith(".py")}
+    if requested is None:
+        return sorted(available)
+    if requested == "":
+        return []
+    try:
+        paths = shlex.split(requested)
+    except ValueError as exc:
+        raise EryxError("INVALID_LCOM_FILES", f"Invalid --lcom_files quoting: {exc}") from exc
+    if not paths:
+        raise EryxError("INVALID_LCOM_FILES", "--lcom_files must contain .py paths or be exactly empty to skip LCOM4.")
+    selected = []
+    for raw in paths:
+        path = Path(raw)
+        if (path.is_absolute() or ".." in path.parts or path.suffix != ".py"
+                or path.as_posix() not in available):
+            raise EryxError("INVALID_LCOM_FILES",
+                            f"Invalid or out-of-scope --lcom_files path: {raw!r}; expected an existing, "
+                            "non-excluded, non-symlinked .py file under src/ or tests/.")
+        selected.append(path.as_posix())
+    return list(dict.fromkeys(selected))
+
+
+def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architecture_ready: bool,
+              lcom_files: list[str] | None = None) -> list[dict[str, Any]]:
     # Pylint opens --output before the runner writes captured stdout/stderr logs.
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
@@ -62,12 +90,12 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                      "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"),
                               "--manifest", str(manifest), "--config", str(config), "--output", str(output)],
                       "json_file": output})
-    source_files = [path for profile in ("production", "tests") for path in files[profile]
-                    if path.endswith(".py")]
-    manifest = run_dir / "lcom4-files.json"
-    write_json(manifest, source_files, root)
-    jobs.append({"name": "lcom4", "tool": "lcom4", "argv": [sys.executable,
-                 str(tool_dir() / "_lcom4_worker.py"), "--manifest", str(manifest)]})
+    source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files
+    if lcom_files is None or source_files:
+        manifest = run_dir / "lcom4-files.json"
+        write_json(manifest, source_files, root)
+        jobs.append({"name": "lcom4", "tool": "lcom4", "argv": [sys.executable,
+                     str(tool_dir() / "_lcom4_worker.py"), "--manifest", str(manifest)]})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])
@@ -106,6 +134,7 @@ def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
 
 
 def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
+               lcom_files: str | None = None,
                capture_fn: Callable[..., dict[str, Any]] = capture,
                versions_fn: Callable[..., Any] = installed_versions) -> dict[str, Any]:
     start = time.monotonic()
@@ -116,6 +145,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     diagnostics = []
     versions: dict[str, str | None] = {}
     files: dict[str, list[str]] = {"production": [], "tests": [], "excluded_directories": []}
+    lcom_coverage: dict[str, Any] = {"mode": "full" if lcom_files is None else "selected",
+                                     "requested": lcom_files, "selected_files": [], "analyzed_files": []}
     architecture_ready = False
     eryx_version = "unknown"
     results = []
@@ -127,6 +158,20 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         files = discover_files(root, read_scope(root))
         if not files["production"]:
             raise EryxError("EMPTY_SOURCE_SCOPE", "No Python source files found under src/. Refusing an empty successful check.")
+        try:
+            selected = select_lcom_files(files, lcom_files)
+            lcom_coverage["mode"] = ("full" if lcom_files is None else
+                                     "skipped" if lcom_files == "" else "selected")
+            lcom_coverage["selected_files"] = selected
+            if lcom_files == "":
+                results.append({"name": "lcom4", "tool": "lcom4", "status": "skipped", "exit_code": None,
+                                "duration_seconds": 0, "error": None, "raw_output": {}})
+        except EryxError as exc:
+            selected = []
+            lcom_coverage["mode"] = "invalid"
+            diagnostics.append(diagnostic("lcom4", exc.code, str(exc), is_infrastructure_error=True))
+            results.append({"name": "lcom4", "tool": "lcom4", "status": "error", "exit_code": None,
+                            "duration_seconds": 0, "error": exc.code, "raw_output": {}})
         try:
             mismatch = limit_drift(root)
             if mismatch:
@@ -142,7 +187,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         except EryxError as exc:
             diagnostics.append(diagnostic("system", "ARCHITECTURE_NOT_INITIALIZED" if not (root / ".eryx/architecture.ready.json").exists() else exc.code,
                 str(exc) + " Run eryx/init_architecture.py, review tach.toml, then run it with --accept.", is_infrastructure_error=True))
-        jobs = make_jobs(root, run_dir, files, architecture_ready)
+        jobs = make_jobs(root, run_dir, files, architecture_ready,
+                         None if lcom_files is None else selected)
         workers = 1 if serial else min(4, max(1, os.cpu_count() or 1), len(jobs))
         # Native analyzers complete independently. A failing job never cancels the others.
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -157,6 +203,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                               "diagnostics": [diagnostic(job["tool"], "REPORT_WRITE_ERROR", str(exc), is_infrastructure_error=True)]}
                 diagnostics.extend(result.pop("diagnostics"))
                 results.append(result)
+                if job["name"] == "lcom4" and result["status"] in {"passed", "violations"}:
+                    lcom_coverage["analyzed_files"] = selected
         if not architecture_ready:
             for name in ("tach", "tach-external"):
                 results.append({"name": name, "tool": name, "status": "blocked", "exit_code": None,
@@ -170,7 +218,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
     report = {"schema_version": SCHEMA, "eryx_version": eryx_version, "eryx": tool_revision(),
               "run_id": run_id, "status": {0: "passed", 1: "violations", 2: "error"}[code], "exit_code": code,
               "duration_seconds": round(time.monotonic() - start, 3), "python": sys.version.split()[0],
-              "versions": versions, "coverage": files,
+              "versions": versions, "coverage": {**files, "lcom4": lcom_coverage},
               "summary": {"diagnostics": len(diagnostics), "by_tool": dict(sorted(counts.items())),
                           "infrastructure_errors": sum(bool(d.get("is_infrastructure_error")) for d in diagnostics)},
               "tools": sorted(results, key=lambda item: item["name"]), "diagnostics": diagnostics,
@@ -215,13 +263,14 @@ def main() -> int:
     parser.add_argument("--serial", action="store_true", help="Run all analyzers sequentially (same coverage)")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum seconds per analyzer (default 600)")
     parser.add_argument("--max-diagnostics", type=int, default=100, help="Limit human output only; JSON always contains all diagnostics")
+    parser.add_argument("--lcom_files", help="Whitespace-separated project-relative .py paths for LCOM4 only; empty string skips LCOM4")
     args = parser.parse_args()
     if args.timeout < 1 or args.max_diagnostics < 0:
         parser.error("timeout must be positive and max-diagnostics nonnegative")
     try:
         root = project_dir(args.project)
         with repo_lock(root):
-            report = run_checks(root, serial=args.serial, timeout=args.timeout)
+            report = run_checks(root, serial=args.serial, timeout=args.timeout, lcom_files=args.lcom_files)
         display(report, args.json, args.max_diagnostics)
         return report["exit_code"]
     except Exception as exc:

@@ -26,6 +26,9 @@ in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not subst
 reports. `.pyi` files are checked by Pyright; other tools use their native scope.
 `__init__.py` is included. Root scripts, notebooks and Eryx itself are outside the
 consumer's source scope. Eryx's own code is verified by its autonomous test suite.
+`check.py --lcom_files` narrows only LCOM4 to explicitly selected, existing `.py`
+files in that scope; `--lcom_files ""` skips LCOM4. Without the option, full
+LCOM4 coverage is retained. Other analyzers always use their normal scopes.
 
 ## Basic LCOM4
 

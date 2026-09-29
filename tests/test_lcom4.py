@@ -10,8 +10,9 @@ import unittest
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX))
 
+import _common
 import _policy
-from check import execute_job, make_jobs
+from check import execute_job, make_jobs, select_lcom_files
 
 
 class Lcom4Test(unittest.TestCase):
@@ -93,6 +94,36 @@ class Nested:
         self.assertEqual((split["path"], split["line"], split["column"]), ("src/demo/core.py", 14, 1))
         self.assertEqual(len(raw["diagnostics"]), 5)
         self.assertIsNone(raw["execution_error"])
+
+    def test_selected_production_and_test_files_run_real_worker(self):
+        self.put("src/demo/core.py", "class Core: pass\n")
+        self.put("src/demo/unselected.py", "class Unselected: pass\n")
+        self.put("tests/test_fixture.py", "class Fixture: pass\n")
+        files = _policy.discover_files(self.root, _policy.read_scope(self.root))
+        selected = select_lcom_files(files, "tests/test_fixture.py src/demo/core.py tests/test_fixture.py")
+        job = next(job for job in make_jobs(self.root, self.run_dir, files, False, selected)
+                   if job["name"] == "lcom4")
+        result = execute_job(job, self.root, self.run_dir, timeout=30)
+        self.assertEqual({d["symbol"] for d in result["diagnostics"]}, {"Core", "Fixture"})
+        self.assertEqual(json.loads((self.run_dir / "lcom4-files.json").read_text(encoding="utf-8")),
+                         ["tests/test_fixture.py", "src/demo/core.py"])
+
+    def test_quoted_file_name_with_spaces_is_selectable(self):
+        self.put("src/demo/a file.py", "class Example: pass\n")
+        files = _policy.discover_files(self.root, _policy.read_scope(self.root))
+        self.assertEqual(select_lcom_files(files, "'src/demo/a file.py'"), ["src/demo/a file.py"])
+
+    def test_excluded_symlink_and_stub_are_not_selectable(self):
+        self.put("src/demo/core.py", "class Core: pass\n")
+        self.put("src/demo/generated/skip.py", "class Skip: pass\n")
+        self.put("src/demo/stub.pyi", "class Stub: ...\n")
+        files = _policy.discover_files(self.root, _policy.read_scope(self.root))
+        for path in ("src/demo/generated/skip.py", "src/demo/stub.pyi", "src/demo/absent.py"):
+            with self.subTest(path=path), self.assertRaises(_common.EryxError):
+                select_lcom_files(files, path)
+        (self.root / "src/demo/linked.py").symlink_to(self.root / "src/demo/core.py")
+        with self.assertRaises(_common.EryxError):
+            _policy.discover_files(self.root, _policy.read_scope(self.root))
 
     def test_accessors_are_distinct_vertices_without_implicit_property_edges(self):
         self.put("src/demo/accessors.py", '''
