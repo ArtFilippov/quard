@@ -147,6 +147,36 @@ def parse_tach(text: str, root: Path, external: bool = False) -> list[dict[str, 
     return items
 
 
+def parse_lcom4(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    obj = find_json(text, "eryx_lcom4_adapter")
+    if obj["eryx_lcom4_adapter"] != 1 or not isinstance(obj.get("diagnostics"), list):
+        raise ValueError("Unsupported LCOM4 adapter report schema")
+    error = obj.get("execution_error")
+    if error is not None and error not in {"LCOM4_PARSE_ERROR", "LCOM4_EXECUTION_ERROR"}:
+        raise ValueError("Unknown LCOM4 execution error")
+    items = []
+    for entry in obj["diagnostics"]:
+        if not isinstance(entry, dict) or entry.get("rule") not in {"LCOM4", "LCOM4_PARSE_ERROR", "LCOM4_EXECUTION_ERROR"}:
+            raise ValueError("Malformed LCOM4 diagnostic")
+        rule = entry["rule"]
+        if not isinstance(entry.get("message"), str):
+            raise ValueError("Missing LCOM4 message")
+        if rule == "LCOM4" and (type(entry.get("score")) is not int or entry["score"] == 1
+                                 or entry["score"] < 0 or not isinstance(entry.get("groups"), list)
+                                 or not isinstance(entry.get("path"), str)
+                                 or type(entry.get("line")) is not int or type(entry.get("column")) is not int):
+            raise ValueError("Malformed LCOM4 score or class location")
+        items.append(diagnostic("lcom4", rule, entry["message"],
+                                path=relative_path(entry.get("path"), root), line=entry.get("line"),
+                                column=entry.get("column"), symbol=entry.get("symbol"),
+                                score=entry.get("score"), groups=entry.get("groups"),
+                                is_infrastructure_error=rule != "LCOM4",
+                                documentation_url="https://www.aivosto.com/project/help/pm-oo-cohesion.html#LCOM4"))
+    if bool(error) != any(item["is_infrastructure_error"] for item in items):
+        raise ValueError("LCOM4 error/diagnostic mismatch")
+    return items, error
+
+
 def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None) -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
@@ -169,6 +199,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             items = parse_pydoclint(text, root)
             if result.get("exit_code") not in {0, 1}:
                 error = error or "PYDOCLINT_EXECUTION_ERROR"
+        elif tool == "lcom4":
+            items, parse_error = parse_lcom4(result.get("stdout", ""), root)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "LCOM4_EXECUTION_ERROR"
         elif tool.startswith("tach"):
             if '"eryx_tach_adapter"' in text:
                 obj = find_json(text, "eryx_tach_adapter")

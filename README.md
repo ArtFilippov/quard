@@ -75,6 +75,32 @@ Check supports `--serial`, `--timeout 900` (per analyzer) and
 `--max-diagnostics 50` (human output only). All jobs complete independently, with
 up to four concurrent analyzers. Pylint runs production and test profiles separately,
 with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing.
+LCOM4 runs as an independent job over discovered production and test `.py` classes;
+see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
+
+### Greenfield per-change LCOM4 checks
+
+After any change in a greenfield project, run the normal check with `--lcom_files`
+set to the changed Python files, or `--lcom_files ""` when no Python files changed:
+
+```bash
+uv run --locked --group dev python eryx/check.py --lcom_files "src/example.py tests/test_example.py"
+uv run --locked --group dev python eryx/check.py --lcom_files ""
+```
+
+Pass project-relative `.py` paths under `src/` or `tests/`, separated by whitespace;
+quote individual paths containing spaces inside the argument. Paths must exist and
+belong to Eryx's discovered, non-excluded source scope. Repeated paths are checked
+once. Only LCOM4 is narrowed: Pylint, Pyright, pydoclint and Tach keep their normal
+project-wide coverage. An empty argument marks LCOM4 **skipped**, not passed.
+The report's `coverage.lcom4` records the requested value, selected paths and
+paths successfully analyzed; `tools` records the LCOM4 job status.
+
+Run the **full check without `--lcom_files` before merge and in CI**:
+
+```bash
+uv run --locked --group dev python eryx/check.py
+```
 
 | Exit | Meaning |
 |---:|---|
@@ -152,9 +178,9 @@ uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
 ```
 
-CI runs offline orchestration tests, real compatibility regressions and real uv
-installation/native smoke tests on isolated public fixtures; access to `tai` is not
-needed. Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
+CI runs offline orchestration tests and real compatibility regressions on isolated
+public fixtures; `LifecycleTests` is always skipped. Access to `tai` is not needed.
+Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
 
 Profile/limits: [PROFILE.md](PROFILE.md). Compatibility rationale and provenance:
 [COMPATIBILITY.md](COMPATIBILITY.md). Agent instructions: [AGENTS.md](AGENTS.md).

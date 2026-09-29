@@ -324,7 +324,9 @@ class RunnerTests(unittest.TestCase):
         failures = failures or {}
         seen = []
         def fake(argv, cwd, timeout):
-            if "--manifest" in argv:
+            if str(ERYX / "_lcom4_worker.py") in argv:
+                name = "lcom4"
+            elif "--manifest" in argv:
                 name = "pylint-tests" if "tests" in argv[argv.index("--manifest") + 1] else "pylint-production"
                 output = Path(argv[argv.index("--output") + 1])
                 _common.write_json(output, {"messages": []})
@@ -337,38 +339,94 @@ class RunnerTests(unittest.TestCase):
             seen.append(name)
             if name in failures:
                 return native_result(argv, **failures[name])
-            return native_result(argv, stdout='{"generalDiagnostics": []}' if name == "pyright" else "")
+            return native_result(argv, stdout=('{"generalDiagnostics": []}' if name == "pyright" else
+                                 '{"eryx_lcom4_adapter": 1, "diagnostics": [], "execution_error": null}'
+                                 if name == "lcom4" else ""))
         return fake, seen
 
     def test_all_tools_pass_mocked(self):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
+        self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")
+        self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"],
+                         report["coverage"]["lcom4"]["selected_files"])
         self.assertTrue((self.root / report["latest_report_path"]).is_file())
         import jsonschema
         jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))
+
+    def test_selected_lcom4_deduplicates_without_narrowing_other_jobs(self):
+        fake, seen = self.fake_tools()
+        report = check.run_checks(self.root, lcom_files="tests/test_value.py src/demo/domain/api.py tests/test_value.py",
+                                  capture_fn=fake, versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 0, report)
+        self.assertEqual(len(seen), 7)
+        coverage = report["coverage"]["lcom4"]
+        self.assertEqual(coverage["mode"], "selected")
+        self.assertEqual(coverage["selected_files"], ["tests/test_value.py", "src/demo/domain/api.py"])
+        self.assertEqual(coverage["analyzed_files"], coverage["selected_files"])
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "passed")
+        manifest = self.root / report["report_path"].replace("report.json", "lcom4-files.json")
+        self.assertEqual(_common.read_json(manifest), coverage["selected_files"])
+
+    def test_explicit_empty_lcom4_skips_only_lcom4(self):
+        fake, seen = self.fake_tools()
+        report = check.run_checks(self.root, lcom_files="", capture_fn=fake,
+                                  versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 0, report)
+        self.assertEqual(len(seen), 6)
+        self.assertNotIn("lcom4", seen)
+        self.assertEqual(report["coverage"]["lcom4"], {"mode": "skipped", "requested": "",
+                         "selected_files": [], "analyzed_files": []})
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "skipped")
+        import jsonschema
+        jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))
+
+    def test_failed_lcom4_job_does_not_claim_analysis(self):
+        fake, _ = self.fake_tools({"lcom4": {"stdout": "not JSON", "code": 1}})
+        report = check.run_checks(self.root, lcom_files="src/demo/domain/api.py",
+                                  capture_fn=fake, versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 2)
+        self.assertEqual(report["coverage"]["lcom4"]["selected_files"], ["src/demo/domain/api.py"])
+        self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"], [])
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "error")
+
+    def test_invalid_lcom4_path_errors_while_other_jobs_run(self):
+        for requested in ("src/missing.py", "src/demo/domain/api.pyi", "../outside.py",
+                          "/tmp/outside.py", "src/demo/generated/skip.py", "src/demo/domain/../domain/api.py",
+                          "tests/missing.py", " "):
+            with self.subTest(requested=requested):
+                fake, seen = self.fake_tools()
+                report = check.run_checks(self.root, lcom_files=requested, capture_fn=fake,
+                                          versions_fn=lambda root: ({}, []))
+                self.assertEqual(report["exit_code"], 2, report)
+                self.assertEqual(len(seen), 6)
+                self.assertNotIn("lcom4", seen)
+                self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "error")
+                self.assertIn("INVALID_LCOM_FILES", {d["rule"] for d in report["diagnostics"]})
+                self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"], [])
 
     def test_no_fail_fast_and_error_precedence(self):
         fake, seen = self.fake_tools({"pyright": {"stdout": "broken", "code": 2},
                                      "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
         self.assertTrue(any(d["rule"] == "DOC101" for d in report["diagnostics"]))
 
     def test_violation_code_one(self):
         fake, seen = self.fake_tools({"pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 1)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
 
     def test_not_initialized_not_green(self):
         (self.root / ".eryx/architecture.ready.json").unlink()
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 4)
+        self.assertEqual(len(seen), 5)
         self.assertEqual(sum(t["status"] == "blocked" for t in report["tools"]), 2)
 
     def test_unapplied_limits_still_run_tools(self):
@@ -377,7 +435,7 @@ class RunnerTests(unittest.TestCase):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
         self.assertTrue(any(d["rule"] == "READABILITY_NOT_APPLIED" for d in report["diagnostics"]))
 
     def test_short_output_does_not_truncate_json(self):

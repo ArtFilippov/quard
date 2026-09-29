@@ -18,6 +18,7 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
+* **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -25,6 +26,49 @@ in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not subst
 reports. `.pyi` files are checked by Pyright; other tools use their native scope.
 `__init__.py` is included. Root scripts, notebooks and Eryx itself are outside the
 consumer's source scope. Eryx's own code is verified by its autonomous test suite.
+`check.py --lcom_files` narrows only LCOM4 to explicitly selected, existing `.py`
+files in that scope; `--lcom_files ""` skips LCOM4. Without the option, full
+LCOM4 coverage is retained. Other analyzers always use their normal scopes.
+
+## Basic LCOM4
+
+Every eligible concrete class in discovered production and test `.py` files is checked,
+including fixtures, data-only classes and concrete ABCs; `.pyi` stubs are skipped.
+Protocol declarations and ABCs with outstanding abstract methods are skipped.
+Concrete subclasses of Protocol declarations are checked. Abstract status follows
+statically identifiable local inheritance and explicit `abc`/`typing` imports;
+unresolved third-party abstract bases do not exempt a class. An abstractmethod
+decorator outside an ABC does not by itself exempt a class.
+
+An eligible method is a function or async function declared directly in the class
+body, excluding Python-recognized special methods (not arbitrary user-defined
+dunders), `typing`/`typing_extensions` overload signatures, methods with `abc`
+abstract decorators even with substantive bodies, and no-op methods. No-op means `pass`,
+`...`, a docstring alone, `return None`, or `raise NotImplementedError` (including
+an instance), with an optional leading docstring. Individual substantive property
+getters, setters and deleters remain distinct vertices. No separate diagnostic is
+issued for excluded methods; a concrete class with none scores 0 and fails.
+The score is the number of connected method groups. Direct calls through the bound receiver
+or lexical class name connect to methods declared in that class. Access to the same
+direct instance field connects methods, as does access to the same direct class
+field; instance and class fields remain distinct even when their names match.
+The first positional parameter is the instance receiver (whatever its name), or
+the class receiver for a directly decorated `@classmethod`. Directly decorated
+`@staticmethod` functions have no bound receiver, but can access fields through
+the class name. Property access alone does not create a getter/setter call edge;
+accessors with the same name are distinct vertices. Comprehensions in method bodies
+contribute references; nested function, lambda and class bodies do not. Nested
+classes are scored independently. A class with no eligible methods scores 0; a
+connected class scores 1. Scores other than 1 produce class-location diagnostics with the
+score and disconnected groups, without a baseline or exemptions.
+
+This pass is syntactic: it does not resolve receiver aliases, external inheritance, indirect
+calls, dynamic attributes (`getattr`), decorators beyond explicit `abc`/`typing`
+imports, or runtime dispatch.
+An undeclared receiver call is not assumed to be a field access (it may be an
+inherited method); callable fields invoked this way do not create field edges.
+Methods with the same name are treated as distinct declarations. Parser and worker
+failures are infrastructure errors (exit 2), not passing results.
 
 ## Readability
 
