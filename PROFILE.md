@@ -18,6 +18,7 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
+* **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -25,6 +26,24 @@ in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not subst
 reports. `.pyi` files are checked by Pyright; other tools use their native scope.
 `__init__.py` is included. Root scripts, notebooks and Eryx itself are outside the
 consumer's source scope. Eryx's own code is verified by its autonomous test suite.
+
+## Basic LCOM4
+
+Every class in discovered production and test `.py` files is checked, including
+fixtures and classes with no methods; `.pyi` stubs are skipped. An eligible method
+is a function or async function declared directly in the class body (including
+dunder methods). Its score is the number of connected method groups: direct
+`self`/`cls`/class-name method calls and access to the same `self`/`cls`/class-name
+field connect methods. The first positional parameter is treated as the receiver
+except for a directly decorated `@staticmethod`. Nested function bodies do not
+contribute references. A class with no eligible methods scores 0; a connected
+class scores 1. Scores other than 1 produce class-location diagnostics with the
+score and disconnected groups, without a baseline or exemptions.
+
+This first pass is syntactic: it does not resolve aliases, inheritance, indirect
+calls, dynamic attributes, qualified decorators, or runtime dispatch. Methods
+with the same name are treated as distinct declarations. Parser and worker
+failures are infrastructure errors (exit 2), not passing results.
 
 ## Readability
 

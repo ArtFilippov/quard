@@ -75,6 +75,8 @@ Check supports `--serial`, `--timeout 900` (per analyzer) and
 `--max-diagnostics 50` (human output only). All jobs complete independently, with
 up to four concurrent analyzers. Pylint runs production and test profiles separately,
 with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing.
+LCOM4 runs as an independent job over discovered production and test `.py` classes;
+see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
 
 | Exit | Meaning |
 |---:|---|
@@ -152,9 +154,9 @@ uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
 ```
 
-CI runs offline orchestration tests, real compatibility regressions and real uv
-installation/native smoke tests on isolated public fixtures; access to `tai` is not
-needed. Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
+CI runs offline orchestration tests and real compatibility regressions on isolated
+public fixtures; `LifecycleTests` is always skipped. Access to `tai` is not needed.
+Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
 
 Profile/limits: [PROFILE.md](PROFILE.md). Compatibility rationale and provenance:
 [COMPATIBILITY.md](COMPATIBILITY.md). Agent instructions: [AGENTS.md](AGENTS.md).

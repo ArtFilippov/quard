@@ -324,7 +324,9 @@ class RunnerTests(unittest.TestCase):
         failures = failures or {}
         seen = []
         def fake(argv, cwd, timeout):
-            if "--manifest" in argv:
+            if str(ERYX / "_lcom4_worker.py") in argv:
+                name = "lcom4"
+            elif "--manifest" in argv:
                 name = "pylint-tests" if "tests" in argv[argv.index("--manifest") + 1] else "pylint-production"
                 output = Path(argv[argv.index("--output") + 1])
                 _common.write_json(output, {"messages": []})
@@ -337,14 +339,16 @@ class RunnerTests(unittest.TestCase):
             seen.append(name)
             if name in failures:
                 return native_result(argv, **failures[name])
-            return native_result(argv, stdout='{"generalDiagnostics": []}' if name == "pyright" else "")
+            return native_result(argv, stdout=('{"generalDiagnostics": []}' if name == "pyright" else
+                                 '{"eryx_lcom4_adapter": 1, "diagnostics": [], "execution_error": null}'
+                                 if name == "lcom4" else ""))
         return fake, seen
 
     def test_all_tools_pass_mocked(self):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
         self.assertTrue((self.root / report["latest_report_path"]).is_file())
         import jsonschema
         jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))
@@ -354,21 +358,21 @@ class RunnerTests(unittest.TestCase):
                                      "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
         self.assertTrue(any(d["rule"] == "DOC101" for d in report["diagnostics"]))
 
     def test_violation_code_one(self):
         fake, seen = self.fake_tools({"pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 1)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
 
     def test_not_initialized_not_green(self):
         (self.root / ".eryx/architecture.ready.json").unlink()
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 4)
+        self.assertEqual(len(seen), 5)
         self.assertEqual(sum(t["status"] == "blocked" for t in report["tools"]), 2)
 
     def test_unapplied_limits_still_run_tools(self):
@@ -377,7 +381,7 @@ class RunnerTests(unittest.TestCase):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
         self.assertTrue(any(d["rule"] == "READABILITY_NOT_APPLIED" for d in report["diagnostics"]))
 
     def test_short_output_does_not_truncate_json(self):

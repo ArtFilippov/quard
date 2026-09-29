@@ -61,7 +61,13 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
                      "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"),
                               "--manifest", str(manifest), "--config", str(config), "--output", str(output)],
-                     "json_file": output})
+                      "json_file": output})
+    source_files = [path for profile in ("production", "tests") for path in files[profile]
+                    if path.endswith(".py")]
+    manifest = run_dir / "lcom4-files.json"
+    write_json(manifest, source_files, root)
+    jobs.append({"name": "lcom4", "tool": "lcom4", "argv": [sys.executable,
+                 str(tool_dir() / "_lcom4_worker.py"), "--manifest", str(manifest)]})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])

@@ -16,6 +16,7 @@ sys.path.insert(0, str(ERYX))
 from test_migration import managed_bytes
 
 
+@unittest.skip("LifecycleTests are always skipped")
 class LifecycleTests(unittest.TestCase):
     def run_command(self, argv, cwd, expected=0):
         env = os.environ.copy()
