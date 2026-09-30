@@ -6,6 +6,7 @@ import ast
 import json
 from pathlib import Path
 import sys
+from typing import override
 
 Binding = tuple[str, str]  # (class | instance | module, qualified name)
 
@@ -98,11 +99,20 @@ class Ownership:
         self.stable: set[str] = set()
         self.members: dict[str, set[str]] = {}
         self.bases: dict[str, tuple[str | None, ...]] = {}
+        self.exports: dict[str, Binding] = {}
         for path, tree in trees.items():
             self.index(tree.body, module_name(path), (set(), set()))
-        # Imports and forward class references are available after indexing all files.
-        for path, tree in trees.items():
-            Accesses(self, path).visit(tree)
+        # Resolve explicit exports to a fixed point so file order does not affect aliases.
+        for _ in range(len(trees) + 1):
+            previous = self.exports.copy()
+            for path, tree in trees.items():
+                visitor = Accesses(self, path)
+                visitor.visit(tree)
+                for name, binding in visitor.scopes[0].items():
+                    if binding and binding[0] == "class":
+                        self.exports[f"{visitor.module}.{name}"] = binding
+            if self.exports == previous:
+                break
 
     def index(self, body: list[ast.stmt], prefix: str,
               decorators: tuple[set[str], set[str]]) -> None:
@@ -175,6 +185,20 @@ class Ownership:
                   if (owner := self.field_owner(base, field, seen | {qualified})) is not None}
         return next(iter(owners)) if len(owners) == 1 else None
 
+    def first_write_owner(self, qualified: str, field: str) -> str | None:
+        owner = self.field_owner(qualified, field)
+        if owner:
+            return owner
+
+        def vacant(candidate: str, seen: frozenset[str]) -> bool:
+            if (candidate in seen or candidate not in self.stable
+                    or field in self.fields[candidate] or field in self.members[candidate]):
+                return False
+            return all(base is not None and vacant(base, seen | {candidate})
+                       for base in self.bases.get(candidate, ()))
+
+        return qualified if vacant(qualified, frozenset()) else None
+
     def member(self, owner: Binding | None, name: str) -> Binding | None:
         if owner is None:
             return None
@@ -185,6 +209,7 @@ class Ownership:
                 return ("module", candidate)
             if candidate in self.stable:
                 return ("class", candidate)
+            return self.exports.get(candidate)
         if kind == "class" and f"{qualified}.{name}" in self.stable:
             return ("class", f"{qualified}.{name}")
         return None
@@ -216,7 +241,7 @@ class Accesses(ast.NodeVisitor):
             return self.binding(node.id)
         if isinstance(node, ast.Attribute):
             return self.ownership.member(self.value(node.value), node.attr)
-        if isinstance(node, ast.Call) and not node.keywords:
+        if isinstance(node, ast.Call):
             target = self.value(node.func)
             if target and target[0] == "class":
                 return ("instance", target[1])
@@ -225,6 +250,11 @@ class Accesses(ast.NodeVisitor):
     def annotation(self, node: ast.expr | None, owner: str | None = None) -> Binding | None:
         if node is None:
             return None
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            try:
+                node = ast.parse(node.value, mode="eval").body
+            except SyntaxError:
+                return None
         target = self.value(node)
         if target is None and owner and isinstance(node, ast.Name):
             parts = owner.split(".")
@@ -237,8 +267,12 @@ class Accesses(ast.NodeVisitor):
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         owner = self.value(node.value)
-        declaring = (self.ownership.field_owner(owner[1], node.attr)
-                     if owner and owner[0] == "instance" else None)
+        declaring = None
+        if owner and owner[0] == "instance":
+            if isinstance(node.ctx, ast.Store):
+                declaring = self.ownership.first_write_owner(owner[1], node.attr)
+            else:
+                declaring = self.ownership.field_owner(owner[1], node.attr)
         if declaring and declaring != self.method_owner:
             operation = ("delete" if isinstance(node.ctx, ast.Del) else
                          "assign" if isinstance(node.ctx, ast.Store) else "read")
@@ -335,7 +369,17 @@ class Accesses(ast.NodeVisitor):
         if node.value:
             self.visit(node.value)
         self.visit(node.target)
-        self.assign(node.target, self.value(node.value) if node.value else self.annotation(node.annotation))
+        inferred = self.value(node.value) if node.value else None
+        annotated = self.annotation(node.annotation)
+        # An explicit incompatible (or ambiguous) annotation cannot prove ownership.
+        if node.value is None or inferred is None or inferred == annotated:
+            self.assign(node.target, annotated)
+        else:
+            self.assign(node.target, None)
+
+    @override
+    def visit_TypeAlias(self, node: ast.TypeAlias) -> None:
+        self.assign(node.name, self.value(node.value))
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self.visit(node.target)

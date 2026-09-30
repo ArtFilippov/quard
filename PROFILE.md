@@ -26,8 +26,9 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   positional instance receiver, regardless of its name or use in the body.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
-  class, in production and tests. Same-class methods may access another instance's
-  fields; properties and methods remain available to callers.
+  class, in production and tests. A first assignment to an undeclared field on a
+  known consumer instance is also rejected. Same-class methods may access another
+  instance's fields; properties and methods remain available to callers.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -68,11 +69,13 @@ The instance-field job independently scans those discovered `.py` and `.pyi` fil
 including when LCOM4 is narrowed or skipped. It recognizes receiver assignments
 inside instance methods, class-body annotations, literal `__slots__`, explicit
 standard-library dataclass decorators, local constructor bindings, explicit
-consumer imports and class annotations. Fields inherited through resolvable
+consumer imports, static class aliases and unambiguous class annotations (including
+when runtime inference is unavailable). Fields inherited through resolvable
 consumer bases retain their declaring owner; subclass and nested-class methods
-have only their own class's access privilege. Ambiguous bases, unknown or
-third-party owners, dynamic attributes, implicit re-exports and unresolved flow
-are not inferred. Source/worker/report failures are infrastructure errors.
+have only their own class's access privilege. Discovered `.pyi` declarations also
+establish fields and types. Ambiguous bases, conflicting or union annotations,
+unknown or third-party owners, dynamic attributes and unresolved flow are not
+inferred. Source/worker/report failures are infrastructure errors.
 See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
 
 ## Basic LCOM4

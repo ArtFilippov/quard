@@ -80,7 +80,8 @@ see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
 The non-instance-method rule independently checks discovered `.py` and `.pyi` files
 in both profiles, including when LCOM4 is narrowed or skipped.
 The instance-field boundary rule uses the same full scope and reports proven
-external access to consumer-defined stored fields.
+external access to consumer-defined stored fields, including first assignments
+to known consumer instances.
 
 ### Greenfield per-change LCOM4 checks
 

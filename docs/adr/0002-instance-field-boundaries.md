@@ -5,8 +5,10 @@ stored instance field outside the class that declares it, in production and test
 Methods of that class may access fields on any of its instances. Properties and
 methods are public behavior, not stored fields. The check recognizes fields
 assigned through a method receiver or declared in the class body (including
-annotations, literal slots and dataclass fields), and resolves explicit consumer
-class imports, annotations and constructor-created objects. Inherited fields
+annotations, literal slots and dataclass fields), including declarations in
+discovered stubs. It also catches first assignments to new fields on proven
+consumer instances, and resolves explicit consumer class imports, static aliases,
+unambiguous annotations and constructor-created objects. Inherited fields
 belong to their declaring class: subclasses and nested classes are outside it.
 Unknown, ambiguous and third-party owners do not trigger this rule.
 
