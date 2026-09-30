@@ -88,6 +88,27 @@ def stable_class(node: ast.ClassDef, decorators: tuple[set[str], set[str]]) -> b
     return True
 
 
+def immutable(node: ast.expr) -> bool:
+    """Prove immutability from literal contents, not an annotation or a name."""
+    if isinstance(node, ast.Constant):
+        return type(node.value) in {str, bytes, int, float, complex, bool, type(None)}
+    if isinstance(node, ast.Tuple):
+        return all(immutable(item) for item in node.elts)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        return isinstance(node.operand, ast.Constant) and type(node.operand.value) in {int, float, complex}
+    return False
+
+
+def final_annotation(node: ast.expr, names: set[str], modules: set[str]) -> bool:
+    """Recognize an explicitly imported typing Final declaration."""
+    if not isinstance(node, ast.Subscript):
+        return False
+    target = node.value
+    return (isinstance(target, ast.Name) and target.id in names
+            or isinstance(target, ast.Attribute) and target.attr == "Final"
+            and isinstance(target.value, ast.Name) and target.value.id in modules)
+
+
 class Ownership:
     """Index declarations across all discovered source files before checking uses."""
 
@@ -95,6 +116,9 @@ class Ownership:
         self.trees = trees
         self.modules = {module_name(path): path for path in trees}
         self.fields: dict[str, set[str]] = {}
+        self.class_fields: dict[str, set[str]] = {}
+        self.instance_fields: dict[str, set[str]] = {}
+        self.constants: dict[str, set[str]] = {}
         self.classes: dict[str, ast.ClassDef] = {}
         self.stable: set[str] = set()
         self.members: dict[str, set[str]] = {}
@@ -117,27 +141,58 @@ class Ownership:
     def index(self, body: list[ast.stmt], prefix: str,
               decorators: tuple[set[str], set[str]]) -> None:
         functions, modules = (set(decorators[0]), set(decorators[1]))
+        final_names: set[str] = set()
+        final_modules: set[str] = set()
+        descriptor_names: set[str] = set()
+        descriptor_modules: set[str] = set()
         for node in body:
             if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     bound = alias.asname or alias.name
                     functions.discard(bound)
                     modules.discard(bound)
+                    final_names.discard(bound)
+                    descriptor_names.discard(bound)
                     if node.level == 0 and node.module == "dataclasses" and alias.name == "dataclass":
                         functions.add(bound)
+                    if node.level == 0 and node.module in {"typing", "typing_extensions"} and alias.name == "Final":
+                        final_names.add(bound)
+                    if node.level == 0 and node.module == "functools" and alias.name == "cached_property":
+                        descriptor_names.add(bound)
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     bound = alias.asname or alias.name.split(".")[0]
                     functions.discard(bound)
                     modules.discard(bound)
+                    final_modules.discard(bound)
+                    descriptor_modules.discard(bound)
                     if alias.name == "dataclasses":
                         modules.add(bound)
+                    if alias.name in {"typing", "typing_extensions"}:
+                        final_modules.add(bound)
+                    if alias.name == "functools":
+                        descriptor_modules.add(bound)
             if isinstance(node, ast.ClassDef):
                 name = f"{prefix}.{node.name}"
                 self.classes[name] = node
                 if stable_class(node, (functions, modules)):
                     self.stable.add(name)
-                methods = {item.name for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+                def known_decorator(dec: ast.expr) -> bool:
+                    if isinstance(dec, ast.Call):
+                        dec = dec.func
+                    if isinstance(dec, ast.Name):
+                        return dec.id in {"property", "classmethod", "staticmethod", "override", "abstractmethod"} | descriptor_names
+                    return (isinstance(dec, ast.Attribute) and
+                            (dec.attr in {"setter", "deleter", "getter"}
+                             and isinstance(dec.value, ast.Name)
+                             or dec.attr == "cached_property" and isinstance(dec.value, ast.Name)
+                             and dec.value.id in descriptor_modules))
+
+                declarations = {item.name: item for item in node.body
+                                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+                methods = {method for method, item in declarations.items()
+                           if all(known_decorator(dec) for dec in item.decorator_list)}
+                decorated_fields = declarations.keys() - methods
                 declared = {target.id for item in node.body for target in (
                     item.targets if isinstance(item, ast.Assign) else
                     [item.target] if isinstance(item, ast.AnnAssign) else [])
@@ -155,17 +210,62 @@ class Ownership:
                               and isinstance(item.value, ast.Call)
                               and isinstance(item.value.func, ast.Name) and item.value.func.id == "property"
                               for target in item.targets if isinstance(target, ast.Name)}
+                properties.update(target.id for item in node.body if isinstance(item, ast.Assign)
+                                  and isinstance(item.value, ast.Call)
+                                  and (isinstance(item.value.func, ast.Name)
+                                       and item.value.func.id in descriptor_names
+                                       or isinstance(item.value.func, ast.Attribute)
+                                       and item.value.func.attr == "cached_property"
+                                       and isinstance(item.value.func.value, ast.Name)
+                                       and item.value.func.value.id in descriptor_modules)
+                                  for target in item.targets if isinstance(target, ast.Name))
+                properties.update(item.name for item in node.body
+                                  if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                  and any(isinstance(dec, ast.Name) and dec.id in descriptor_names
+                                          or isinstance(dec, ast.Attribute) and dec.attr == "cached_property"
+                                          and isinstance(dec.value, ast.Name) and dec.value.id in descriptor_modules
+                                          for dec in item.decorator_list))
+                instance = receiver_fields(node) | slots | {
+                    item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
+                    and isinstance(item.target, ast.Name) and item.value is None}
+                class_fields = ({target.id for item in node.body for target in (
+                    item.targets if isinstance(item, ast.Assign) else
+                    [item.target] if isinstance(item, ast.AnnAssign) and item.value is not None else [])
+                    if isinstance(target, ast.Name)} | decorated_fields) - {"__slots__"} - methods - properties
                 self.members[name] = declared | methods | {
                     item.name for item in node.body if isinstance(item, ast.ClassDef)}
-                self.fields[name] = (receiver_fields(node) | declared | slots) - methods - properties - {"__slots__"}
+                self.class_fields[name] = class_fields
+                self.instance_fields[name] = instance - methods - properties - {"__slots__"}
+                self.fields[name] = (class_fields | instance) - methods - properties - {"__slots__"}
+                # Another class-body store can replace the literal or shadow Final.
+                stores = [target.id for item in node.body for target in (
+                    item.targets if isinstance(item, ast.Assign) else
+                    [item.target] if isinstance(item, ast.AnnAssign) else [])
+                    if isinstance(target, ast.Name)]
+                local_names = final_names - set(stores)
+                local_modules = final_modules - set(stores)
+                self.constants[name] = {
+                    item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
+                    and isinstance(item.target, ast.Name) and item.value is not None
+                    and final_annotation(item.annotation, local_names, local_modules)
+                    and immutable(item.value) and stores.count(item.target.id) == 1
+                    and item.target.id not in instance}
                 self.index(node.body, name, (functions, modules))
             if isinstance(node, (ast.Assign, ast.AnnAssign)):
                 for bound in assigned_names(node):
                     functions.discard(bound)
                     modules.discard(bound)
+                    final_names.discard(bound)
+                    final_modules.discard(bound)
+                    descriptor_names.discard(bound)
+                    descriptor_modules.discard(bound)
             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.discard(node.name)
                 modules.discard(node.name)
+                final_names.discard(node.name)
+                final_modules.discard(node.name)
+                descriptor_names.discard(node.name)
+                descriptor_modules.discard(node.name)
 
     def field_owner(self, qualified: str, field: str,
                     seen: frozenset[str] | None = None) -> str | None:
@@ -183,6 +283,23 @@ class Ownership:
             return None
         owners = {owner for base in bases if base is not None
                   if (owner := self.field_owner(base, field, seen | {qualified})) is not None}
+        return next(iter(owners)) if len(owners) == 1 else None
+
+    def class_field_owner(self, qualified: str, field: str,
+                          seen: frozenset[str] | None = None) -> str | None:
+        if seen is None:
+            seen = frozenset()
+        if qualified in seen or qualified not in self.stable:
+            return None
+        if field in self.class_fields[qualified]:
+            return qualified
+        if field in self.members[qualified] and field not in self.instance_fields[qualified]:
+            return None
+        bases = self.bases.get(qualified, ())
+        if any(base is None for base in bases):
+            return None
+        owners = {owner for base in bases if base is not None
+                  if (owner := self.class_field_owner(base, field, seen | {qualified})) is not None}
         return next(iter(owners)) if len(owners) == 1 else None
 
     def first_write_owner(self, qualified: str, field: str) -> str | None:
@@ -268,19 +385,27 @@ class Accesses(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         owner = self.value(node.value)
         declaring = None
+        class_field = False
         if owner and owner[0] == "instance":
             if isinstance(node.ctx, ast.Store):
                 declaring = self.ownership.first_write_owner(owner[1], node.attr)
             else:
                 declaring = self.ownership.field_owner(owner[1], node.attr)
+            class_field = bool(declaring and node.attr in self.ownership.class_fields[declaring]
+                               and node.attr not in self.ownership.instance_fields[declaring])
+        elif owner and owner[0] == "class":
+            declaring = self.ownership.class_field_owner(owner[1], node.attr)
+            class_field = declaring is not None
         if declaring and declaring != self.method_owner:
             operation = ("delete" if isinstance(node.ctx, ast.Del) else
                          "assign" if isinstance(node.ctx, ast.Store) else "read")
-            self.diagnostics.append({
-                "rule": "EXTERNAL_INSTANCE_FIELD", "path": self.path,
-                "line": node.lineno, "column": node.col_offset + 1,
-                "symbol": f"{declaring}.{node.attr}",
-                "message": f"{operation} of stored instance field {declaring}.{node.attr} outside its declaring class."})
+            if not (class_field and operation == "read" and node.attr in self.ownership.constants[declaring]):
+                kind = "class" if class_field else "instance"
+                self.diagnostics.append({
+                    "rule": f"EXTERNAL_{kind.upper()}_FIELD", "path": self.path,
+                    "line": node.lineno, "column": node.col_offset + 1,
+                    "symbol": f"{declaring}.{node.attr}",
+                    "message": f"{operation} of stored {kind} field {declaring}.{node.attr} outside its declaring class."})
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:

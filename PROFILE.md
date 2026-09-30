@@ -29,6 +29,10 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   class, in production and tests. A first assignment to an undeclared field on a
   known consumer instance is also rejected. Same-class methods may access another
   instance's fields; properties and methods remain available to callers.
+* **Class state**: `EXTERNAL_CLASS_FIELD` rejects proven external reads, writes and
+  deletes of stored class values through either the class or an instance. An explicitly
+  imported `Final` with a statically immutable literal value allows reads, but not
+  writes or deletes. Mutable `Final` contents and unproven values stay protected.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -77,6 +81,13 @@ establish fields and types. Ambiguous bases, conflicting or union annotations,
 unknown or third-party owners, dynamic attributes and unresolved flow are not
 inferred. Source/worker/report failures are infrastructure errors.
 See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
+
+Class assignments and initialized class annotations establish class state; receiver
+assignments, slots and uninitialized annotations establish instance fields. Plain
+methods, properties and explicitly imported `functools.cached_property` are public
+interfaces; stored callables and unrecognized descriptors are fields. Immutable
+constants are proved from scalar or recursively immutable tuple literals, not from
+names or type annotations alone. Same-class methods may access their class state.
 
 ## Basic LCOM4
 

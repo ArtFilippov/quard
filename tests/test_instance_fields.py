@@ -368,6 +368,153 @@ Shadowed().value
             ("tests/test_data.py", 3, "pkg.models.Slots.field"),
         ])
 
+    def test_class_state_final_values_and_public_interfaces(self):
+        self.put("src/pkg/state.py", '''\
+from typing import Final as Fixed
+import typing as t
+from functools import cached_property
+
+class State:
+    MUTABLE = []
+    lower = 1
+    stable: Fixed[tuple[int, ...]] = (1, 2)
+    nested: t.Final[tuple[int, ...]] = (1, 2)
+    mutable_final: Fixed[list[int]] = []
+    uncertain: Fixed[int] = compute()
+    instance_final: Fixed[int]
+    callback = lambda: 1
+    descriptor = CustomDescriptor()
+    cached_via_call = cached_property(lambda self: self.lower)
+    @custom_descriptor
+    def decorated(self): return 1
+
+    def __init__(self):
+        self.instance_final = 1
+    @property
+    def public(self): return self.lower
+    @cached_property
+    def cached(self): return self.lower
+    def method(self): return self.lower
+    def within(self, peer: State):
+        State.MUTABLE
+        peer.MUTABLE = []
+        del peer.lower
+        return State.stable, peer.instance_final, peer.descriptor
+
+class Child(State):
+    def outside(self):
+        return self.MUTABLE
+''')
+        self.put("src/pkg/consumer.py", '''\
+from pkg.state import State as S
+S.MUTABLE
+S.MUTABLE = []
+del S.MUTABLE
+S().MUTABLE
+S().MUTABLE = []
+del S().MUTABLE
+S.lower
+S().lower
+S.stable
+S().stable
+S.stable = ()
+del S().stable
+S.nested
+S.mutable_final
+S().mutable_final
+S.uncertain
+S().instance_final
+S.callback()
+S().callback()
+S.descriptor
+S().descriptor
+S.decorated
+S().decorated
+S().public
+S().cached
+S().method()
+S().cached_via_call
+''')
+        self.put("tests/test_state.py", '''\
+from pkg.state import State
+State.MUTABLE
+State.stable
+State.stable = (1,)
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], raw["execution_error"]), ("violations", None))
+        self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            *[("src/pkg/consumer.py", line, "EXTERNAL_CLASS_FIELD", f"pkg.state.State.{field}")
+              for line, field in [(2, "MUTABLE"), (3, "MUTABLE"), (4, "MUTABLE"),
+                                  (5, "MUTABLE"), (6, "MUTABLE"), (7, "MUTABLE"),
+                                  (8, "lower"), (9, "lower"), (12, "stable"),
+                                  (13, "stable"), (15, "mutable_final"),
+                                  (16, "mutable_final"), (17, "uncertain")]],
+            ("src/pkg/consumer.py", 18, "EXTERNAL_INSTANCE_FIELD", "pkg.state.State.instance_final"),
+            *[("src/pkg/consumer.py", line, "EXTERNAL_CLASS_FIELD", f"pkg.state.State.{field}")
+              for line, field in [(19, "callback"), (20, "callback"),
+                                  (21, "descriptor"), (22, "descriptor"),
+                                  (23, "decorated"), (24, "decorated")]],
+            ("src/pkg/state.py", 34, "EXTERNAL_CLASS_FIELD", "pkg.state.State.MUTABLE"),
+            ("tests/test_state.py", 2, "EXTERNAL_CLASS_FIELD", "pkg.state.State.MUTABLE"),
+            ("tests/test_state.py", 4, "EXTERNAL_CLASS_FIELD", "pkg.state.State.stable"),
+        ])
+
+    def test_final_requires_proven_immutable_unique_declaration(self):
+        self.put("src/pkg/constants.py", '''\
+from typing_extensions import Final as Fixed
+from typing import Final
+
+class Config:
+    good: Fixed[int] = 3
+    empty: Final[tuple[int, ...]] = ()
+    mutable: Final[tuple[list[int], ...]] = ([],)
+    named: Final[tuple[int, ...]] = SOME_TUPLE
+    repeated: Final[int] = 1
+    repeated = []
+
+class Shadowed:
+    Final = fake
+    shadowed: Final[int] = 2
+
+class Regular:
+    value: Final[int] = 7
+
+class Derived(Config):
+    good = []
+
+class InstanceShadow(Config):
+    def __init__(self): self.empty = 1
+''')
+        self.put("tests/test_constants.py", '''\
+from pkg.constants import Config, Shadowed, Regular, Derived, InstanceShadow
+Config.good
+Config.empty
+Config.mutable
+Config.named
+Config.repeated
+Shadowed.shadowed
+Regular.value
+Derived.good
+Derived().good
+Config.good = 4
+InstanceShadow.empty
+InstanceShadow().empty
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["rule"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            (4, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.mutable"),
+            (5, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.named"),
+            (6, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.repeated"),
+            (7, "EXTERNAL_CLASS_FIELD", "pkg.constants.Shadowed.shadowed"),
+            (9, "EXTERNAL_CLASS_FIELD", "pkg.constants.Derived.good"),
+            (10, "EXTERNAL_CLASS_FIELD", "pkg.constants.Derived.good"),
+            (11, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.good"),
+            (13, "EXTERNAL_INSTANCE_FIELD", "pkg.constants.InstanceShadow.empty"),
+        ])
+
     def test_source_and_output_failures_are_infrastructure_errors(self):
         self.put("src/pkg/good.py", "class Good:\n    def __init__(self): self.value = 1\nx = Good().value\n")
         self.put("tests/broken.py", "class Broken(\n")
