@@ -412,6 +412,33 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "skipped")
         self.assertIn("pyright", seen)
 
+    def test_method_conversions_report_through_check_with_skipped_lcom(self):
+        source = self.root / "src/demo/domain/api.py"
+        source.write_text("class Example:\n    def make(self): pass\n"
+                          "Example.make = staticmethod(Example.make)\n", encoding="utf-8")
+        (self.root / "src/demo/domain/stubs.pyi").write_text(
+            "class Stub:\n    def build(self): ...\n    build = classmethod(build)\n",
+            encoding="utf-8")
+        fake, seen = self.fake_tools()
+
+        def capture(argv, cwd, timeout):
+            if str(ERYX / "_method_decorators_worker.py") in argv:
+                seen.append("method-decorators")
+                return _common.capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        report = check.run_checks(self.root, lcom_files="", capture_fn=capture,
+                                  versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 1, report)
+        self.assertEqual([(d["path"], d["symbol"], d["rule"])
+                          for d in report["diagnostics"]], [
+            ("src/demo/domain/api.py", "Example.make", "NON_INSTANCE_METHOD"),
+            ("src/demo/domain/stubs.pyi", "Stub.build", "NON_INSTANCE_METHOD")])
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in report["diagnostics"]))
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "method-decorators")
+                         ["status"], "violations")
+        self.assertIn("pyright", seen)
+
     def test_failed_lcom4_job_does_not_claim_analysis(self):
         fake, _ = self.fake_tools({"lcom4": {"stdout": "not JSON", "code": 1}})
         report = check.run_checks(self.root, lcom_files="src/demo/domain/api.py",

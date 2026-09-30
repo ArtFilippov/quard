@@ -19,9 +19,9 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
-* **Method decorators**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
-  built-in `@staticmethod` and `@classmethod` on class declarations, independently
-  of the native analyzers and LCOM4.
+* **Non-instance methods**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
+  built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
+  on consumer-owned classes, independently of the native analyzers and LCOM4.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -40,8 +40,16 @@ directly declared sync and async methods in nested, Protocol and abstract classe
 Built-in names, explicit `builtins` imports and their aliases are recognized;
 shadowed names and unrelated qualified decorators are not treated as built-ins.
 Properties, abstract instance methods, inherited methods and undecorated Python
-hooks are unaffected. Each violation points to its decorator and identifies the
-method. Source read/parse errors and invalid worker output are infrastructure
+hooks are unaffected. It also recognizes `staticmethod(function)` and
+`classmethod(function)` assigned in a class body or to a known consumer class
+attribute after creation, and `setattr(KnownClass, "name", conversion)`.
+Module/class/function-local aliases, explicit `builtins` references and class
+aliases are tracked; the converted value must be a statically known function
+definition, class method reference or lambda. Inherited library methods, unknown
+functions, computed attribute names, decorated or dynamic class owners and unprovable
+runtime-generated conversions are outside this syntactic guarantee. Each
+violation identifies its class attribute and points to the decorator or conversion
+call. Source read/parse errors and invalid worker output are infrastructure
 errors, not silently skipped files.
 
 ## Basic LCOM4
