@@ -135,6 +135,120 @@ def forward_shadow():
                          {"src/defs.pyi", "src/pkg.py", "src/shadow.py", "tests/test_methods.py"})
         self.assertEqual(job["tool"], "method-decorators")
 
+    def test_function_conversions_in_classes_and_after_creation(self):
+        self.maxDiff = None
+        self.put("src/conversions.py", '''\
+from builtins import staticmethod as sm, classmethod as cm, setattr as set_attr
+import builtins as bi
+
+def helper(self): pass
+class Outer:
+    def direct(self): pass
+    direct = staticmethod(direct)
+    def alias(cls): pass
+    alias = cm(alias)
+    class Inner:
+        def nested(self): pass
+        nested = bi.staticmethod(nested)
+    from builtins import staticmethod as local_sm
+    def local(self): pass
+    local = local_sm(local)
+
+class Later:
+    def method(self): pass
+Later.method = sm(Later.method)
+Later.other = bi.classmethod(helper)
+Alias = Later
+set_attr(Alias, "factory", cm(helper))
+bi.setattr(Outer.Inner, "new", sm(helper))
+static_alias = bi.staticmethod
+Later.lambda_method = static_alias(lambda: None)
+saved = bi.setattr(Later, "saved", cm(helper))
+''')
+        self.put("tests/test_convert.py", '''\
+class Case:
+    def test(self): pass
+Case.test = staticmethod(Case.test)
+''')
+        self.put("src/defs.pyi", '''\
+from builtins import classmethod as cm
+class Stub:
+    def build(cls) -> Stub: ...
+    build = cm(build)
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["path"], d["symbol"], d["line"], d["column"])
+                          for d in result["diagnostics"]], [
+            ("src/conversions.py", "Outer.direct", 7, 13),
+            ("src/conversions.py", "Outer.alias", 9, 12),
+            ("src/conversions.py", "Outer.Inner.nested", 12, 17),
+            ("src/conversions.py", "Outer.local", 15, 12),
+            ("src/conversions.py", "Later.method", 19, 15),
+            ("src/conversions.py", "Later.other", 20, 14),
+            ("src/conversions.py", "Later.factory", 22, 27),
+            ("src/conversions.py", "Outer.Inner.new", 23, 31),
+            ("src/conversions.py", "Later.lambda_method", 25, 22),
+            ("src/conversions.py", "Later.saved", 26, 35),
+            ("src/defs.pyi", "Stub.build", 4, 12),
+            ("tests/test_convert.py", "Case.test", 3, 12),
+        ])
+        self.assertTrue(all(d["rule"] == "NON_INSTANCE_METHOD" and
+                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_unrelated_conversions_and_shadowed_builtins_are_ignored(self):
+        self.put("src/negative.py", '''\
+import builtins as bi
+def helper(self): pass
+def staticmethod(fn): return fn
+def setattr(obj, name, value): pass
+class Shadow:
+    def method(self): pass
+    method = staticmethod(method)
+class Unrelated:
+    def method(self): pass
+    method = other.classmethod(method)
+class Real:
+    def method(self): pass
+    method = bi.classmethod(method)
+    method = bi.staticmethod(method)
+bi.setattr(Real, "method", bi.staticmethod(Real.method))
+setattr(Real, "other", bi.staticmethod(helper))
+bi.setattr(Real, dynamic_name, bi.staticmethod(helper))
+bi.setattr(library_class, "method", bi.staticmethod(helper))
+library_class.method = bi.staticmethod(helper)
+Real.unknown = bi.staticmethod(unknown_function)
+bi = object()
+Real.fake = bi.classmethod(helper)
+def replace(cls): return library_class
+from builtins import staticmethod as real_sm
+@replace
+class Decorated:
+    def method(self): pass
+Decorated.method = real_sm(Decorated.method)
+''')
+        self.put("src/conditional.py", '''\
+if flag:
+    from builtins import staticmethod as maybe
+class Candidate:
+    def method(self): pass
+    method = maybe(method)
+def enclosing(staticmethod):
+    class Local:
+        def method(self): pass
+        method = staticmethod(method)
+def forward():
+    class Inner:
+        def method(self): pass
+        method = staticmethod(method)
+    staticmethod = lambda fn: fn
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["symbol"], d["line"]) for d in result["diagnostics"]],
+                         [("Real.method", 13)])
+
     def test_parse_and_read_failures_do_not_hide_other_violations(self):
         self.put("src/good.py", "class Good:\n    @staticmethod\n    def bad(): pass\n")
         self.put("src/bad.pyi", "class Broken(\n")
