@@ -19,16 +19,30 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
+* **Method decorators**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
+  built-in `@staticmethod` and `@classmethod` on class declarations, independently
+  of the native analyzers and LCOM4.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
-reports. `.pyi` files are checked by Pyright; other tools use their native scope.
-`__init__.py` is included. Root scripts, notebooks and Eryx itself are outside the
-consumer's source scope. Eryx's own code is verified by its autonomous test suite.
+reports. `.pyi` files are checked by Pyright and the method decorator rule;
+other tools use their native scope. `__init__.py` is included. Root scripts,
+notebooks and Eryx itself are outside the consumer's source scope. Eryx's own
+code is verified by its autonomous test suite.
 `check.py --lcom_files` narrows only LCOM4 to explicitly selected, existing `.py`
 files in that scope; `--lcom_files ""` skips LCOM4. Without the option, full
 LCOM4 coverage is retained. Other analyzers always use their normal scopes.
+
+The method decorator job always scans discovered production and test `.py` and
+`.pyi` files, even with `--lcom_files ""` or a selected LCOM4 subset. It checks
+directly declared sync and async methods in nested, Protocol and abstract classes.
+Built-in names, explicit `builtins` imports and their aliases are recognized;
+shadowed names and unrelated qualified decorators are not treated as built-ins.
+Properties, abstract instance methods, inherited methods and undecorated Python
+hooks are unaffected. Each violation points to its decorator and identifies the
+method. Source read/parse errors and invalid worker output are infrastructure
+errors, not silently skipped files.
 
 ## Basic LCOM4
 
