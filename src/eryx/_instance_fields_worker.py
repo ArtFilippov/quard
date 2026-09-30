@@ -55,6 +55,38 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
     return fields
 
 
+def slot_names(node: ast.expr) -> set[str]:
+    """Recognize literal slot declarations without guessing computed names."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        items = node.elts
+    elif isinstance(node, ast.Dict):
+        items = node.keys
+    else:
+        return set()
+    names: set[str] = set()
+    for item in items:
+        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+            return set()
+        names.add(item.value)
+    return names
+
+
+def stable_class(node: ast.ClassDef, decorators: tuple[set[str], set[str]]) -> bool:
+    """An explicit dataclass decorator preserves the class's identity."""
+    functions, modules = decorators
+    for decorator in node.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Name) and target.id in functions:
+            continue
+        if (isinstance(target, ast.Attribute) and target.attr == "dataclass"
+                and isinstance(target.value, ast.Name) and target.value.id in modules):
+            continue
+        return False
+    return True
+
+
 class Ownership:
     """Index declarations across all discovered source files before checking uses."""
 
@@ -63,25 +95,85 @@ class Ownership:
         self.modules = {module_name(path): path for path in trees}
         self.fields: dict[str, set[str]] = {}
         self.classes: dict[str, ast.ClassDef] = {}
+        self.stable: set[str] = set()
+        self.members: dict[str, set[str]] = {}
+        self.bases: dict[str, tuple[str | None, ...]] = {}
         for path, tree in trees.items():
-            self.index(tree.body, module_name(path))
+            self.index(tree.body, module_name(path), (set(), set()))
+        # Imports and forward class references are available after indexing all files.
+        for path, tree in trees.items():
+            Accesses(self, path).visit(tree)
 
-    def index(self, body: list[ast.stmt], prefix: str) -> None:
+    def index(self, body: list[ast.stmt], prefix: str,
+              decorators: tuple[set[str], set[str]]) -> None:
+        functions, modules = (set(decorators[0]), set(decorators[1]))
         for node in body:
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    functions.discard(bound)
+                    modules.discard(bound)
+                    if node.level == 0 and node.module == "dataclasses" and alias.name == "dataclass":
+                        functions.add(bound)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    functions.discard(bound)
+                    modules.discard(bound)
+                    if alias.name == "dataclasses":
+                        modules.add(bound)
             if isinstance(node, ast.ClassDef):
                 name = f"{prefix}.{node.name}"
                 self.classes[name] = node
+                if stable_class(node, (functions, modules)):
+                    self.stable.add(name)
                 methods = {item.name for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
                 declared = {target.id for item in node.body for target in (
                     item.targets if isinstance(item, ast.Assign) else
                     [item.target] if isinstance(item, ast.AnnAssign) else [])
                     if isinstance(target, ast.Name)}
+                slots: set[str] = set()
+                for item in node.body:
+                    if isinstance(item, ast.Assign) and any(
+                            isinstance(target, ast.Name) and target.id == "__slots__"
+                            for target in item.targets):
+                        slots.update(slot_names(item.value))
+                    elif (isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+                          and item.target.id == "__slots__" and item.value):
+                        slots.update(slot_names(item.value))
                 properties = {target.id for item in node.body if isinstance(item, ast.Assign)
                               and isinstance(item.value, ast.Call)
                               and isinstance(item.value.func, ast.Name) and item.value.func.id == "property"
                               for target in item.targets if isinstance(target, ast.Name)}
-                self.fields[name] = (receiver_fields(node) | declared) - methods - properties
-                self.index(node.body, name)
+                self.members[name] = declared | methods | {
+                    item.name for item in node.body if isinstance(item, ast.ClassDef)}
+                self.fields[name] = (receiver_fields(node) | declared | slots) - methods - properties - {"__slots__"}
+                self.index(node.body, name, (functions, modules))
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                for bound in assigned_names(node):
+                    functions.discard(bound)
+                    modules.discard(bound)
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions.discard(node.name)
+                modules.discard(node.name)
+
+    def field_owner(self, qualified: str, field: str,
+                    seen: frozenset[str] | None = None) -> str | None:
+        """Return a unique proven declaring class; never guess an unknown base's fields."""
+        if seen is None:
+            seen = frozenset()
+        if qualified in seen or qualified not in self.stable:
+            return None
+        if field in self.fields[qualified]:
+            return qualified
+        if field in self.members[qualified]:
+            return None
+        bases = self.bases.get(qualified, ())
+        if any(base is None for base in bases):
+            return None
+        owners = {owner for base in bases if base is not None
+                  if (owner := self.field_owner(base, field, seen | {qualified})) is not None}
+        return next(iter(owners)) if len(owners) == 1 else None
 
     def member(self, owner: Binding | None, name: str) -> Binding | None:
         if owner is None:
@@ -91,10 +183,9 @@ class Ownership:
             candidate = f"{qualified}.{name}"
             if candidate in self.modules:
                 return ("module", candidate)
-            if candidate in self.classes and not self.classes[candidate].decorator_list:
+            if candidate in self.stable:
                 return ("class", candidate)
-        if (kind == "class" and f"{qualified}.{name}" in self.classes
-                and not self.classes[f"{qualified}.{name}"].decorator_list):
+        if kind == "class" and f"{qualified}.{name}" in self.stable:
             return ("class", f"{qualified}.{name}")
         return None
 
@@ -131,23 +222,31 @@ class Accesses(ast.NodeVisitor):
                 return ("instance", target[1])
         return None
 
-    def annotation(self, node: ast.expr | None) -> Binding | None:
+    def annotation(self, node: ast.expr | None, owner: str | None = None) -> Binding | None:
         if node is None:
             return None
         target = self.value(node)
+        if target is None and owner and isinstance(node, ast.Name):
+            parts = owner.split(".")
+            for size in range(len(parts), 0, -1):
+                candidate = ".".join(parts[:size])
+                if candidate in self.ownership.stable and parts[size - 1] == node.id:
+                    target = ("class", candidate)
+                    break
         return ("instance", target[1]) if target and target[0] == "class" else None
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         owner = self.value(node.value)
-        if (owner and owner[0] == "instance" and owner[1] != self.method_owner
-                and node.attr in self.ownership.fields[owner[1]]):
+        declaring = (self.ownership.field_owner(owner[1], node.attr)
+                     if owner and owner[0] == "instance" else None)
+        if declaring and declaring != self.method_owner:
             operation = ("delete" if isinstance(node.ctx, ast.Del) else
                          "assign" if isinstance(node.ctx, ast.Store) else "read")
             self.diagnostics.append({
                 "rule": "EXTERNAL_INSTANCE_FIELD", "path": self.path,
                 "line": node.lineno, "column": node.col_offset + 1,
-                "symbol": f"{owner[1]}.{node.attr}",
-                "message": f"{operation} of stored instance field {owner[1]}.{node.attr} outside its declaring class."})
+                "symbol": f"{declaring}.{node.attr}",
+                "message": f"{operation} of stored instance field {declaring}.{node.attr} outside its declaring class."})
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -167,6 +266,11 @@ class Accesses(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         qualified = f"{self.module}.{node.name}" if self.current_class is None else f"{self.current_class}.{node.name}"
+        bases: list[str | None] = []
+        for base in node.bases:
+            target = self.value(base)
+            bases.append(target[1] if target and target[0] == "class" else None)
+        self.ownership.bases[qualified] = tuple(bases)
         previous = self.current_class
         previous_method = self.method_owner
         self.method_owner = None
@@ -177,8 +281,7 @@ class Accesses(ast.NodeVisitor):
                 self.visit(statement)
         self.current_class = previous
         self.method_owner = previous_method
-        self.scopes[-1][node.name] = (("class", qualified)
-                                      if qualified in self.ownership.classes and not node.decorator_list else None)
+        self.scopes[-1][node.name] = ("class", qualified) if qualified in self.ownership.stable else None
 
     def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         owner = self.current_class
@@ -188,7 +291,7 @@ class Accesses(ast.NodeVisitor):
         locals_: dict[str, Binding | None] = {}
         args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
         for arg in args:
-            locals_[arg.arg] = self.annotation(arg.annotation)
+            locals_[arg.arg] = self.annotation(arg.annotation, owner)
         if owner in self.ownership.classes and args and not any(
                 isinstance(decorator, ast.Name) and decorator.id in {"classmethod", "staticmethod"}
                 for decorator in node.decorator_list):

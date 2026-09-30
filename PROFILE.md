@@ -66,11 +66,14 @@ errors, not silently skipped files.
 
 The instance-field job independently scans those discovered `.py` and `.pyi` files,
 including when LCOM4 is narrowed or skipped. It recognizes receiver assignments
-inside instance methods, class-body field declarations, local constructor bindings,
-explicit consumer imports and class annotations. Unknown or third-party owners
-are not inferred. Dynamic attributes, inherited fields, implicit re-exports and
-unresolved flow are outside its proof. Source/worker/report failures are
-infrastructure errors. See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
+inside instance methods, class-body annotations, literal `__slots__`, explicit
+standard-library dataclass decorators, local constructor bindings, explicit
+consumer imports and class annotations. Fields inherited through resolvable
+consumer bases retain their declaring owner; subclass and nested-class methods
+have only their own class's access privilege. Ambiguous bases, unknown or
+third-party owners, dynamic attributes, implicit re-exports and unresolved flow
+are not inferred. Source/worker/report failures are infrastructure errors.
+See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
 
 ## Basic LCOM4
 

@@ -149,7 +149,129 @@ def use(record: Record):
         result, _ = self.run_worker()
         self.assertEqual((result["status"], [(d["path"], d["line"], d["symbol"])
                                              for d in result["diagnostics"]]),
-                         ("violations", [("tests/test_stub.py", 3, "pkg.record.Record.value")]))
+                          ("violations", [("tests/test_stub.py", 3, "pkg.record.Record.value")]))
+
+    def test_dataclass_annotations_slots_and_inherited_owners_across_modules(self):
+        self.put("src/pkg/model.py", '''\
+from dataclasses import dataclass as data
+
+@data
+class Parent:
+    item: int
+    def own(self, peer: Parent):
+        return peer.item
+
+class Slotted:
+    __slots__ = ("slot",)
+    def own(self, peer: Slotted):
+        return peer.slot
+
+class Annotated:
+    value: int
+    def own(self, peer: Annotated):
+        return peer.value
+''')
+        self.put("src/pkg/child.py", '''\
+from pkg.model import Parent, Slotted, Annotated
+from unknown import Foreign
+
+class Child(Parent):
+    own_field: int
+    def access(self, peer: Child):
+        peer.own_field
+        self.item
+        peer.item = 2
+
+class Overridden(Parent):
+    item: int
+    def access(self, peer: Overridden):
+        return peer.item
+
+class Mixed(Foreign, Parent):
+    def access(self):
+        return self.item
+
+class Container:
+    item: int
+    class Nested:
+        def access(self, container: Container):
+            return container.item
+    def access(self, nested: Nested, peer: Container):
+        return peer.item
+''')
+        self.put("tests/test_models.py", '''\
+from pkg.model import Parent, Slotted, Annotated
+from pkg.child import Child, Overridden, Container
+import pkg.model as models
+from unknown import Foreign
+
+def use(parent: Parent, slot: Slotted, annotated: Annotated, child: Child,
+        overridden: Overridden, unknown: Foreign):
+    parent.item
+    slot.slot
+    annotated.value
+    child.own_field
+    child.item
+    overridden.item
+    Container.Nested().access(Container())
+    unknown.item
+    models.Parent(1).item
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["path"], d["line"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            ("src/pkg/child.py", 8, "pkg.model.Parent.item"),
+            ("src/pkg/child.py", 9, "pkg.model.Parent.item"),
+            ("src/pkg/child.py", 24, "pkg.child.Container.item"),
+            ("tests/test_models.py", 8, "pkg.model.Parent.item"),
+            ("tests/test_models.py", 9, "pkg.model.Slotted.slot"),
+            ("tests/test_models.py", 10, "pkg.model.Annotated.value"),
+            ("tests/test_models.py", 11, "pkg.child.Child.own_field"),
+            ("tests/test_models.py", 12, "pkg.model.Parent.item"),
+            ("tests/test_models.py", 13, "pkg.child.Overridden.item"),
+            ("tests/test_models.py", 16, "pkg.model.Parent.item"),
+        ])
+
+    def test_qualified_dataclass_and_literal_slot_forms_only(self):
+        self.put("src/pkg/models.py", '''\
+import dataclasses as dc
+from unknown import transform
+
+@dc.dataclass(slots=True)
+class Data:
+    value: int
+
+class Slots:
+    __slots__: dict[str, str] = {"field": "documentation"}
+
+@transform
+class Unresolved:
+    value: int
+
+class Dynamic:
+    __slots__ = make_slots()
+
+dc = transform
+@dc.dataclass
+class Shadowed:
+    value: int
+''')
+        self.put("tests/test_data.py", '''\
+from pkg.models import Data, Slots, Unresolved, Dynamic, Shadowed
+Data(1).value
+Slots().field
+Unresolved().value
+Dynamic().field
+Shadowed().value
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["path"], d["line"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            ("tests/test_data.py", 2, "pkg.models.Data.value"),
+            ("tests/test_data.py", 3, "pkg.models.Slots.field"),
+        ])
 
     def test_source_and_output_failures_are_infrastructure_errors(self):
         self.put("src/pkg/good.py", "class Good:\n    def __init__(self): self.value = 1\nx = Good().value\n")
