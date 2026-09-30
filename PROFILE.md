@@ -29,10 +29,13 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   class, in production and tests. A first assignment to an undeclared field on a
   known consumer instance is also rejected. Same-class methods may access another
   instance's fields; properties and methods remain available to callers.
-* **Class state**: `EXTERNAL_CLASS_FIELD` rejects proven external reads, writes and
-  deletes of stored class values through either the class or an instance. An explicitly
-  imported `Final` with a statically immutable literal value allows reads, but not
-  writes or deletes. Mutable `Final` contents and unproven values stay protected.
+* **Class state**: `NO_CLASS_STATE` rejects stored class values at their declarations,
+  including immutable `Final` constants, and direct writes or built-in `setattr` with
+  a literal attribute name through known consumer classes after creation.
+  `EXTERNAL_CLASS_FIELD` also rejects proven external reads,
+  writes and deletes of declared class values through either the class or an instance.
+  Initialized dataclass instance fields, Enum members and `__slots__` declarations
+  remain allowed.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -82,12 +85,14 @@ unknown or third-party owners, dynamic attributes and unresolved flow are not
 inferred. Source/worker/report failures are infrastructure errors.
 See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
 
-Class assignments and initialized class annotations establish class state; receiver
-assignments, slots and uninitialized annotations establish instance fields. Plain
-methods, properties and explicitly imported `functools.cached_property` are public
-interfaces; stored callables and unrecognized descriptors are fields. Immutable
-constants are proved from scalar or recursively immutable tuple literals, not from
-names or type annotations alone. Same-class methods may access their class state.
+Class assignments and initialized class annotations establish prohibited class state;
+receiver assignments, slots, uninitialized annotations and annotated dataclass defaults
+establish instance fields (except explicit `ClassVar`). Plain methods, properties and
+explicitly imported `functools.cached_property` are public interfaces; stored callables
+and unrecognized descriptors are fields. Enum members from explicitly imported standard
+Enum bases are exempt. The rule is syntactic: dynamic owners and computed attribute
+names cannot be proved. Same-class reads of prohibited declarations are not separately
+reported.
 
 ## Basic LCOM4
 

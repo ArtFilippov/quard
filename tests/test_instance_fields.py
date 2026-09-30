@@ -87,14 +87,18 @@ def test_field():
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
-        self.assertEqual([(item["path"], item["line"], item["symbol"]) for item in result["diagnostics"]], [
+        self.assertEqual([(item["path"], item["line"], item["symbol"]) for item in result["diagnostics"]
+                          if item["rule"] != "NO_CLASS_STATE"], [
             ("src/pkg/use.py", line, symbol) for line, symbol in (
                 (5, "pkg.model.Record.value"), (6, "pkg.model.Record.value"),
                 (7, "pkg.model.Record.value"), (11, "pkg.model.Record.declared"),
                 (12, "pkg.model.Record.plain"), (13, "pkg.model.Record.value"))
         ] + [("tests/test_use.py", 4, "pkg.model.Record.value")])
-        self.assertEqual(raw["diagnostics"][0]["rule"], "EXTERNAL_INSTANCE_FIELD")
-        self.assertEqual(result["diagnostics"][0]["column"], 9)
+        self.assertEqual([(item["path"], item["line"], item["symbol"])
+                          for item in result["diagnostics"] if item["rule"] == "NO_CLASS_STATE"],
+                         [("src/pkg/model.py", 3, "pkg.model.Record.plain")])
+        self.assertEqual(raw["diagnostics"][0]["rule"], "NO_CLASS_STATE")
+        self.assertEqual(result["diagnostics"][1]["column"], 9)
         self.assertTrue(all(not item["is_infrastructure_error"] for item in result["diagnostics"]))
 
     def test_unknown_third_party_properties_methods_and_rebinding(self):
@@ -444,12 +448,13 @@ State.stable = (1,)
         result, raw = self.run_worker()
         self.assertEqual((result["status"], raw["execution_error"]), ("violations", None))
         self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                          for d in result["diagnostics"] if d["rule"] != "NO_CLASS_STATE"], [
             *[("src/pkg/consumer.py", line, "EXTERNAL_CLASS_FIELD", f"pkg.state.State.{field}")
               for line, field in [(2, "MUTABLE"), (3, "MUTABLE"), (4, "MUTABLE"),
                                   (5, "MUTABLE"), (6, "MUTABLE"), (7, "MUTABLE"),
-                                  (8, "lower"), (9, "lower"), (12, "stable"),
-                                  (13, "stable"), (15, "mutable_final"),
+                                   (8, "lower"), (9, "lower"), (10, "stable"),
+                                   (11, "stable"), (12, "stable"),
+                                   (13, "stable"), (14, "nested"), (15, "mutable_final"),
                                   (16, "mutable_final"), (17, "uncertain")]],
             ("src/pkg/consumer.py", 18, "EXTERNAL_INSTANCE_FIELD", "pkg.state.State.instance_final"),
             *[("src/pkg/consumer.py", line, "EXTERNAL_CLASS_FIELD", f"pkg.state.State.{field}")
@@ -458,10 +463,15 @@ State.stable = (1,)
                                   (23, "decorated"), (24, "decorated")]],
             ("src/pkg/state.py", 34, "EXTERNAL_CLASS_FIELD", "pkg.state.State.MUTABLE"),
             ("tests/test_state.py", 2, "EXTERNAL_CLASS_FIELD", "pkg.state.State.MUTABLE"),
+            ("tests/test_state.py", 3, "EXTERNAL_CLASS_FIELD", "pkg.state.State.stable"),
             ("tests/test_state.py", 4, "EXTERNAL_CLASS_FIELD", "pkg.state.State.stable"),
         ])
+        self.assertEqual({d["symbol"] for d in result["diagnostics"] if d["rule"] == "NO_CLASS_STATE"},
+                         {f"pkg.state.State.{field}" for field in (
+                             "MUTABLE", "lower", "stable", "nested", "mutable_final", "uncertain",
+                             "callback", "descriptor", "decorated")})
 
-    def test_final_requires_proven_immutable_unique_declaration(self):
+    def test_final_annotations_do_not_exempt_class_state(self):
         self.put("src/pkg/constants.py", '''\
 from typing_extensions import Final as Fixed
 from typing import Final
@@ -503,16 +513,138 @@ InstanceShadow.empty
 InstanceShadow().empty
 ''')
         result, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "NO_CLASS_STATE"], [
+            (line, f"pkg.constants.{owner}.{field}") for line, owner, field in [
+                (5, "Config", "good"), (6, "Config", "empty"),
+                (7, "Config", "mutable"), (8, "Config", "named"),
+                (9, "Config", "repeated"), (10, "Config", "repeated"),
+                (13, "Shadowed", "Final"), (14, "Shadowed", "shadowed"),
+                (17, "Regular", "value"), (20, "Derived", "good")]])
         self.assertEqual([(d["line"], d["rule"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                          for d in result["diagnostics"] if d["rule"] != "NO_CLASS_STATE"], [
+            (2, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.good"),
+            (3, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.empty"),
             (4, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.mutable"),
             (5, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.named"),
             (6, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.repeated"),
             (7, "EXTERNAL_CLASS_FIELD", "pkg.constants.Shadowed.shadowed"),
+            (8, "EXTERNAL_CLASS_FIELD", "pkg.constants.Regular.value"),
             (9, "EXTERNAL_CLASS_FIELD", "pkg.constants.Derived.good"),
             (10, "EXTERNAL_CLASS_FIELD", "pkg.constants.Derived.good"),
             (11, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.good"),
+            (12, "EXTERNAL_CLASS_FIELD", "pkg.constants.Config.empty"),
             (13, "EXTERNAL_INSTANCE_FIELD", "pkg.constants.InstanceShadow.empty"),
+        ])
+
+    def test_class_values_are_forbidden_at_declaration_and_on_later_writes(self):
+        self.put("src/pkg/state.py", '''\
+from typing import Final
+class State:
+    IMMUTABLE: Final[int] = 3
+    mutable = []
+    callback = lambda: 1
+    annotated: int
+    __slots__ = ("field",)
+    @property
+    def public(self): return self.field
+    def method(self):
+        State.later = 1
+        return State.IMMUTABLE
+State.new = 2
+''')
+        self.put("tests/test_state.py", '''\
+from pkg.state import State
+State.IMMUTABLE
+State.IMMUTABLE = 4
+State.another = 5
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            ("src/pkg/state.py", 3, "NO_CLASS_STATE", "pkg.state.State.IMMUTABLE"),
+            ("src/pkg/state.py", 4, "NO_CLASS_STATE", "pkg.state.State.mutable"),
+            ("src/pkg/state.py", 5, "NO_CLASS_STATE", "pkg.state.State.callback"),
+            ("src/pkg/state.py", 11, "NO_CLASS_STATE", "pkg.state.State.later"),
+            ("src/pkg/state.py", 13, "NO_CLASS_STATE", "pkg.state.State.new"),
+            ("tests/test_state.py", 2, "EXTERNAL_CLASS_FIELD", "pkg.state.State.IMMUTABLE"),
+            ("tests/test_state.py", 3, "EXTERNAL_CLASS_FIELD", "pkg.state.State.IMMUTABLE"),
+            ("tests/test_state.py", 4, "NO_CLASS_STATE", "pkg.state.State.another"),
+        ])
+
+    def test_dataclass_defaults_enum_members_and_slots_are_not_class_state(self):
+        self.put("src/pkg/model.py", '''\
+from dataclasses import dataclass as data
+from enum import Enum as Choice
+import enum as e
+from typing import ClassVar as CV
+@data(slots=True)
+class Item:
+    quantity: int
+    name: str = "default"
+    shared: CV[int] = 1
+class Slotted:
+    __slots__ = ("name", "quantity")
+class Color(Choice):
+    RED = 1
+class Direction(e.StrEnum):
+    NORTH = "north"
+    _cache = []
+class Ordinary:
+    name: str = "default"
+''')
+        self.put("tests/test_model.py", '''\
+from pkg.model import Item, Color, Direction
+Item(1).name
+Color.RED
+Direction.NORTH
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            ("src/pkg/model.py", 9, "NO_CLASS_STATE", "pkg.model.Item.shared"),
+            ("src/pkg/model.py", 16, "NO_CLASS_STATE", "pkg.model.Direction._cache"),
+            ("src/pkg/model.py", 18, "NO_CLASS_STATE", "pkg.model.Ordinary.name"),
+            ("tests/test_model.py", 2, "EXTERNAL_INSTANCE_FIELD", "pkg.model.Item.name"),
+        ])
+
+    def test_conditional_and_reassigned_class_values_are_prohibited(self):
+        self.put("src/pkg/choices.py", '''\
+class Choices:
+    public = property(lambda self: 1)
+    public = 2
+    if enabled:
+        extra, another = 1, 2
+    def update(self):
+        Choices.extra = 3
+Alias = Choices
+Alias.later = 4
+setattr(Alias, "dynamic", 5)
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["rule"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            (3, "NO_CLASS_STATE", "pkg.choices.Choices.public"),
+            (5, "NO_CLASS_STATE", "pkg.choices.Choices.extra"),
+            (5, "NO_CLASS_STATE", "pkg.choices.Choices.another"),
+            (7, "NO_CLASS_STATE", "pkg.choices.Choices.extra"),
+            (9, "NO_CLASS_STATE", "pkg.choices.Choices.later"),
+            (10, "NO_CLASS_STATE", "pkg.choices.Choices.dynamic"),
+        ])
+
+    def test_local_classes_are_checked_without_treating_methods_as_state(self):
+        self.put("src/pkg/local.py", '''\
+def factory():
+    class Local:
+        value = 1
+        def method(self):
+            return 2
+    return Local
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["rule"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            (3, "NO_CLASS_STATE", "pkg.local.factory.Local.value"),
         ])
 
     def test_source_and_output_failures_are_infrastructure_errors(self):

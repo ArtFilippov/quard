@@ -1,4 +1,4 @@
-"""Report direct access to proven consumer-owned stored instance fields."""
+"""Report forbidden class state and external access to stored instance fields."""
 from __future__ import annotations
 
 import argparse
@@ -39,9 +39,14 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
         def visit_FunctionDef(self, unused: ast.FunctionDef) -> None:
             pass
 
-        visit_AsyncFunctionDef = visit_FunctionDef
-        visit_ClassDef = visit_FunctionDef
-        visit_Lambda = visit_FunctionDef
+        def visit_AsyncFunctionDef(self, unused: ast.AsyncFunctionDef) -> None:
+            pass
+
+        def visit_ClassDef(self, unused: ast.ClassDef) -> None:
+            pass
+
+        def visit_Lambda(self, unused: ast.Lambda) -> None:
+            pass
 
     for method in node.body:
         if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -88,24 +93,85 @@ def stable_class(node: ast.ClassDef, decorators: tuple[set[str], set[str]]) -> b
     return True
 
 
-def immutable(node: ast.expr) -> bool:
-    """Prove immutability from literal contents, not an annotation or a name."""
-    if isinstance(node, ast.Constant):
-        return type(node.value) in {str, bytes, int, float, complex, bool, type(None)}
-    if isinstance(node, ast.Tuple):
-        return all(immutable(item) for item in node.elts)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-        return isinstance(node.operand, ast.Constant) and type(node.operand.value) in {int, float, complex}
-    return False
+def class_stores(node: ast.ClassDef) -> list[tuple[str, ast.expr, bool, ast.expr | None]]:
+    """Find class-namespace stores without entering methods or nested classes."""
+    stores: list[tuple[str, ast.expr, bool, ast.expr | None]] = []
+
+    class Visitor(ast.NodeVisitor):
+        def targets(self, target: ast.expr, value: ast.expr | None = None,
+                    annotated: bool = False) -> None:
+            if isinstance(target, ast.Name):
+                stores.append((target.id, target, annotated, value))
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for item in target.elts:
+                    self.targets(item, value, annotated)
+
+        def visit_Assign(self, statement: ast.Assign) -> None:
+            for target in statement.targets:
+                self.targets(target, statement.value)
+            self.visit(statement.value)
+
+        def visit_AnnAssign(self, statement: ast.AnnAssign) -> None:
+            if statement.value is not None:
+                self.targets(statement.target, statement.value, annotated=True)
+                self.visit(statement.value)
+
+        def visit_AugAssign(self, statement: ast.AugAssign) -> None:
+            self.targets(statement.target)
+            self.visit(statement.value)
+
+        def visit_NamedExpr(self, statement: ast.NamedExpr) -> None:
+            self.targets(statement.target, statement.value)
+            self.visit(statement.value)
+
+        def visit_For(self, statement: ast.For | ast.AsyncFor) -> None:
+            self.targets(statement.target)
+            self.generic_visit(statement)
+
+        def visit_AsyncFor(self, statement: ast.AsyncFor) -> None:
+            self.visit_For(statement)
+
+        def visit_With(self, statement: ast.With | ast.AsyncWith) -> None:
+            for item in statement.items:
+                if item.optional_vars:
+                    self.targets(item.optional_vars)
+            self.generic_visit(statement)
+
+        def visit_AsyncWith(self, statement: ast.AsyncWith) -> None:
+            self.visit_With(statement)
+
+        def visit_FunctionDef(self, unused: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+            pass
+
+        def visit_AsyncFunctionDef(self, unused: ast.AsyncFunctionDef) -> None:
+            pass
+
+        def visit_ClassDef(self, unused: ast.ClassDef) -> None:
+            pass
+
+        def visit_ListComp(self, unused: ast.ListComp) -> None:
+            pass
+
+        def visit_SetComp(self, unused: ast.SetComp) -> None:
+            pass
+
+        def visit_DictComp(self, unused: ast.DictComp) -> None:
+            pass
+
+        def visit_GeneratorExp(self, unused: ast.GeneratorExp) -> None:
+            pass
+
+    visitor = Visitor()
+    for statement in node.body:
+        visitor.visit(statement)
+    return stores
 
 
-def final_annotation(node: ast.expr, names: set[str], modules: set[str]) -> bool:
-    """Recognize an explicitly imported typing Final declaration."""
-    if not isinstance(node, ast.Subscript):
-        return False
-    target = node.value
+def classvar_annotation(node: ast.expr, names: set[str], modules: set[str]) -> bool:
+    """Recognize explicit ClassVar annotations, including imported aliases."""
+    target = node.value if isinstance(node, ast.Subscript) else node
     return (isinstance(target, ast.Name) and target.id in names
-            or isinstance(target, ast.Attribute) and target.attr == "Final"
+            or isinstance(target, ast.Attribute) and target.attr == "ClassVar"
             and isinstance(target.value, ast.Name) and target.value.id in modules)
 
 
@@ -118,14 +184,15 @@ class Ownership:
         self.fields: dict[str, set[str]] = {}
         self.class_fields: dict[str, set[str]] = {}
         self.instance_fields: dict[str, set[str]] = {}
-        self.constants: dict[str, set[str]] = {}
+        self.declarations: list[dict[str, object]] = []
         self.classes: dict[str, ast.ClassDef] = {}
         self.stable: set[str] = set()
         self.members: dict[str, set[str]] = {}
         self.bases: dict[str, tuple[str | None, ...]] = {}
         self.exports: dict[str, Binding] = {}
         for path, tree in trees.items():
-            self.index(tree.body, module_name(path), (set(), set()))
+            self.index(tree.body, module_name(path), path, (set(), set()), (set(), set()),
+                       (set(), set()))
         # Resolve explicit exports to a fixed point so file order does not affect aliases.
         for _ in range(len(trees) + 1):
             previous = self.exports.copy()
@@ -138,11 +205,17 @@ class Ownership:
             if self.exports == previous:
                 break
 
-    def index(self, body: list[ast.stmt], prefix: str,
-              decorators: tuple[set[str], set[str]]) -> None:
+    def declaration_diagnostics(self) -> list[dict[str, object]]:
+        """Return prohibited class declarations found in discovered files."""
+        return self.declarations
+
+    def index(self, body: list[ast.stmt], prefix: str, path: str,
+              decorators: tuple[set[str], set[str]],
+              enums: tuple[set[str], set[str]],
+              classvars: tuple[set[str], set[str]]) -> None:
         functions, modules = (set(decorators[0]), set(decorators[1]))
-        final_names: set[str] = set()
-        final_modules: set[str] = set()
+        enum_names, enum_modules = (set(enums[0]), set(enums[1]))
+        classvar_names, classvar_modules = (set(classvars[0]), set(classvars[1]))
         descriptor_names: set[str] = set()
         descriptor_modules: set[str] = set()
         for node in body:
@@ -151,12 +224,16 @@ class Ownership:
                     bound = alias.asname or alias.name
                     functions.discard(bound)
                     modules.discard(bound)
-                    final_names.discard(bound)
+                    enum_names.discard(bound)
+                    classvar_names.discard(bound)
                     descriptor_names.discard(bound)
                     if node.level == 0 and node.module == "dataclasses" and alias.name == "dataclass":
                         functions.add(bound)
-                    if node.level == 0 and node.module in {"typing", "typing_extensions"} and alias.name == "Final":
-                        final_names.add(bound)
+                    if node.level == 0 and node.module == "enum" and alias.name in {
+                            "Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"}:
+                        enum_names.add(bound)
+                    if node.level == 0 and node.module in {"typing", "typing_extensions"} and alias.name == "ClassVar":
+                        classvar_names.add(bound)
                     if node.level == 0 and node.module == "functools" and alias.name == "cached_property":
                         descriptor_names.add(bound)
             elif isinstance(node, ast.Import):
@@ -164,19 +241,29 @@ class Ownership:
                     bound = alias.asname or alias.name.split(".")[0]
                     functions.discard(bound)
                     modules.discard(bound)
-                    final_modules.discard(bound)
+                    enum_modules.discard(bound)
+                    classvar_modules.discard(bound)
                     descriptor_modules.discard(bound)
                     if alias.name == "dataclasses":
                         modules.add(bound)
+                    if alias.name == "enum":
+                        enum_modules.add(bound)
                     if alias.name in {"typing", "typing_extensions"}:
-                        final_modules.add(bound)
+                        classvar_modules.add(bound)
                     if alias.name == "functools":
                         descriptor_modules.add(bound)
             if isinstance(node, ast.ClassDef):
                 name = f"{prefix}.{node.name}"
                 self.classes[name] = node
+                is_dataclass = bool(node.decorator_list) and stable_class(node, (functions, modules))
                 if stable_class(node, (functions, modules)):
                     self.stable.add(name)
+                is_enum = any(
+                    isinstance(base, ast.Name) and base.id in enum_names
+                    or isinstance(base, ast.Attribute) and base.attr in {
+                        "Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"}
+                    and isinstance(base.value, ast.Name) and base.value.id in enum_modules
+                    for base in node.bases)
                 def known_decorator(dec: ast.expr) -> bool:
                     if isinstance(dec, ast.Call):
                         dec = dec.func
@@ -227,43 +314,73 @@ class Ownership:
                                           for dec in item.decorator_list))
                 instance = receiver_fields(node) | slots | {
                     item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
-                    and isinstance(item.target, ast.Name) and item.value is None}
+                    and isinstance(item.target, ast.Name) and item.value is None
+                    and not classvar_annotation(item.annotation, classvar_names, classvar_modules)}
+                dataclass_fields = {item.target.id for item in node.body
+                                    if is_dataclass and isinstance(item, ast.AnnAssign)
+                                    and isinstance(item.target, ast.Name)
+                                    and not classvar_annotation(
+                                        item.annotation, classvar_names, classvar_modules)}
+                instance.update(dataclass_fields)
                 class_fields = ({target.id for item in node.body for target in (
                     item.targets if isinstance(item, ast.Assign) else
                     [item.target] if isinstance(item, ast.AnnAssign) and item.value is not None else [])
-                    if isinstance(target, ast.Name)} | decorated_fields) - {"__slots__"} - methods - properties
+                    if isinstance(target, ast.Name)} | decorated_fields) - {
+                        "__slots__"} - methods - properties - dataclass_fields
+                if is_enum:
+                    class_fields = {field for field in class_fields if field.startswith("_")}
                 self.members[name] = declared | methods | {
                     item.name for item in node.body if isinstance(item, ast.ClassDef)}
                 self.class_fields[name] = class_fields
                 self.instance_fields[name] = instance - methods - properties - {"__slots__"}
                 self.fields[name] = (class_fields | instance) - methods - properties - {"__slots__"}
-                # Another class-body store can replace the literal or shadow Final.
-                stores = [target.id for item in node.body for target in (
-                    item.targets if isinstance(item, ast.Assign) else
-                    [item.target] if isinstance(item, ast.AnnAssign) else [])
-                    if isinstance(target, ast.Name)]
-                local_names = final_names - set(stores)
-                local_modules = final_modules - set(stores)
-                self.constants[name] = {
-                    item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
-                    and isinstance(item.target, ast.Name) and item.value is not None
-                    and final_annotation(item.annotation, local_names, local_modules)
-                    and immutable(item.value) and stores.count(item.target.id) == 1
-                    and item.target.id not in instance}
-                self.index(node.body, name, (functions, modules))
+                for field, target, annotated, value in class_stores(node):
+                    is_property = (field in properties and isinstance(value, ast.Call)
+                                   and (isinstance(value.func, ast.Name)
+                                        and value.func.id in {"property"} | descriptor_names
+                                        or isinstance(value.func, ast.Attribute)
+                                        and value.func.attr == "cached_property"
+                                        and isinstance(value.func.value, ast.Name)
+                                        and value.func.value.id in descriptor_modules))
+                    if (field == "__slots__" or is_property
+                            or is_dataclass and annotated and field in dataclass_fields
+                            or is_enum and not field.startswith("_")):
+                        continue
+                    self.declarations.append({
+                        "rule": "NO_CLASS_STATE", "path": path,
+                        "line": target.lineno, "column": target.col_offset + 1,
+                        "symbol": f"{name}.{field}",
+                        "message": f"Stored class value {name}.{field} is prohibited."})
+                for field in sorted(decorated_fields - properties, key=lambda item: declarations[item].lineno):
+                    method = declarations[field]
+                    self.declarations.append({
+                        "rule": "NO_CLASS_STATE", "path": path,
+                        "line": method.lineno, "column": method.col_offset + 1,
+                        "symbol": f"{name}.{field}",
+                        "message": f"Stored class value {name}.{field} is prohibited."})
+                self.index(node.body, name, path, (functions, modules), (enum_names, enum_modules),
+                           (classvar_names, classvar_modules))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.index(node.body, f"{prefix}.{node.name}", path,
+                           (functions, modules), (enum_names, enum_modules),
+                           (classvar_names, classvar_modules))
             if isinstance(node, (ast.Assign, ast.AnnAssign)):
                 for bound in assigned_names(node):
                     functions.discard(bound)
                     modules.discard(bound)
-                    final_names.discard(bound)
-                    final_modules.discard(bound)
+                    enum_names.discard(bound)
+                    enum_modules.discard(bound)
+                    classvar_names.discard(bound)
+                    classvar_modules.discard(bound)
                     descriptor_names.discard(bound)
                     descriptor_modules.discard(bound)
             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.discard(node.name)
                 modules.discard(node.name)
-                final_names.discard(node.name)
-                final_modules.discard(node.name)
+                enum_names.discard(node.name)
+                enum_modules.discard(node.name)
+                classvar_names.discard(node.name)
+                classvar_modules.discard(node.name)
                 descriptor_names.discard(node.name)
                 descriptor_modules.discard(node.name)
 
@@ -399,13 +516,34 @@ class Accesses(ast.NodeVisitor):
         if declaring and declaring != self.method_owner:
             operation = ("delete" if isinstance(node.ctx, ast.Del) else
                          "assign" if isinstance(node.ctx, ast.Store) else "read")
-            if not (class_field and operation == "read" and node.attr in self.ownership.constants[declaring]):
-                kind = "class" if class_field else "instance"
+            kind = "class" if class_field else "instance"
+            self.diagnostics.append({
+                "rule": f"EXTERNAL_{kind.upper()}_FIELD", "path": self.path,
+                "line": node.lineno, "column": node.col_offset + 1,
+                "symbol": f"{declaring}.{node.attr}",
+                "message": f"{operation} of stored {kind} field {declaring}.{node.attr} outside its declaring class."})
+        elif owner and owner[0] == "class" and isinstance(node.ctx, ast.Store):
+            self.diagnostics.append({
+                "rule": "NO_CLASS_STATE", "path": self.path,
+                "line": node.lineno, "column": node.col_offset + 1,
+                "symbol": f"{owner[1]}.{node.attr}",
+                "message": f"Stored class value {owner[1]}.{node.attr} is prohibited."})
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (isinstance(node.func, ast.Name) and node.func.id == "setattr"
+                and all("setattr" not in scope for scope in self.scopes)
+                and len(node.args) == 3 and not node.keywords
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)):
+            owner = self.value(node.args[0])
+            if owner and owner[0] == "class":
+                field = node.args[1].value
                 self.diagnostics.append({
-                    "rule": f"EXTERNAL_{kind.upper()}_FIELD", "path": self.path,
+                    "rule": "NO_CLASS_STATE", "path": self.path,
                     "line": node.lineno, "column": node.col_offset + 1,
-                    "symbol": f"{declaring}.{node.attr}",
-                    "message": f"{operation} of stored {kind} field {declaring}.{node.attr} outside its declaring class."})
+                    "symbol": f"{owner[1]}.{field}",
+                    "message": f"Stored class value {owner[1]}.{field} is prohibited."})
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -434,6 +572,8 @@ class Accesses(ast.NodeVisitor):
         previous_method = self.method_owner
         self.method_owner = None
         self.current_class = qualified
+        # Methods resolve the class name at call time, after its definition is bound.
+        self.scopes[-1][node.name] = ("class", qualified) if qualified in self.ownership.stable else None
         # Class namespace is not a lexical scope for methods.
         for statement in node.body:
             if isinstance(statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -474,7 +614,8 @@ class Accesses(ast.NodeVisitor):
         self.method_owner = previous_method
         self.scopes[-1][node.name] = None
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)
 
     def assign(self, target: ast.expr, value: Binding | None) -> None:
         if isinstance(target, ast.Name):
@@ -533,7 +674,8 @@ class Accesses(ast.NodeVisitor):
                 if updated.get(name) != scope.get(name) or name in assigned_names(node.target):
                     scope[name] = None
 
-    visit_AsyncFor = visit_For
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.visit_For(node)
 
     def visit_With(self, node: ast.With | ast.AsyncWith) -> None:
         for item in node.items:
@@ -543,7 +685,8 @@ class Accesses(ast.NodeVisitor):
         for statement in node.body:
             self.visit(statement)
 
-    visit_AsyncWith = visit_With
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)
 
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
@@ -584,7 +727,8 @@ class Accesses(ast.NodeVisitor):
         for name in assigned_names(node):
             self.scopes[-1][name] = None
 
-    visit_TryStar = visit_Try
+    def visit_TryStar(self, node: ast.TryStar) -> None:
+        self.visit_Try(node)
 
     def visit_Match(self, node: ast.Match) -> None:
         self.visit(node.subject)
@@ -617,6 +761,7 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc)})
     ownership = Ownership(trees)
+    diagnostics.extend(ownership.declaration_diagnostics())
     for path, tree in trees.items():
         visitor = Accesses(ownership, path)
         visitor.visit(tree)

@@ -317,8 +317,12 @@ class ParserTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
-    setUp = RepositoryTest.setUp
-    tearDown = RepositoryTest.tearDown
+    def setUp(self):
+        RepositoryTest.setUp(self)
+
+    def tearDown(self):
+        RepositoryTest.tearDown(self)
+
     def fake_tools(self, failures=None):
         failures = failures or {}
         seen = []

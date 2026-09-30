@@ -12,14 +12,15 @@ unambiguous annotations and constructor-created objects. Inherited fields
 belong to their declaring class: subclasses and nested classes are outside it.
 Unknown, ambiguous and third-party owners do not trigger this rule.
 
-Class-level stored values also belong to their declaring class, even when named in
-uppercase or accessed through an instance. Direct external reads, writes and deletes
-are rejected. A class value explicitly declared `typing.Final` (or
-`typing_extensions.Final`) and initialized with a statically immutable literal may
-be read externally, but cannot be assigned or deleted. A mutable Final value, an
-unknown expression and a Final instance field remain protected. Methods, properties
-and recognized cached-property descriptors are public interfaces; storing a callable
-or an unrecognized descriptor does not turn a field into one.
+Stored class values are prohibited at declaration, regardless of their name, value
+or `Final` annotation. Direct writes and built-in `setattr` calls with literal names
+through a known consumer class after creation are prohibited too. Proven external
+reads, writes and deletes of declared class values remain violations, including
+accesses through an instance. Initialized
+dataclass instance fields, Enum members and `__slots__` declarations are not class
+state. Methods, properties and recognized cached-property descriptors are public
+interfaces; storing a callable or an unrecognized descriptor does not turn a field
+into one.
 
 This favors encapsulation: callers use behavior or properties instead of coupling
 themselves to an object's storage layout. The cost is extra accessors for plain
