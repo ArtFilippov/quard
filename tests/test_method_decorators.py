@@ -197,6 +197,83 @@ class Stub:
         self.assertTrue(all(d["rule"] == "NON_INSTANCE_METHOD" and
                             not d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_class_body_methods_require_mandatory_positional_receiver(self):
+        self.put("src/receivers.py", '''\
+from abc import ABC, abstractmethod
+from typing import Protocol
+
+def free_function(): pass
+
+class Outer:
+    def missing(): pass
+    async def asynchronous(*args): pass
+    def defaulted(receiver=None): pass
+    def keyword_only(*, receiver): pass
+    def kwargs_only(**kwargs): pass
+    def positional_only(receiver=None, /): pass
+    def valid(receiver): return receiver
+    def unused(instance): pass
+    def positional_only_valid(instance, /): pass
+    def optional_second(instance, other=None): pass
+    def __new__(cls): return super().__new__(cls)
+    def __init_subclass__(cls): pass
+    def __class_getitem__(cls, item): return item
+    @property
+    def value(self): return 1
+    @value.setter
+    def value(self, new_value): pass
+    class Nested:
+        def missing(): pass
+
+class Contract(Protocol):
+    def missing() -> None: ...
+    async def valid(self) -> None: ...
+
+class Abstract(ABC):
+    @abstractmethod
+    def missing() -> None: ...
+    @abstractmethod
+    def valid(self) -> None: ...
+
+def factory():
+    class Local:
+        def missing(): pass
+    return Local
+
+class Inherited(list):
+    def own(self): pass
+''')
+        self.put("src/stubs.pyi", '''\
+from typing import Protocol
+class Stub:
+    def missing() -> None: ...
+    async def defaulted(self = ...) -> None: ...
+    def valid(this) -> None: ...
+class Contract(Protocol):
+    def missing(*args) -> None: ...
+''')
+        self.put("tests/test_receivers.py", "class TestCase:\n    def missing(): pass\n")
+        self.put("src/generated/ignored.py", "class Ignored:\n    def missing(): pass\n")
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["path"], d["symbol"]) for d in result["diagnostics"]], [
+            ("src/receivers.py", f"Outer.{name}") for name in (
+                "missing", "asynchronous", "defaulted", "keyword_only", "kwargs_only", "positional_only")
+        ] + [
+            ("src/receivers.py", "Outer.Nested.missing"),
+            ("src/receivers.py", "Contract.missing"),
+            ("src/receivers.py", "Abstract.missing"),
+            ("src/receivers.py", "Local.missing"),
+            ("src/stubs.pyi", "Stub.missing"),
+            ("src/stubs.pyi", "Stub.defaulted"),
+            ("src/stubs.pyi", "Contract.missing"),
+            ("tests/test_receivers.py", "TestCase.missing"),
+        ])
+        self.assertTrue(all(d["rule"] == "MISSING_INSTANCE_RECEIVER" and
+                            d["line"] > 0 and d["column"] > 0 and
+                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
     def test_unrelated_conversions_and_shadowed_builtins_are_ignored(self):
         self.put("src/negative.py", '''\
 import builtins as bi

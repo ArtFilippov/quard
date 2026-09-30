@@ -412,6 +412,37 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "skipped")
         self.assertIn("pyright", seen)
 
+    def test_missing_receiver_runs_with_narrowed_or_skipped_lcom_and_native_results(self):
+        source = self.root / "src/demo/domain/api.py"
+        source.write_text("class Example:\n    def missing(): pass\n", encoding="utf-8")
+        stub = self.root / "src/demo/domain/stubs.pyi"
+        stub.write_text("class Stub:\n    async def defaulted(self = ...) -> None: ...\n",
+                        encoding="utf-8")
+        fake, seen = self.fake_tools({"pyright": {"stdout": json.dumps({
+            "generalDiagnostics": [{"file": str(source), "message": "Native issue",
+                                    "severity": "error", "rule": "reportReturnType",
+                                    "range": {"start": {"line": 0, "character": 0}}}]}), "code": 1}})
+
+        def capture(argv, cwd, timeout):
+            if str(ERYX / "_method_decorators_worker.py") in argv:
+                seen.append("method-decorators")
+                return _common.capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        for selection in ("", "tests/test_value.py"):
+            with self.subTest(selection=selection):
+                report = check.run_checks(self.root, lcom_files=selection, capture_fn=capture,
+                                          versions_fn=lambda root: ({}, []))
+                self.assertEqual(report["exit_code"], 1, report)
+                self.assertEqual([(d["path"], d["symbol"]) for d in report["diagnostics"]
+                                  if d["rule"] == "MISSING_INSTANCE_RECEIVER"], [
+                    ("src/demo/domain/api.py", "Example.missing"),
+                    ("src/demo/domain/stubs.pyi", "Stub.defaulted")])
+                self.assertIn("reportReturnType", {d["rule"] for d in report["diagnostics"]})
+                self.assertEqual(next(t for t in report["tools"] if t["name"] == "method-decorators")
+                                 ["status"], "violations")
+                self.assertIn("pyright", seen)
+
     def test_method_conversions_report_through_check_with_skipped_lcom(self):
         source = self.root / "src/demo/domain/api.py"
         source.write_text("class Example:\n    def make(self): pass\n"

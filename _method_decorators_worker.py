@@ -1,4 +1,4 @@
-"""Reject provable built-in non-instance method declarations and conversions."""
+"""Check consumer-owned class methods for instance binding."""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +10,20 @@ import sys
 METHODS = ("staticmethod", "classmethod")
 BUILTINS = (*METHODS, "setattr")
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+IMPLICIT_CLASS_HOOKS = {"__new__", "__init_subclass__", "__class_getitem__"}
+
+
+def needs_receiver(method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Check plain methods and abstract declarations; other decorators may change binding."""
+    if method.name in IMPLICIT_CLASS_HOOKS:
+        return False
+    if method.decorator_list and not all(
+            isinstance(decorator, ast.Name) and decorator.id == "abstractmethod"
+            or isinstance(decorator, ast.Attribute) and decorator.attr == "abstractmethod"
+            for decorator in method.decorator_list):
+        return False
+    positional = method.args.posonlyargs + method.args.args
+    return len(positional) <= len(method.args.defaults)
 
 
 def assigned(target: ast.expr) -> set[str]:
@@ -162,6 +176,13 @@ class Declarations:
                                    None, node, conditional)
             elif isinstance(node, FUNCTIONS):
                 if self.class_scopes[-1]:
+                    if needs_receiver(node):
+                        symbol = ".".join([*self.classes, node.name])
+                        self.diagnostics.append({
+                            "rule": "MISSING_INSTANCE_RECEIVER", "path": self.path,
+                            "line": node.lineno, "column": node.col_offset,
+                            "symbol": symbol,
+                            "message": f"{symbol}: instance method requires a mandatory positional receiver."})
                     for decorator in node.decorator_list:
                         kind = self.decorator(decorator)
                         if kind:

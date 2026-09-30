@@ -188,7 +188,8 @@ def parse_method_decorators(text: str, root: Path) -> tuple[list[dict[str, Any]]
     items = []
     for entry in obj["diagnostics"]:
         if not isinstance(entry, dict) or entry.get("rule") not in {
-                "NON_INSTANCE_METHOD", "METHOD_DECORATORS_PARSE_ERROR", "METHOD_DECORATORS_EXECUTION_ERROR"}:
+                "NON_INSTANCE_METHOD", "MISSING_INSTANCE_RECEIVER",
+                "METHOD_DECORATORS_PARSE_ERROR", "METHOD_DECORATORS_EXECUTION_ERROR"}:
             raise ValueError("Malformed method decorator diagnostic")
         rule = entry["rule"]
         if not isinstance(entry.get("message"), str):
@@ -197,7 +198,7 @@ def parse_method_decorators(text: str, root: Path) -> tuple[list[dict[str, Any]]
                 or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
                 or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)):
             raise ValueError("Malformed method decorator diagnostic position")
-        if rule == "NON_INSTANCE_METHOD" and (
+        if rule in {"NON_INSTANCE_METHOD", "MISSING_INSTANCE_RECEIVER"} and (
                 not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
                 or type(entry.get("line")) is not int or entry["line"] < 1
                 or type(entry.get("column")) is not int or entry["column"] < 1):
@@ -205,7 +206,8 @@ def parse_method_decorators(text: str, root: Path) -> tuple[list[dict[str, Any]]
         items.append(diagnostic("method-decorators", rule, entry["message"],
                                 path=relative_path(entry.get("path"), root), line=entry.get("line"),
                                 column=entry.get("column"), symbol=entry.get("symbol"),
-                                is_infrastructure_error=rule != "NON_INSTANCE_METHOD"))
+                                is_infrastructure_error=rule not in {
+                                    "NON_INSTANCE_METHOD", "MISSING_INSTANCE_RECEIVER"}))
     if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
             error and not any(item["rule"] == error for item in items)):
         raise ValueError("Method decorator error/diagnostic mismatch")

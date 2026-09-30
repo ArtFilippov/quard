@@ -22,11 +22,13 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
 * **Non-instance methods**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
   on consumer-owned classes, independently of the native analyzers and LCOM4.
+  `MISSING_INSTANCE_RECEIVER` rejects plain class-body methods without a mandatory
+  positional instance receiver, regardless of its name or use in the body.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
-reports. `.pyi` files are checked by Pyright and the method decorator rule;
+reports. `.pyi` files are checked by Pyright and both method rules;
 other tools use their native scope. `__init__.py` is included. Root scripts,
 notebooks and Eryx itself are outside the consumer's source scope. Eryx's own
 code is verified by its autonomous test suite.
@@ -34,9 +36,15 @@ code is verified by its autonomous test suite.
 files in that scope; `--lcom_files ""` skips LCOM4. Without the option, full
 LCOM4 coverage is retained. Other analyzers always use their normal scopes.
 
-The method decorator job always scans discovered production and test `.py` and
+The method job always scans discovered production and test `.py` and
 `.pyi` files, even with `--lcom_files ""` or a selected LCOM4 subset. It checks
 directly declared sync and async methods in nested, Protocol and abstract classes.
+Plain methods (including abstract declarations) need a mandatory first positional
+parameter: keyword-only, variadic-only and defaulted positions do not qualify.
+Python's implicitly class-bound undecorated `__new__`, `__init_subclass__` and
+`__class_getitem__` are exempt. Other decorators may alter binding, so their
+undecorated receiver signature is not inferred; recognizable non-instance
+decorators and conversions remain violations in their own right.
 Built-in names, explicit `builtins` imports and their aliases are recognized;
 shadowed names and unrelated qualified decorators are not treated as built-ins.
 Properties, abstract instance methods, inherited methods and undecorated Python
