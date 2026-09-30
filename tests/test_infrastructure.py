@@ -326,6 +326,8 @@ class RunnerTests(unittest.TestCase):
         def fake(argv, cwd, timeout):
             if str(ERYX / "_lcom4_worker.py") in argv:
                 name = "lcom4"
+            elif str(ERYX / "_method_decorators_worker.py") in argv:
+                name = "method-decorators"
             elif "--manifest" in argv:
                 name = "pylint-tests" if "tests" in argv[argv.index("--manifest") + 1] else "pylint-production"
                 output = Path(argv[argv.index("--output") + 1])
@@ -340,15 +342,17 @@ class RunnerTests(unittest.TestCase):
             if name in failures:
                 return native_result(argv, **failures[name])
             return native_result(argv, stdout=('{"generalDiagnostics": []}' if name == "pyright" else
-                                 '{"eryx_lcom4_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                 if name == "lcom4" else ""))
+                                  '{"eryx_lcom4_adapter": 1, "diagnostics": [], "execution_error": null}'
+                                  if name == "lcom4" else
+                                  '{"eryx_method_decorators_adapter": 1, "diagnostics": [], "execution_error": null}'
+                                  if name == "method-decorators" else ""))
         return fake, seen
 
     def test_all_tools_pass_mocked(self):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(seen), 8)
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")
         self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"],
                          report["coverage"]["lcom4"]["selected_files"])
@@ -361,7 +365,7 @@ class RunnerTests(unittest.TestCase):
         report = check.run_checks(self.root, lcom_files="tests/test_value.py src/demo/domain/api.py tests/test_value.py",
                                   capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(seen), 8)
         coverage = report["coverage"]["lcom4"]
         self.assertEqual(coverage["mode"], "selected")
         self.assertEqual(coverage["selected_files"], ["tests/test_value.py", "src/demo/domain/api.py"])
@@ -375,13 +379,65 @@ class RunnerTests(unittest.TestCase):
         report = check.run_checks(self.root, lcom_files="", capture_fn=fake,
                                   versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 6)
+        self.assertEqual(len(seen), 7)
         self.assertNotIn("lcom4", seen)
+        self.assertIn("method-decorators", seen)
         self.assertEqual(report["coverage"]["lcom4"], {"mode": "skipped", "requested": "",
                          "selected_files": [], "analyzed_files": []})
         self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "skipped")
         import jsonschema
         jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))
+
+    def test_method_decorator_violation_runs_with_skipped_lcom_and_native_results(self):
+        source = self.root / "src/demo/domain/api.py"
+        source.write_text("class Example:\n    @staticmethod\n    def make(): pass\n", encoding="utf-8")
+        fake, seen = self.fake_tools({"pyright": {"stdout": json.dumps({
+            "generalDiagnostics": [{"file": str(source), "message": "Native issue",
+                                    "severity": "error", "rule": "reportReturnType",
+                                    "range": {"start": {"line": 0, "character": 0}}}]}), "code": 1}})
+
+        def capture(argv, cwd, timeout):
+            if str(ERYX / "_method_decorators_worker.py") in argv:
+                seen.append("method-decorators")
+                return _common.capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        report = check.run_checks(self.root, lcom_files="", capture_fn=capture,
+                                  versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 1, report)
+        self.assertEqual({d["rule"] for d in report["diagnostics"]},
+                         {"NON_INSTANCE_METHOD", "reportReturnType"})
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "method-decorators")["status"],
+                         "violations")
+        self.assertEqual(report["coverage"]["lcom4"]["mode"], "skipped")
+        self.assertIn("pyright", seen)
+
+    def test_method_conversions_report_through_check_with_skipped_lcom(self):
+        source = self.root / "src/demo/domain/api.py"
+        source.write_text("class Example:\n    def make(self): pass\n"
+                          "Example.make = staticmethod(Example.make)\n", encoding="utf-8")
+        (self.root / "src/demo/domain/stubs.pyi").write_text(
+            "class Stub:\n    def build(self): ...\n    build = classmethod(build)\n",
+            encoding="utf-8")
+        fake, seen = self.fake_tools()
+
+        def capture(argv, cwd, timeout):
+            if str(ERYX / "_method_decorators_worker.py") in argv:
+                seen.append("method-decorators")
+                return _common.capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        report = check.run_checks(self.root, lcom_files="", capture_fn=capture,
+                                  versions_fn=lambda root: ({}, []))
+        self.assertEqual(report["exit_code"], 1, report)
+        self.assertEqual([(d["path"], d["symbol"], d["rule"])
+                          for d in report["diagnostics"]], [
+            ("src/demo/domain/api.py", "Example.make", "NON_INSTANCE_METHOD"),
+            ("src/demo/domain/stubs.pyi", "Stub.build", "NON_INSTANCE_METHOD")])
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in report["diagnostics"]))
+        self.assertEqual(next(t for t in report["tools"] if t["name"] == "method-decorators")
+                         ["status"], "violations")
+        self.assertIn("pyright", seen)
 
     def test_failed_lcom4_job_does_not_claim_analysis(self):
         fake, _ = self.fake_tools({"lcom4": {"stdout": "not JSON", "code": 1}})
@@ -401,7 +457,7 @@ class RunnerTests(unittest.TestCase):
                 report = check.run_checks(self.root, lcom_files=requested, capture_fn=fake,
                                           versions_fn=lambda root: ({}, []))
                 self.assertEqual(report["exit_code"], 2, report)
-                self.assertEqual(len(seen), 6)
+                self.assertEqual(len(seen), 7)
                 self.assertNotIn("lcom4", seen)
                 self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "error")
                 self.assertIn("INVALID_LCOM_FILES", {d["rule"] for d in report["diagnostics"]})
@@ -412,21 +468,21 @@ class RunnerTests(unittest.TestCase):
                                      "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(seen), 8)
         self.assertTrue(any(d["rule"] == "DOC101" for d in report["diagnostics"]))
 
     def test_violation_code_one(self):
         fake, seen = self.fake_tools({"pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 1)
-        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(seen), 8)
 
     def test_not_initialized_not_green(self):
         (self.root / ".eryx/architecture.ready.json").unlink()
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 5)
+        self.assertEqual(len(seen), 6)
         self.assertEqual(sum(t["status"] == "blocked" for t in report["tools"]), 2)
 
     def test_unapplied_limits_still_run_tools(self):
@@ -435,7 +491,7 @@ class RunnerTests(unittest.TestCase):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(seen), 8)
         self.assertTrue(any(d["rule"] == "READABILITY_NOT_APPLIED" for d in report["diagnostics"]))
 
     def test_short_output_does_not_truncate_json(self):

@@ -177,6 +177,41 @@ def parse_lcom4(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None
     return items, error
 
 
+def parse_method_decorators(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    obj = find_json(text, "eryx_method_decorators_adapter")
+    if (obj["eryx_method_decorators_adapter"] != 1 or not isinstance(obj.get("diagnostics"), list)
+            or "execution_error" not in obj):
+        raise ValueError("Unsupported method decorator adapter report schema")
+    error = obj.get("execution_error")
+    if error is not None and error not in {"METHOD_DECORATORS_PARSE_ERROR", "METHOD_DECORATORS_EXECUTION_ERROR"}:
+        raise ValueError("Unknown method decorator execution error")
+    items = []
+    for entry in obj["diagnostics"]:
+        if not isinstance(entry, dict) or entry.get("rule") not in {
+                "NON_INSTANCE_METHOD", "METHOD_DECORATORS_PARSE_ERROR", "METHOD_DECORATORS_EXECUTION_ERROR"}:
+            raise ValueError("Malformed method decorator diagnostic")
+        rule = entry["rule"]
+        if not isinstance(entry.get("message"), str):
+            raise ValueError("Missing method decorator message")
+        if (entry.get("path") is not None and not isinstance(entry["path"], str)
+                or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
+                or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)):
+            raise ValueError("Malformed method decorator diagnostic position")
+        if rule == "NON_INSTANCE_METHOD" and (
+                not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
+                or type(entry.get("line")) is not int or entry["line"] < 1
+                or type(entry.get("column")) is not int or entry["column"] < 1):
+            raise ValueError("Malformed method decorator location")
+        items.append(diagnostic("method-decorators", rule, entry["message"],
+                                path=relative_path(entry.get("path"), root), line=entry.get("line"),
+                                column=entry.get("column"), symbol=entry.get("symbol"),
+                                is_infrastructure_error=rule != "NON_INSTANCE_METHOD"))
+    if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
+            error and not any(item["rule"] == error for item in items)):
+        raise ValueError("Method decorator error/diagnostic mismatch")
+    return items, error
+
+
 def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None) -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
@@ -205,6 +240,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             expected = 2 if parse_error else (1 if items else 0)
             if result.get("exit_code") != expected:
                 error = error or "LCOM4_EXECUTION_ERROR"
+        elif tool == "method-decorators":
+            items, parse_error = parse_method_decorators(result.get("stdout", ""), root)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "METHOD_DECORATORS_EXECUTION_ERROR"
         elif tool.startswith("tach"):
             if '"eryx_tach_adapter"' in text:
                 obj = find_json(text, "eryx_tach_adapter")

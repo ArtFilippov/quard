@@ -77,6 +77,8 @@ up to four concurrent analyzers. Pylint runs production and test profiles separa
 with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing.
 LCOM4 runs as an independent job over discovered production and test `.py` classes;
 see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
+The non-instance-method rule independently checks discovered `.py` and `.pyi` files
+in both profiles, including when LCOM4 is narrowed or skipped.
 
 ### Greenfield per-change LCOM4 checks
 
