@@ -184,6 +184,9 @@ class MethodReferences(ast.NodeVisitor):
             return "class"
         return None
 
+    def connects_to(self, other: MethodReferences, method: str) -> bool:
+        return method in self.calls or bool(self.fields & other.fields)
+
     def visit_Call(self, node: ast.Call) -> None:
         if (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                 and self.receiver_kind(node.func.value.id) is not None):
@@ -254,7 +257,8 @@ def components(node: ast.ClassDef, declarations: Declarations) -> list[list[str]
 
     for index, refs in enumerate(references):
         for other, method in enumerate(methods):
-            if method.name in refs.calls or (index != other and refs.fields & references[other].fields):
+            if (index == other and refs.connects_to(refs, method.name)
+                    or index != other and refs.connects_to(references[other], method.name)):
                 connect(index, other)
     groups: dict[int, list[str]] = {}
     for index, method in enumerate(methods):
@@ -290,6 +294,9 @@ class Classes(ast.NodeVisitor):
         self.generic_visit(node)
         self.parents.pop()
 
+    def results(self) -> list[dict[str, object]]:
+        return self.diagnostics
+
 
 def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
     diagnostics: list[dict[str, object]] = []
@@ -308,7 +315,7 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
             continue
         visitor = Classes(path, Declarations(tree))
         visitor.visit(tree)
-        diagnostics.extend(visitor.diagnostics)
+        diagnostics.extend(visitor.results())
     return diagnostics, error
 
 

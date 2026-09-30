@@ -24,6 +24,10 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   on consumer-owned classes, independently of the native analyzers and LCOM4.
   `MISSING_INSTANCE_RECEIVER` rejects plain class-body methods without a mandatory
   positional instance receiver, regardless of its name or use in the body.
+* **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
+  assignments and deletions of consumer-defined stored fields outside the declaring
+  class, in production and tests. Same-class methods may access another instance's
+  fields; properties and methods remain available to callers.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
@@ -59,6 +63,14 @@ runtime-generated conversions are outside this syntactic guarantee. Each
 violation identifies its class attribute and points to the decorator or conversion
 call. Source read/parse errors and invalid worker output are infrastructure
 errors, not silently skipped files.
+
+The instance-field job independently scans those discovered `.py` and `.pyi` files,
+including when LCOM4 is narrowed or skipped. It recognizes receiver assignments
+inside instance methods, class-body field declarations, local constructor bindings,
+explicit consumer imports and class annotations. Unknown or third-party owners
+are not inferred. Dynamic attributes, inherited fields, implicit re-exports and
+unresolved flow are outside its proof. Source/worker/report failures are
+infrastructure errors. See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
 
 ## Basic LCOM4
 

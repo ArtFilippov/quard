@@ -99,7 +99,11 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     manifest = run_dir / "method-decorators-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "method-decorators", "tool": "method-decorators", "argv": [sys.executable,
-                 str(tool_dir() / "_method_decorators_worker.py"), "--manifest", str(manifest)]})
+                  str(tool_dir() / "_method_decorators_worker.py"), "--manifest", str(manifest)]})
+    manifest = run_dir / "instance-fields-files.json"
+    write_json(manifest, sorted(files["production"] + files["tests"]), root)
+    jobs.append({"name": "instance-fields", "tool": "instance-fields", "argv": [sys.executable,
+                 str(tool_dir() / "_instance_fields_worker.py"), "--manifest", str(manifest)]})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])

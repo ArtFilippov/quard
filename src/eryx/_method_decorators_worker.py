@@ -77,6 +77,9 @@ class Declarations:
                 return scope[name]
         return name if name in BUILTINS else None
 
+    def results(self) -> list[dict[str, object]]:
+        return self.diagnostics
+
     def decorator(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
             value = self.binding(node.id)
@@ -269,7 +272,7 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
             continue
         visitor = Declarations(path)
         visitor.suite(tree.body)
-        diagnostics.extend(visitor.diagnostics)
+        diagnostics.extend(visitor.results())
     return diagnostics, error
 
 
