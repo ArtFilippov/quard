@@ -31,6 +31,8 @@ _STDLIB_SYMBOLS = {
     "copy": {"deepcopy"},
 }
 
+_PATH_WITH_NAME = {"pathlib.PurePath.with_name", "pathlib._abc.PurePathBase.with_name"}
+
 
 def _definition(value):
     """Use the runtime type's definition, not a literal's lexical AST parent."""
@@ -115,9 +117,9 @@ def _binding_definitions(binding, seen):
 def _call_return_definitions(node, seen):
     function = safe_infer(node.func)
     if isinstance(function, (nodes.FunctionDef, astroid.BoundMethod, astroid.UnboundMethod)):
-        if function.returns is None and function.qname() == "pathlib.PurePath.with_name":
-            # Python 3.12's unannotated with_name returns a new path of the
-            # receiver's type. It is covered by upstream's pathlib safe root.
+        if function.returns is None and function.qname() in _PATH_WITH_NAME:
+            # The unannotated pathlib method returns a new path of the
+            # receiver's type. Python 3.13 moved it to PurePathBase.
             if isinstance(node.func, nodes.Attribute):
                 return _value_definitions(node.func.expr, seen)
         return _annotation_definitions(function.returns)
@@ -129,7 +131,7 @@ def _call_return_definitions(node, seen):
                 continue
             methods = [method for method in owner.methods() if method.name == node.func.attrname]
             for method in methods:
-                if method.returns is None and method.qname() == "pathlib.PurePath.with_name":
+                if method.returns is None and method.qname() in _PATH_WITH_NAME:
                     values.append(owner)
                 else:
                     values.extend(_annotation_definitions(method.returns))
@@ -137,6 +139,18 @@ def _call_return_definitions(node, seen):
                 values.append(astroid.Uninferable)
         return values
     return [astroid.Uninferable]
+
+
+def _stdlib_pathlib_path(definition):
+    """Recognize Python 3.13 path classes moved out of pathlib's safe root."""
+    if not isinstance(definition, nodes.ClassDef) or definition.qname() not in {
+            f"pathlib._local.{name}" for name in (
+                "Path", "PurePath", "PosixPath", "WindowsPath", "PurePosixPath", "PureWindowsPath")
+    }:
+        return False
+    module = definition.root()
+    expected = Path(sysconfig.get_path("stdlib"), "pathlib", "_local.py")
+    return bool(module.file and Path(module.file).resolve() == expected.resolve())
 
 
 def _sequence_annotation_elements(annotation):
@@ -638,7 +652,9 @@ def _patch_coupling(checker):
                     "builtins.str", "builtins.bytes", "builtins.int", "builtins.bool",
                     "builtins.float", "builtins.complex"}):
                 continue
-            if not domain_only and root.name in config_loader.allowed_lod_roots:
+            if (not domain_only and (root.name in config_loader.allowed_lod_roots
+                                     or "pathlib" in config_loader.allowed_lod_roots
+                                     and _stdlib_pathlib_path(definition))):
                 continue
             layer = config_loader.get_layer_for_module(root.name, root.file or "")
             if layer and ("domain" in layer.lower() or "dto" in layer.lower()):
