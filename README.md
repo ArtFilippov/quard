@@ -98,7 +98,7 @@ project-wide coverage. An empty argument marks LCOM4 **skipped**, not passed.
 The report's `coverage.lcom4` records the requested value, selected paths and
 paths successfully analyzed; `tools` records the LCOM4 job status.
 
-Run the **full check without `--lcom_files` before merge and in CI**:
+Run the **full check without `--lcom_files` after changes and in CI**:
 
 ```bash
 uv run --locked --group dev python eryx/check.py
@@ -155,23 +155,24 @@ uv run --locked --group dev python eryx/check.py
 
 Legacy installations are migrated by reading their project settings into `.eryx/`
 when missing. Remove the legacy scripts and self-extracting delivery from the
-consumer in its integration PR after verifying migration. See [ORIGIN.md](ORIGIN.md).
+consumer after verifying migration. See [ORIGIN.md](ORIGIN.md).
 
-## Development and PR workflow
+## Development and integration
 
-1. In the affected consumer, create a branch inside Eryx first (submodules usually
-   start detached): `git -C eryx switch -c fix/description`.
-2. Reproduce and fix there. Add a standalone regression fixture without consumer
-   source dependencies. A separate Eryx clone with `--project` works identically.
-3. Run Eryx tests and the consumer's checks/runtime tests. From the consumer:
-   `uv run --locked --group dev python -B -m unittest discover -s eryx/tests`.
-   Tests also need `jsonschema`, supplied by Eryx's own dev group.
-4. Commit/push the tool branch, then use `gh pr create --repo ArtFilippov/eryx`.
-   Include reproduction and verification. Pass CI and review, then merge this PR.
-5. Create a consumer branch **after** the tool PR merges. Fetch Eryx, select the
-   exact merged SHA, reinstall if configs/dependencies changed, and run checks.
-6. Open a **separate consumer PR** with the gitlink and integration changes,
-   linking the Eryx PR. Never point a consumer update at an unpublished commit.
+Reproduce and fix in the Eryx checkout. Add a standalone regression fixture
+without consumer source dependencies. A separate Eryx clone with `--project`
+works identically. Run Eryx tests and the consumer's checks/runtime tests. From
+the consumer:
+
+```bash
+uv run --locked --group dev python -B -m unittest discover -s eryx/tests
+```
+
+Tests also need `jsonschema`, supplied by Eryx's own dev group.
+
+When updating a consumer, pin a reachable Eryx commit, reinstall if configs or
+dependencies changed, and run the consumer checks. Keep Eryx and consumer
+histories separate.
 
 Standalone development:
 
