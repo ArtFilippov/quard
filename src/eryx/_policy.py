@@ -11,7 +11,7 @@ from typing import Any
 
 import tomlkit
 
-from _common import EryxError, atomic_write, load_toml, read_json, safe_target, write_json
+from eryx._common import EryxError, atomic_write, load_toml, read_json, safe_target, write_json
 
 LIMIT_MAP = {
     "max_line_length": ("format", "max-line-length"),

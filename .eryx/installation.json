@@ -1,0 +1,16 @@
+{
+  "architecture_initialization_required": false,
+  "dependencies": [
+    "pylint==4.0.8",
+    "clean-architecture-linter-plugin==1.2.2",
+    "pyright[nodejs]==1.1.414",
+    "tach==0.35.1",
+    "pydoclint==0.9.1",
+    "tomlkit==0.13.3",
+    "packaging==25.0"
+  ],
+  "eryx_version": "1.0.0",
+  "extras": [],
+  "mode": "strict",
+  "source_layout": "src"
+}

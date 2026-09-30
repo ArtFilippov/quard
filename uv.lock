@@ -72,6 +72,14 @@ wheels = [
 name = "eryx"
 version = "1.0.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "astroid" },
+    { name = "clean-architecture-linter-plugin" },
+    { name = "packaging" },
+    { name = "pylint" },
+    { name = "tach" },
+    { name = "tomlkit" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -86,17 +94,25 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "astroid", specifier = "==4.0.4" },
+    { name = "clean-architecture-linter-plugin", specifier = "==1.2.2" },
+    { name = "packaging", specifier = "==25.0" },
+    { name = "pylint", specifier = "==4.0.8" },
+    { name = "tach", specifier = "==0.35.1" },
+    { name = "tomlkit", specifier = "==0.13.3" },
+]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "clean-architecture-linter-plugin", specifier = "==1.2.2" },
-    { name = "jsonschema", specifier = "==4.26.0" },
-    { name = "packaging", specifier = "==25.0" },
-    { name = "pydoclint", specifier = "==0.9.1" },
-    { name = "pylint", specifier = "==4.0.8" },
-    { name = "pyright", extras = ["nodejs"], specifier = "==1.1.414" },
-    { name = "tach", specifier = "==0.35.1" },
-    { name = "tomlkit", specifier = "==0.13.3" },
+    { name = "clean-architecture-linter-plugin", marker = "python_full_version >= '3.12'", specifier = "==1.2.2" },
+    { name = "jsonschema", marker = "python_full_version >= '3.12'", specifier = "==4.26.0" },
+    { name = "packaging", marker = "python_full_version >= '3.12'", specifier = "==25.0" },
+    { name = "pydoclint", marker = "python_full_version >= '3.12'", specifier = "==0.9.1" },
+    { name = "pylint", marker = "python_full_version >= '3.12'", specifier = "==4.0.8" },
+    { name = "pyright", extras = ["nodejs"], marker = "python_full_version >= '3.12'", specifier = "==1.1.414" },
+    { name = "tach", marker = "python_full_version >= '3.12'", specifier = "==0.35.1" },
+    { name = "tomlkit", marker = "python_full_version >= '3.12'", specifier = "==0.13.3" },
 ]
 
 [[package]]

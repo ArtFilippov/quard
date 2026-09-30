@@ -31,12 +31,15 @@ After tool changes, run from the Eryx checkout:
 ```bash
 uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
+uv run --locked --group dev python check.py
 ```
 
 This includes native regression and real installation/smoke tests. Test fixtures
 must not require access to a private consumer. Run the affected consumer's full
 static and relevant runtime checks too. Keep ordinary install/check/apply/accept
-writes inside the consumer; verify the submodule remains clean.
+writes inside the selected project; verify consumer submodules remain clean.
+The Eryx checkout is also a configured project: its full check covers `src/eryx/`
+and `tests/`, with reports in this checkout's `.eryx/`.
 
 Develop directly in a consumer submodule or separate clone. Reproduce, fix, add
 an autonomous regression, and test. Keep the tool and consumer histories separate;

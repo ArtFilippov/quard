@@ -10,9 +10,9 @@ import unittest
 
 
 ERYX = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ERYX))
+sys.path.insert(0, str(ERYX / "src"))
 
-from init_architecture import sync_clean_arch
+from eryx.init_architecture import sync_clean_arch
 
 
 class ArchitectureLayersTest(unittest.TestCase):

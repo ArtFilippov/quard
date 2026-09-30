@@ -179,7 +179,14 @@ Standalone development:
 ```bash
 uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
+uv run --locked --group dev python check.py
 ```
+
+Eryx's implementation lives in `src/eryx/`. Root Python commands are compatibility
+entry points for existing consumer integrations. The checkout has its own reviewed
+`.eryx/` and `tach.toml`, so a full check from here analyzes its production modules
+and tests; the resulting report is in this checkout's `.eryx/reports/latest.json`.
+Consumer checks still write reports and caches only inside the selected consumer.
 
 CI runs offline orchestration tests and real compatibility regressions on isolated
 public fixtures; `LifecycleTests` is always skipped. Access to `tai` is not needed.

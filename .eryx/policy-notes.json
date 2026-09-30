@@ -1,0 +1,88 @@
+{
+  "deferred": [
+    "Blanket ban on internal comments",
+    "Function length in physical lines",
+    "Automatic dependency-community discovery",
+    "Universal Protocol/ABC-only proof"
+  ],
+  "kept_partial_overlaps": [
+    "unused-variable/import: scopes differ",
+    "protected access: inference and types differ",
+    "clean-arch-dependency and Tach: class-level and module-level checks differ"
+  ],
+  "not_provided": [
+    "Formatter",
+    "Natural-language spell checking (requires Enchant and dictionaries)",
+    "Runtime tests",
+    "Dependency vulnerability scanner"
+  ],
+  "official_extension_not_loaded": {
+    "pylint.extensions.docparams": "Message-ID collisions with the clean-architecture plugin; Google docstrings validated by pydoclint, docstyle by Pylint. Not a claim of identical rule sets."
+  },
+  "official_extensions_loaded": [
+    "pylint.extensions.bad_builtin",
+    "pylint.extensions.broad_try_clause",
+    "pylint.extensions.check_elif",
+    "pylint.extensions.code_style",
+    "pylint.extensions.comparison_placement",
+    "pylint.extensions.confusing_elif",
+    "pylint.extensions.consider_refactoring_into_while_condition",
+    "pylint.extensions.consider_ternary_expression",
+    "pylint.extensions.dict_init_mutate",
+    "pylint.extensions.docstyle",
+    "pylint.extensions.dunder",
+    "pylint.extensions.empty_comment",
+    "pylint.extensions.eq_without_hash",
+    "pylint.extensions.for_any_all",
+    "pylint.extensions.magic_value",
+    "pylint.extensions.mccabe",
+    "pylint.extensions.no_self_use",
+    "pylint.extensions.overlapping_exceptions",
+    "pylint.extensions.private_import",
+    "pylint.extensions.redefined_loop_name",
+    "pylint.extensions.redefined_variable_type",
+    "pylint.extensions.set_membership",
+    "pylint.extensions.typing",
+    "pylint.extensions.while_used"
+  ],
+  "production_disabled": {
+    "missing-class-docstring": "User policy: docstrings are optional.",
+    "missing-function-docstring": "User policy: docstrings are optional.",
+    "missing-module-docstring": "User policy: docstrings are optional.",
+    "possibly-used-before-assignment": "Pyright reportPossiblyUnboundVariable=error.",
+    "reimported": "Pyright reportDuplicateImport=error.",
+    "undefined-variable": "Pyright reportUndefinedVariable=error.",
+    "used-before-assignment": "Pyright reportUnboundVariable=error."
+  },
+  "pyright_disabled": {
+    "reportImportCycles": "Pylint cyclic-import checks Python module cycles."
+  },
+  "test_additional_disabled": {
+    "duplicate-code": "Repeated arrange/assert sections need not become shared abstractions.",
+    "magic-value-comparison": "Concrete expected values make assertions readable.",
+    "no-self-use": "Test frameworks call instance methods without instance state.",
+    "protected-access": "White-box tests may access protected implementation details.",
+    "redefined-outer-name": "pytest fixture names are intentionally reused in test arguments.",
+    "too-few-public-methods": "Test containers and fakes may expose one operation.",
+    "unused-argument": "Fixtures can be requested only for their side effects."
+  },
+  "test_architecture_disabled_if_registered": [
+    "W9001",
+    "W9003",
+    "W9004",
+    "W9005",
+    "W9006",
+    "W9007",
+    "W9009",
+    "W9010",
+    "W9011",
+    "W9012",
+    "W9013",
+    "W9015",
+    "W9102",
+    "W9201",
+    "W9202",
+    "W9301",
+    "W9601"
+  ]
+}

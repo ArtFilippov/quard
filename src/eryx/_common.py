@@ -25,15 +25,13 @@ class EryxError(Exception):
 
 
 def tool_dir() -> Path:
-    return Path(__file__).resolve().parent
+    return Path(__file__).resolve().parents[2]
 
 
 def project_dir(value: str | Path) -> Path:
     root = Path(value).resolve()
     if not root.is_dir() or not (root / "pyproject.toml").is_file():
         raise EryxError("NOT_A_PROJECT", f"Expected a project with pyproject.toml: {root}")
-    if root == tool_dir():
-        raise EryxError("TOOL_IS_NOT_CONSUMER", "Select a consumer project with --project.")
     return root
 
 

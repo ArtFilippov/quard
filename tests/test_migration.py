@@ -10,10 +10,8 @@ from unittest.mock import patch
 
 import tomlkit
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _common
-import _policy
-import install
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from eryx import _common, _policy, install
 from test_infrastructure import CATALOG, ERYX, create_repo, native_result
 
 

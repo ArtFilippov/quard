@@ -33,8 +33,8 @@ class ArchitectureCompatTest(unittest.TestCase):
             for module, layer in layers.items():
                 config += f'[[tool.clean-arch.layers]]\nmodule = "{module}"\nname = "{layer}"\n'
             (root / "pyproject.toml").write_text(config, encoding="utf-8")
-            setup = (f'sys.path.insert(0, {str(ERYX)!r}); '
-                     'from _architecture_compat import install_architecture_compat; '
+            setup = (f'sys.path.insert(0, {str(ERYX / "src")!r}); '
+                     'from eryx._architecture_compat import install_architecture_compat; '
                      'install_architecture_compat(); install_architecture_compat(); ') if patched else ""
             # A fresh process also isolates the plugin's singleton configuration.
             result = subprocess.run(

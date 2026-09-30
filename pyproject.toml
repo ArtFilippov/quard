@@ -4,6 +4,14 @@ version = "1.0.0"
 description = "Pinned native Python analysis for uv/src projects"
 requires-python = ">=3.12"
 license = "MIT"
+dependencies = [
+  "astroid==4.0.4",
+  "clean-architecture-linter-plugin==1.2.2",
+  "packaging==25.0",
+  "pylint==4.0.8",
+  "tach==0.35.1",
+  "tomlkit==0.13.3",
+]
 
 [dependency-groups]
 dev = [
@@ -19,3 +27,143 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.uv.dependency-groups.dev]
+requires-python = ">=3.12"
+
+[tool.pylint.main]
+load-plugins = ["pylint.extensions.bad_builtin", "pylint.extensions.broad_try_clause", "pylint.extensions.check_elif", "pylint.extensions.code_style", "pylint.extensions.comparison_placement", "pylint.extensions.confusing_elif", "pylint.extensions.consider_refactoring_into_while_condition", "pylint.extensions.consider_ternary_expression", "pylint.extensions.dict_init_mutate", "pylint.extensions.docstyle", "pylint.extensions.dunder", "pylint.extensions.empty_comment", "pylint.extensions.eq_without_hash", "pylint.extensions.for_any_all", "pylint.extensions.magic_value", "pylint.extensions.mccabe", "pylint.extensions.no_self_use", "pylint.extensions.overlapping_exceptions", "pylint.extensions.private_import", "pylint.extensions.redefined_loop_name", "pylint.extensions.redefined_variable_type", "pylint.extensions.set_membership", "pylint.extensions.typing", "pylint.extensions.while_used", "clean_architecture_linter"]
+jobs = 1
+persistent = false
+fail-under = 0
+fail-on = ["I"]
+recursive = true
+py-version = "3.12"
+ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.eryx|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"]
+
+[tool.pylint.messages_control]
+enable = ["all"]
+disable = ["missing-module-docstring", "missing-class-docstring", "missing-function-docstring", "reimported", "undefined-variable", "used-before-assignment", "possibly-used-before-assignment"]
+
+[tool.pylint.reports]
+reports = false
+score = false
+output-format = "json2"
+
+[tool.pylint.format]
+indent-string = "    "
+indent-after-paren = 4
+single-line-if-stmt = false
+single-line-class-stmt = false
+max-line-length = 100
+max-module-lines = 400
+
+[tool.pylint.similarities]
+ignore-comments = true
+ignore-docstrings = true
+ignore-imports = true
+ignore-signatures = true
+min-similarity-lines = 4
+
+[tool.pylint.design]
+ignored-parents = ["builtins.BaseException", "builtins.Exception", "builtins.RuntimeError", "builtins.OSError", "builtins.TimeoutError", "typing.Protocol", "typing_extensions.Protocol", "enum.Enum", "enum.StrEnum"]
+max-statements = 30
+max-complexity = 8
+max-branches = 8
+max-locals = 10
+max-returns = 4
+max-bool-expr = 4
+max-args = 5
+max-positional-arguments = 4
+max-attributes = 7
+max-public-methods = 12
+max-parents = 3
+min-public-methods = 2
+
+[tool.pylint.refactoring]
+max-nested-blocks = 4
+
+[tool.pylint.broad_try_clause]
+max-try-statements = 1
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".eryx/**", "**/.eryx/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
+ignore = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".eryx/**", "**/.eryx/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
+typeCheckingMode = "strict"
+pythonPlatform = "Linux"
+extraPaths = ["src"]
+pythonVersion = "3.12"
+analyzeUnannotatedFunctions = true
+enableReachabilityAnalysis = true
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
+deprecateTypingAliases = true
+enableExperimentalFeatures = false
+reportImportCycles = "none"
+reportCallInDefaultInitializer = "error"
+reportImplicitOverride = "error"
+reportImplicitStringConcatenation = "error"
+reportMissingSuperCall = "error"
+reportPropertyTypeMismatch = "error"
+reportUninitializedInstanceVariable = "error"
+reportUnnecessaryTypeIgnoreComment = "error"
+reportUnreachable = "error"
+reportUnusedCallResult = "error"
+reportMissingModuleSource = "error"
+reportDuplicateImport = "error"
+reportUndefinedVariable = "error"
+reportUnboundVariable = "error"
+reportPossiblyUnboundVariable = "error"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["src"]
+reportPrivateUsage = "none"
+reportUnusedCallResult = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "src"
+extraPaths = ["src"]
+
+[tool.pydoclint]
+style = "google"
+quiet = true
+exclude = "(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.eryx|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"
+skip-checking-short-docstrings = false
+skip-checking-private-functions = false
+skip-checking-raises = false
+check-arg-order = true
+arg-type-hints-in-docstring = true
+arg-type-hints-in-signature = true
+check-return-types = true
+check-yield-types = true
+check-class-attributes = true
+should-document-private-class-attributes = true
+ignore-underscore-args = false
+ignore-private-args = false
+should-document-star-arguments = true
+check-style-mismatch = true
+check-arg-defaults = true
+allow-init-docstring = true
+require-inline-class-var-docs = false
+require-return-section-when-returning-nothing = false
+show-filenames-in-every-violation-message = true
+auto-regenerate-baseline = false
+
+[tool.clean-arch]
+project_type = "generic"
+visibility_enforcement = true
+infrastructure_modules = ["eryx"]
+
+[tool.clean-arch.layer_map]
+Domain = ["domain"]
+UseCase = ["application", "use_cases", "usecase", "usecases"]
+Infrastructure = ["infrastructure", "adapters"]
+Interface = ["interfaces", "interface"]
+Bootstrap = ["bootstrap", "composition"]
+
+[[tool.clean-arch.layers]]
+module = "eryx"
+name = "Infrastructure"

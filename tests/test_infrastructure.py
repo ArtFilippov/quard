@@ -18,13 +18,9 @@ import unittest
 from unittest.mock import patch
 
 ERYX = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ERYX))
-import _common
-import _policy
-import _reports
-import check
-import init_architecture
-spec = importlib.util.spec_from_file_location("eryx_install", ERYX / "install.py")
+sys.path.insert(0, str(ERYX / "src"))
+from eryx import _common, _policy, _reports, check, init_architecture
+spec = importlib.util.spec_from_file_location("eryx_install", ERYX / "src/eryx/install.py")
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 
@@ -55,6 +51,9 @@ def native_result(argv, *, stdout="", stderr="", code=0, error=None):
 
 
 class RepositoryTest(unittest.TestCase):
+    def test_tool_checkout_can_be_a_consumer(self):
+        self.assertEqual(_common.project_dir(ERYX), ERYX)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="eryx-test with spaces-")
         self.root = Path(self.tmp.name)

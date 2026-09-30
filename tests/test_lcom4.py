@@ -8,11 +8,10 @@ from tempfile import TemporaryDirectory
 import unittest
 
 ERYX = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ERYX))
+sys.path.insert(0, str(ERYX / "src"))
 
-import _common
-import _policy
-from check import execute_job, make_jobs, select_lcom_files
+from eryx import _common, _policy
+from eryx.check import execute_job, make_jobs, select_lcom_files
 
 
 class Lcom4Test(unittest.TestCase):

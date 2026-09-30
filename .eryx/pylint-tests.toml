@@ -1,0 +1,55 @@
+# Test-only profile. Regenerate with eryx/apply.py.
+[tool.pylint.main]
+load-plugins = ["pylint.extensions.bad_builtin", "pylint.extensions.broad_try_clause", "pylint.extensions.check_elif", "pylint.extensions.code_style", "pylint.extensions.comparison_placement", "pylint.extensions.confusing_elif", "pylint.extensions.consider_refactoring_into_while_condition", "pylint.extensions.consider_ternary_expression", "pylint.extensions.dict_init_mutate", "pylint.extensions.docstyle", "pylint.extensions.dunder", "pylint.extensions.empty_comment", "pylint.extensions.eq_without_hash", "pylint.extensions.for_any_all", "pylint.extensions.magic_value", "pylint.extensions.mccabe", "pylint.extensions.no_self_use", "pylint.extensions.overlapping_exceptions", "pylint.extensions.private_import", "pylint.extensions.redefined_loop_name", "pylint.extensions.redefined_variable_type", "pylint.extensions.set_membership", "pylint.extensions.typing", "pylint.extensions.while_used", "clean_architecture_linter"]
+jobs = 1
+persistent = false
+fail-under = 0
+fail-on = ["I"]
+recursive = true
+py-version = "3.12"
+ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.eryx|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"]
+
+[tool.pylint.messages_control]
+enable = ["all"]
+disable = ["missing-module-docstring", "missing-class-docstring", "missing-function-docstring", "reimported", "undefined-variable", "used-before-assignment", "possibly-used-before-assignment", "too-few-public-methods", "no-self-use", "redefined-outer-name", "unused-argument", "protected-access", "magic-value-comparison", "duplicate-code", "W9001", "W9003", "W9004", "W9005", "W9006", "W9007", "W9009", "W9010", "W9011", "W9102", "W9201", "W9202", "W9301"]
+
+[tool.pylint.reports]
+reports = false
+score = false
+output-format = "json2"
+
+[tool.pylint.format]
+indent-string = "    "
+indent-after-paren = 4
+single-line-if-stmt = false
+single-line-class-stmt = false
+max-line-length = 100
+max-module-lines = 800
+
+[tool.pylint.similarities]
+ignore-comments = true
+ignore-docstrings = true
+ignore-imports = true
+ignore-signatures = true
+min-similarity-lines = 4
+
+[tool.pylint.design]
+ignored-parents = ["builtins.BaseException", "builtins.Exception", "builtins.RuntimeError", "builtins.OSError", "builtins.TimeoutError", "typing.Protocol", "typing_extensions.Protocol", "enum.Enum", "enum.StrEnum"]
+max-statements = 60
+max-complexity = 10
+max-branches = 10
+max-locals = 20
+max-returns = 6
+max-bool-expr = 4
+max-args = 10
+max-positional-arguments = 10
+max-attributes = 7
+max-public-methods = 30
+max-parents = 3
+min-public-methods = 0
+
+[tool.pylint.refactoring]
+max-nested-blocks = 4
+
+[tool.pylint.broad_try_clause]
+max-try-statements = 3

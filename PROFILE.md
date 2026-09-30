@@ -29,9 +29,9 @@ Production is `src/`; tests are `tests/` and the test directory basenames config
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
 reports. `.pyi` files are checked by Pyright and both method rules;
-other tools use their native scope. `__init__.py` is included. Root scripts,
-notebooks and Eryx itself are outside the consumer's source scope. Eryx's own
-code is verified by its autonomous test suite.
+other tools use their native scope. `__init__.py` is included. Root scripts and
+notebooks are outside the consumer's source scope. In the Eryx checkout, its own
+`src/eryx/` and `tests/` are analyzed; its autonomous test suite verifies execution.
 `check.py --lcom_files` narrows only LCOM4 to explicitly selected, existing `.py`
 files in that scope; `--lcom_files ""` skips LCOM4. Without the option, full
 LCOM4 coverage is retained. Other analyzers always use their normal scopes.

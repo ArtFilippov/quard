@@ -9,9 +9,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 ERYX = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ERYX))
+sys.path.insert(0, str(ERYX / "src"))
 
-from check import execute_job, make_jobs
+from eryx.check import execute_job, make_jobs
 
 
 class PylintOutputTest(unittest.TestCase):

@@ -8,10 +8,10 @@ from tempfile import TemporaryDirectory
 import unittest
 
 ERYX = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ERYX))
+sys.path.insert(0, str(ERYX / "src"))
 
-from _policy import discover_files, read_scope
-from check import execute_job, make_jobs
+from eryx._policy import discover_files, read_scope
+from eryx.check import execute_job, make_jobs
 
 
 class MethodDecoratorTests(unittest.TestCase):
