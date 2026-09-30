@@ -43,3 +43,29 @@ is detached, reproduce, fix, add an autonomous regression, test, commit/push and
 open a PR **in Eryx** through `gh`. After CI/review/merge, pin the merged SHA in a
 **separate consumer PR**, with integration updates and a link to the tool PR.
 Never combine the two repository histories or publish an unreachable gitlink.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in this repo’s GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
+## English
+
+After every user command written in English, check its grammar before doing anything else.
+
+- If there are grammatical errors, start your response with: `Better say: <corrected version>`
+- Preserve the user's original meaning and phrasing as much as possible.
+- If the grammar is already correct, start your response with: `Great grammar`
+- If there is reasonable doubt about the intended meaning and correcting the grammar would require guessing the user's intent, ask a clarifying question instead of assuming the meaning.
+- After the grammar feedback or clarification, proceed with the user's request normally.
+
+Keep your own responses extremely concise, simple, and easy to understand.
