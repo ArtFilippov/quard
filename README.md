@@ -86,6 +86,8 @@ and known keys in `vars(obj)` or `obj.__dict__` follow the same boundary.
 It forbids stored class values, including `Final` constants, at declaration and
 statically named writes through known classes. Initialized dataclass instance
 fields, Enum members and `__slots__` remain allowed.
+The class-contract rule checks every discovered `.py` and `.pyi` class in both
+profiles for an explicit inherited contract, independently of LCOM4 selection.
 
 ### Greenfield per-change LCOM4 checks
 

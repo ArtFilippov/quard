@@ -249,6 +249,39 @@ def parse_instance_fields(text: str, root: Path) -> tuple[list[dict[str, Any]], 
     return items, error
 
 
+def parse_class_contracts(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    obj = find_json(text, "eryx_class_contracts_adapter")
+    if (obj["eryx_class_contracts_adapter"] != 1 or not isinstance(obj.get("diagnostics"), list)
+            or "execution_error" not in obj):
+        raise ValueError("Unsupported class contract adapter report schema")
+    error = obj["execution_error"]
+    if error not in {None, "CLASS_CONTRACTS_PARSE_ERROR", "CLASS_CONTRACTS_EXECUTION_ERROR"}:
+        raise ValueError("Unknown class contract execution error")
+    items = []
+    for entry in obj["diagnostics"]:
+        if not isinstance(entry, dict) or entry.get("rule") not in {
+                "MISSING_CLASS_CONTRACT", "CLASS_CONTRACTS_PARSE_ERROR", "CLASS_CONTRACTS_EXECUTION_ERROR"}:
+            raise ValueError("Malformed class contract diagnostic")
+        rule = entry["rule"]
+        if (not isinstance(entry.get("message"), str)
+                or entry.get("path") is not None and not isinstance(entry["path"], str)
+                or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
+                or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)):
+            raise ValueError("Malformed class contract location")
+        if rule == "MISSING_CLASS_CONTRACT" and (
+                not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
+                or type(entry.get("line")) is not int or type(entry.get("column")) is not int):
+            raise ValueError("Missing class contract location")
+        items.append(diagnostic("class-contracts", rule, entry["message"],
+                                path=relative_path(entry.get("path"), root), line=entry.get("line"),
+                                column=entry.get("column"), symbol=entry.get("symbol"),
+                                is_infrastructure_error=rule != "MISSING_CLASS_CONTRACT"))
+    if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
+            error and not any(item["rule"] == error for item in items)):
+        raise ValueError("Class contract error/diagnostic mismatch")
+    return items, error
+
+
 def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None) -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
@@ -289,6 +322,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             expected = 2 if parse_error else (1 if items else 0)
             if result.get("exit_code") != expected:
                 error = error or "INSTANCE_FIELDS_EXECUTION_ERROR"
+        elif tool == "class-contracts":
+            items, parse_error = parse_class_contracts(result.get("stdout", ""), root)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "CLASS_CONTRACTS_EXECUTION_ERROR"
         elif tool.startswith("tach"):
             if '"eryx_tach_adapter"' in text:
                 obj = find_json(text, "eryx_tach_adapter")

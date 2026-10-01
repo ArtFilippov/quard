@@ -58,7 +58,7 @@ def function_locals(method: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return names
 
 
-class Declarations:
+class Declarations(object):
     """Track proven builtin bindings as class/module/function suites execute."""
 
     def __init__(self, path: str):

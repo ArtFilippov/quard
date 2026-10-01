@@ -205,7 +205,7 @@ def classvar_annotation(node: ast.expr, names: set[str], modules: set[str]) -> b
             and isinstance(target.value, ast.Name) and target.value.id in modules)
 
 
-class Ownership:
+class Ownership(object):
     """Index declarations across all discovered source files before checking uses."""
 
     def __init__(self, trees: dict[str, ast.Module]):

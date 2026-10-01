@@ -24,6 +24,14 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   on consumer-owned classes, independently of the native analyzers and LCOM4.
   `MISSING_INSTANCE_RECEIVER` rejects plain class-body methods without a mandatory
   positional instance receiver, regardless of its name or use in the body.
+* **Class contracts**: `MISSING_CLASS_CONTRACT` requires each customer class to
+  explicitly inherit a contract. Local Protocol and abstract-interface declarations
+  qualify; implementations may inherit these or an opaque external base (including
+  an explicit `object`). Implicit `object` does not qualify. This independent job
+  scans discovered production, test and stub files even when LCOM4 is narrowed
+  or skipped. It resolves explicit imports and local ancestry syntactically;
+  unknown bare names and unresolved local bases do not prove a contract. Source
+  failures and malformed worker reports are infrastructure errors.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and
@@ -43,7 +51,7 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
-reports. `.pyi` files are checked by Pyright and both method rules;
+reports. `.pyi` files are checked by Pyright, both method rules and class contracts;
 other tools use their native scope. `__init__.py` is included. Root scripts and
 notebooks are outside the consumer's source scope. In the Eryx checkout, its own
 `src/eryx/` and `tests/` are analyzed; its autonomous test suite verifies execution.

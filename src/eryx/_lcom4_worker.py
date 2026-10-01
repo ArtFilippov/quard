@@ -64,7 +64,7 @@ def is_placeholder(method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
-class Declarations:
+class Declarations(object):
     """Resolve only local class inheritance and explicit stdlib typing/abc imports."""
 
     def __init__(self, tree: ast.Module):
