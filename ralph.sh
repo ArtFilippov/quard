@@ -2,10 +2,6 @@
 # Work through the ready GitHub issues on the current branch, one OpenCode session per issue.
 set -euo pipefail
 
-HTTP_PROXY="http://proxyuser:password123456789@10.203.0.2:3128" 
-HTTPS_PROXY="http://proxyuser:password123456789@10.203.0.2:3128" 
-NO_PROXY="localhost,127.0.0.1,::1"
-
 started=$SECONDS
 issue_started=$SECONDS
 issue_number=''
