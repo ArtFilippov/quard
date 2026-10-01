@@ -54,15 +54,18 @@ class Contracts(object):
         self.paths: dict[str, str] = {}
         self.nodes: dict[str, ast.ClassDef] = {}
         self.imports: dict[str, dict[str, str | None]] = {}
-        self.declarations: list[tuple[str, ast.ClassDef, str]] = []
         self.bindings_by_path: dict[str, dict[str, str | None]] = {}
+        self.declarations: list[tuple[str, ast.ClassDef, str]] = []
         self.modules = {module_name(path) for path in trees}
+        self.customer_roots = {module.split(".")[0] for module in self.modules}
         for path, tree in trees.items():
             module = module_name(path)
             for name, node in collect_nodes(module, tree).items():
                 self.declarations.append((name, node, path))
-                self.nodes[name] = node
-                self.paths[name] = path
+                # Prefer implementation source when a module also has a stub.
+                if name not in self.nodes or path.endswith(".py"):
+                    self.nodes[name] = node
+                    self.paths[name] = path
             bindings: dict[str, str | None] = {}
             package = module if Path(path).stem == "__init__" else module.rpartition(".")[0]
             for statement in tree.body:
@@ -82,33 +85,60 @@ class Contracts(object):
                     for target in targets:
                         if isinstance(target, ast.Name):
                             bindings[target.id] = None
-            self.imports[module] = bindings
+            if module not in self.imports or path.endswith(".py"):
+                self.imports[module] = bindings
             self.bindings_by_path[path] = bindings
 
-    def resolved(self, name: str, base: ast.expr) -> str | None:
+    def provenance(self, target: str) -> str:
+        """Follow customer re-exports without loading or inspecting external modules."""
+        seen: set[str] = set()
+        while target not in seen:
+            seen.add(target)
+            if target in self.nodes:
+                return target
+            for module in sorted(self.modules, key=len, reverse=True):
+                if not module or not target.startswith(module + "."):
+                    continue
+                first, dot, rest = target[len(module) + 1:].partition(".")
+                binding = self.imports[module].get(first)
+                if binding:
+                    target = binding + (dot + rest if dot else "")
+                    break
+            else:
+                return target
+        return target
+
+    def resolved(self, name: str, base: ast.expr, path: str | None = None) -> str | None:
         text = dotted(base)
         if text is None:
             return None
-        module = module_name(self.paths[name])
+        path = path or self.paths[name]
+        module = module_name(path)
         scope = name.rpartition(".")[0]
-        for prefix in [scope, module]:
+        prefixes = [scope]
+        while "." in scope and scope != module:
+            scope = scope.rpartition(".")[0]
+            prefixes.append(scope)
+        for prefix in prefixes:
             candidate = f"{prefix}.{text}"
             if candidate in self.nodes:
                 return candidate
         first, _, rest = text.partition(".")
-        imported = self.imports[module].get(first)
+        imported = self.bindings_by_path[path].get(first)
         if imported:
-            return f"{imported}.{rest}" if rest else imported
-        if first not in self.imports[module] and first in vars(builtins) and isinstance(vars(builtins)[first], type):
+            return self.provenance(f"{imported}.{rest}" if rest else imported)
+        if (first not in self.bindings_by_path[path] and first in vars(builtins)
+                and isinstance(vars(builtins)[first], type)):
             return f"builtins.{text}"
         return None
 
-    def has_contract(self, name: str, seen: frozenset[str] = frozenset()) -> bool:
+    def has_contract(self, name: str, seen: frozenset[str] = frozenset(),
+                     source: tuple[ast.ClassDef, str] | None = None) -> bool:
         if name in seen:
             return False
-        node = self.nodes[name]
+        node, path = source or (self.nodes[name], self.paths[name])
         for base in node.bases:
-            resolved = self.resolved(name, base)
+            resolved = self.resolved(name, base, path)
             if resolved in {"typing.Protocol", "typing_extensions.Protocol"}:
                 return True
             if resolved in self.nodes and self.has_contract(resolved, seen | {name}):
@@ -118,32 +148,31 @@ class Contracts(object):
         return False
 
     def local_module(self, resolved: str) -> bool:
-        return any(resolved == module or resolved.startswith(module + ".")
-                   for module in self.modules if module)
+        return resolved.split(".")[0] in self.customer_roots
 
-    def declaration(self, name: str, seen: frozenset[str] = frozenset()) -> bool:
+    def declaration(self, name: str, seen: frozenset[str] = frozenset(),
+                    source: tuple[ast.ClassDef, str] | None = None) -> bool:
         if name in seen:
             return False
-        node = self.nodes[name]
-        bases = {self.resolved(name, base) for base in node.bases}
+        node, path = source or (self.nodes[name], self.paths[name])
+        bases = {self.resolved(name, base, path) for base in node.bases}
         if bases & {"typing.Protocol", "typing_extensions.Protocol"}:
             return True
-        metaclass = {self.resolved(name, keyword.value) for keyword in node.keywords
+        metaclass = {self.resolved(name, keyword.value, path) for keyword in node.keywords
                      if keyword.arg == "metaclass"}
         if not (bases | metaclass) & {"abc.ABC", "abc.ABCMeta"} and not any(
                 base in self.nodes and self.declaration(base, seen | {name}) for base in bases):
             return False
         return any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                   and any(self.resolved(name, decorator) in {"abc.abstractmethod", "abc.abstractproperty"}
+                   and any(self.resolved(name, decorator, path) in {"abc.abstractmethod", "abc.abstractproperty"}
                            for decorator in item.decorator_list) for item in node.body)
 
     def diagnostics(self) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for name, node, path in self.declarations:
             module = module_name(path)
-            self.nodes[name], self.paths[name] = node, path
-            self.imports[module] = self.bindings_by_path[path]
-            if not self.declaration(name) and not self.has_contract(name):
+            source = (node, path)
+            if not self.declaration(name, source=source) and not self.has_contract(name, source=source):
                 results.append({"rule": "MISSING_CLASS_CONTRACT", "path": path,
                                 "line": node.lineno, "column": node.col_offset + 1,
                                 "symbol": name.removeprefix(module + "."),

@@ -111,12 +111,77 @@ class ShadowObject(object): pass
         self.assertEqual({d["symbol"] for d in result["diagnostics"]},
                          {"Pretend", "ShadowObject"})
 
+    def test_cross_module_aliases_ancestors_nested_classes_and_stubs(self):
+        self.put("src/pkg/__init__.py", "from .contracts import Port as PublicPort\n")
+        self.put("src/pkg/contracts.pyi", '''\
+from typing import Protocol as P
+class Port(P):
+    def run(self) -> None: ...
+class NotAContract: ...
+''')
+        self.put("src/pkg/reexport.py", "from . import PublicPort as Alias\n")
+        self.put("src/pkg/middle.py", '''\
+from .reexport import Alias as Parent
+from .contracts import NotAContract as Plain
+class Middle(Parent): pass
+class Unproven(Plain): pass
+class Outer(object):
+    class Nested(Middle): pass
+    class Broken(Unproven): pass
+''')
+        self.put("src/pkg/usage.py", '''\
+from .middle import Middle as Imported, Unproven as Bad, Outer
+import pkg.middle as module_alias
+class Good(Imported): pass
+class Qualified(module_alias.Outer.Nested): pass
+class NestedGood(Outer.Nested): pass
+class Missing(Bad): pass
+class MissingNested(Outer.Broken): pass
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual({(d["path"], d["symbol"]) for d in result["diagnostics"]}, {
+            ("src/pkg/contracts.pyi", "NotAContract"),
+            ("src/pkg/middle.py", "Unproven"), ("src/pkg/middle.py", "Outer.Broken"),
+            ("src/pkg/usage.py", "Missing"), ("src/pkg/usage.py", "MissingNested")})
+
+    def test_unresolved_customer_bases_do_not_count_as_external(self):
+        self.put("src/pkg/known.py", "class Plain: pass\n")
+        self.put("src/pkg/consumer.py", '''\
+from pkg.known import Absent as Missing
+from pkg.unscanned import Parent as Unscanned
+import pkg.known as known
+from pathlib import Path as External
+class MissingName(Missing): pass
+class MissingModule(Unscanned): pass
+class MissingAttribute(known.Absent): pass
+class QualifiedMissing(pkg.known.Absent): pass
+class ProvenExternal(External): pass
+class UnknownBare(Unknown): pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({d["symbol"] for d in result["diagnostics"]}, {
+            "Plain", "MissingName", "MissingModule", "MissingAttribute",
+            "QualifiedMissing", "UnknownBare"})
+
+    def test_external_source_is_not_scanned(self):
+        self.put("src/usage.py", "from pathlib import Path as Base\nclass Local(Base): pass\n")
+        result, _, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [])
+
     def test_python_source_and_stub_both_receive_diagnostics(self):
         self.put("src/pkg.py", "class Both: pass\n")
         self.put("src/pkg.pyi", "class Both: ...\n")
         result, _, _ = self.run_worker()
         self.assertEqual({d["path"] for d in result["diagnostics"]},
                          {"src/pkg.py", "src/pkg.pyi"})
+
+    def test_source_and_stub_declarations_have_independent_contracts(self):
+        self.put("src/pkg.py", "class Both(object): pass\n")
+        self.put("src/pkg.pyi", "class Both: ...\n")
+        result, _, _ = self.run_worker()
+        self.assertEqual({d["path"] for d in result["diagnostics"]}, {"src/pkg.pyi"})
 
     def test_parse_error_retains_violations_and_fails_as_infrastructure(self):
         self.put("src/good.py", "class Missing: pass\n")

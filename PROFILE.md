@@ -29,9 +29,12 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   qualify; implementations may inherit these or an opaque external base (including
   an explicit `object`). Implicit `object` does not qualify. This independent job
   scans discovered production, test and stub files even when LCOM4 is narrowed
-  or skipped. It resolves explicit imports and local ancestry syntactically;
-  unknown bare names and unresolved local bases do not prove a contract. Source
-  failures and malformed worker reports are infrastructure errors.
+  or skipped. It resolves customer ancestry across discovered modules, imported
+  aliases and re-exports (including stub declarations) without inspecting
+  external source. Unknown bare names and unresolved customer bases do not
+  prove a contract; explicit imports outside customer package roots remain
+  opaque external bases. Source failures and malformed worker reports are
+  infrastructure errors.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and
