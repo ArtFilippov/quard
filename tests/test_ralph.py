@@ -50,11 +50,25 @@ from pathlib import Path
 path = Path(os.environ["MOCK_STATE"])
 s = json.loads(path.read_text())
 a = sys.argv[1:]
+if a[:2] == ["export", "--sanitize"]:
+    assert a[2] == "ses_2"
+    s.setdefault("proxy_seen", []).append({"command": "export", "http": os.environ.get("HTTP_PROXY"),
+        "https": os.environ.get("HTTPS_PROXY"), "no": os.environ.get("NO_PROXY"),
+        "lower_no": os.environ.get("no_proxy")})
+    path.write_text(json.dumps(s))
+    print(json.dumps({"messages": [{"info": {"role": "assistant", "providerID": "provider",
+        "modelID": "actual-model", "variant": "high"}}]}))
+    raise SystemExit(0)
 assert a[:3] == ["run", "--format", "json"] and "--auto" in a
 prompt = a[-1]
 session = "ses_2"
 if "--session" in a: assert a[a.index("--session") + 1] == session
 else: assert prompt.startswith("Implement issue #2.")
+s.setdefault("proxy_seen", []).append({"command": "run", "http": os.environ.get("HTTP_PROXY"),
+    "https": os.environ.get("HTTPS_PROXY"), "no": os.environ.get("NO_PROXY"),
+    "lower_no": os.environ.get("no_proxy")})
+s.setdefault("model_flags", []).append({"model": a[a.index("--model") + 1] if "--model" in a else None,
+    "variant": a[a.index("--variant") + 1] if "--variant" in a else None})
 s["prompts"].append(prompt)
 if prompt == "Close the issue, commit all changes and push":
     next(issue for issue in s["issues"] if issue["number"] == 2)["state"] = "closed"
@@ -91,7 +105,7 @@ def issue(number: int, *, state: str = "open", assignees: list[dict[str, str]] |
 
 class RalphTests(unittest.TestCase):
     def run_runner(
-        self, **overrides: bool
+        self, args: list[str] | None = None, **overrides: bool
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
         with tempfile.TemporaryDirectory(prefix="eryx ralph ") as tmp:
             root = Path(tmp)
@@ -111,7 +125,10 @@ class RalphTests(unittest.TestCase):
             state_file.write_text(json.dumps(state))
             env = os.environ | {"MOCK_STATE": str(state_file),
                                 "PATH": f"{bin_dir}:{os.environ['PATH']}"}
-            result = subprocess.run(["bash", str(SCRIPT)], cwd=root, env=env,
+            if args is None:
+                args = ["HTTP_PROXY=http://proxy.example:8080",
+                        "HTTPS_PROXY=http://secure.example:8443"]
+            result = subprocess.run(["bash", str(SCRIPT), *args], cwd=root, env=env,
                                     text=True, capture_output=True, timeout=30, check=False)
             return result, cast(dict[str, Any], json.loads(state_file.read_text()))
 
@@ -123,7 +140,31 @@ class RalphTests(unittest.TestCase):
         self.assertEqual(state["prompts"][1], "Close the issue, commit all changes and push")
         self.assertIn("Пропуск #4: назначен исполнитель", result.stdout)
         self.assertIn("контекст ≈140 токенов", result.stdout)
+        self.assertIn("model provider/actual-model | variant high", result.stdout)
         self.assertIn("доступных issues больше нет", result.stdout)
+
+    def test_proxy_and_no_proxy_are_applied_to_every_opencode_command(self):
+        args = ["HTTPS_PROXY=http://user:secret@https.example:8080",
+                "HTTP_PROXY=http://user:secret@http.example:8080",
+                "--model", "provider/actual-model", "--variant", "high"]
+        result, state = self.run_runner(args=args, bad_xml=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([entry["command"] for entry in state["proxy_seen"]],
+                         ["run", "export", "run", "export", "run", "export"])
+        for entry in state["proxy_seen"]:
+            self.assertEqual(entry["http"], "http://user:secret@http.example:8080")
+            self.assertEqual(entry["https"], "http://user:secret@https.example:8080")
+            self.assertEqual(entry["no"], "localhost,127.0.0.1,::1")
+            self.assertEqual(entry["lower_no"], entry["no"])
+        self.assertEqual(state["model_flags"],
+                         [{"model": "provider/actual-model", "variant": "high"}] * 3)
+        self.assertNotIn("secret", result.stdout + result.stderr)
+
+    def test_missing_proxy_arguments_stop_before_agent(self):
+        result, state = self.run_runner(args=["HTTP_PROXY=http://proxy.example"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(state["prompts"], [])
+        self.assertIn("HTTPS_PROXY=URL", result.stderr)
 
     def test_invalid_xml_is_repaired_in_same_session(self):
         result, state = self.run_runner(bad_xml=True)

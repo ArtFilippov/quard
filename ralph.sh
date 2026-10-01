@@ -7,6 +7,8 @@ issue_started=$SECONDS
 issue_number=''
 session_id=''
 context='—'
+model='—'
+variant='—'
 agent_pid=''
 AGENT_REPLY=''
 
@@ -16,9 +18,9 @@ clock() {
 }
 
 progress() {
-  printf 'всего %s | issue #%s %s | контекст %s' \
+  printf 'всего %s | issue #%s %s | model %s | variant %s | контекст %s' \
     "$(clock "$((SECONDS - started))")" "${issue_number:--}" \
-    "$(clock "$((SECONDS - issue_started))")" "$context"
+    "$(clock "$((SECONDS - issue_started))")" "$model" "$variant" "$context"
 }
 
 show_timer() {
@@ -52,12 +54,54 @@ trap 'if [[ -t 2 ]]; then printf "\r\033[K" >&2; fi' EXIT
 for tool in gh git jq opencode python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "не найден $tool"
 done
-[[ $# -eq 0 ]] || fail 'использование: ./ralph.sh (без аргументов)'
+usage='использование: ./ralph.sh HTTP_PROXY=URL HTTPS_PROXY=URL [--model provider/model] [--variant NAME]'
+http_proxy=''
+https_proxy=''
+requested_model=''
+requested_variant=''
+while (( $# )); do
+  case $1 in
+    HTTP_PROXY=*) http_proxy=${1#HTTP_PROXY=} ;;
+    HTTPS_PROXY=*) https_proxy=${1#HTTPS_PROXY=} ;;
+    --model|--variant)
+      option=$1
+      shift
+      (( $# )) || fail "$usage"
+      if [[ $option == --model ]]; then requested_model=$1; else requested_variant=$1; fi
+      ;;
+    *) fail "$usage" ;;
+  esac
+  shift
+done
+[[ -n $http_proxy && -n $https_proxy ]] || fail "$usage"
+[[ -z $requested_model || $requested_model =~ ^[^/]+/.+ ]] || fail '--model ожидает provider/model'
+if [[ -n $requested_model ]]; then model=$requested_model; fi
+if [[ -n $requested_variant ]]; then variant=$requested_variant; fi
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 'нужен Git-репозиторий'
 branch=$(git symbolic-ref --quiet --short HEAD) || fail 'нужна текущая ветка, не detached HEAD'
 git rev-parse --verify '@{upstream}' >/dev/null 2>&1 || fail 'для ветки не настроен upstream'
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || fail 'рабочая копия не чистая; сначала сохраните свои изменения'
 log "Старт: ветка $branch, upstream $(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}')"
+
+# Keep the proxy settings scoped to OpenCode; GitHub and Git use their normal configuration.
+opencode_with_proxy() {
+  env HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" \
+    http_proxy="$http_proxy" https_proxy="$https_proxy" \
+    NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1' \
+    opencode "$@"
+}
+
+actual_model() {
+  local exported details
+  exported=$(opencode_with_proxy export --sanitize "$session_id") \
+    || fail "не удалось прочитать model и variant сессии $session_id"
+  details=$(jq -er '[.messages[]?.info | select(.role == "assistant") |
+    {model: (.providerID + "/" + .modelID), variant: (.variant // "default")}] | last // empty' \
+    <<< "$exported") || fail "нет данных о model и variant сессии $session_id"
+  model=$(jq -r '.model' <<< "$details")
+  variant=$(jq -r '.variant' <<< "$details")
+  log "Фактические model $model, variant $variant"
+}
 
 # Match only blockers explicitly listed in a "Blocked by" section or line.
 text_blockers() {
@@ -130,8 +174,10 @@ run_agent() {
   local -a options=(--format json --auto)
   AGENT_REPLY=''
   if [[ -n $session_id ]]; then options+=(--session "$session_id"); fi
+  if [[ -n $requested_model ]]; then options+=(--model "$requested_model"); fi
+  if [[ -n $requested_variant ]]; then options+=(--variant "$requested_variant"); fi
   log "Запуск opencode run ${session_id:+--session $session_id}"
-  coproc AGENT { opencode run "${options[@]}" "$prompt" </dev/null; }
+  coproc AGENT { opencode_with_proxy run "${options[@]}" "$prompt" </dev/null; }
   agent_pid=$AGENT_PID
   read_fd=${AGENT[0]}
   write_fd=${AGENT[1]}
@@ -187,6 +233,7 @@ run_agent() {
   log "opencode завершился с кодом $rc"
   (( rc == 0 )) || return "$rc"
   [[ -n $session_id ]] || fail 'OpenCode не сообщил ID сессии'
+  actual_model
 }
 
 # Require exactly one XML result; no prose, Markdown or guessed success.
@@ -216,6 +263,8 @@ while true; do
   issue_started=$SECONDS
   session_id=''
   context='—'
+  model=${requested_model:-—}
+  variant=${requested_variant:-—}
   before=$(git rev-parse HEAD)
   log "Начинаю #$issue_number (HEAD $before)"
   run_agent "Implement issue #$issue_number. Read its full body and comments. Run the relevant checks. Do not close, commit or push yet. End with exactly one XML element: <result status=\"success\"><summary>What was implemented and verified</summary></result> or <result status=\"failure\"><summary>What prevented completion</summary></result>. No text outside the XML." \
