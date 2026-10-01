@@ -10,6 +10,8 @@ context='—'
 model='—'
 variant='—'
 agent_pid=''
+server_pid=''
+server_url=''
 AGENT_REPLY=''
 
 clock() {
@@ -47,9 +49,15 @@ stop_agent() {
   fi
   if [[ -t 2 ]]; then printf '\r\033[K' >&2; fi
 }
+stop_server() {
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+}
 trap 'stop_agent; exit 130' INT
 trap 'stop_agent; exit 143' TERM
-trap 'if [[ -t 2 ]]; then printf "\r\033[K" >&2; fi' EXIT
+trap 'stop_agent; stop_server' EXIT
 
 for tool in gh git jq opencode python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "не найден $tool"
@@ -85,10 +93,68 @@ log "Старт: ветка $branch, upstream $(git rev-parse --abbrev-ref --sym
 
 # Keep the proxy settings scoped to OpenCode; GitHub and Git use their normal configuration.
 opencode_with_proxy() {
-  env HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" \
+  exec env HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" \
     http_proxy="$http_proxy" https_proxy="$https_proxy" \
     NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1' \
     opencode "$@"
+}
+
+# Run a local server so the session can be created (and its ID shown) before
+# sending the first agent prompt. Port 0 lets OpenCode choose a free port.
+start_server() {
+  local read_fd write_fd line rc
+  [[ -z $server_url ]] || return 0
+  log 'Запускаю локальный сервер OpenCode'
+  coproc SERVER { opencode_with_proxy serve --hostname 127.0.0.1 --port 0 </dev/null; }
+  server_pid=$SERVER_PID
+  read_fd=${SERVER[0]}
+  write_fd=${SERVER[1]}
+  exec {write_fd}>&-
+  while true; do
+    if IFS= read -r -t 30 line <&"$read_fd"; then
+      if [[ $line =~ ^opencode\ server\ listening\ on\ (http://127\.0\.0\.1:[0-9]+)$ ]]; then
+        server_url=${BASH_REMATCH[1]}
+        break
+      fi
+      log "OpenCode: $line"
+    else
+      rc=$?
+      (( rc > 128 )) || fail 'сервер OpenCode завершился до запуска'
+      fail 'не удалось дождаться запуска сервера OpenCode'
+    fi
+  done
+  # The server may print more lines later; leave its stdout connected to the
+  # coprocess descriptor, and keep stderr visible to the user.
+  log "Сервер OpenCode готов: $server_url"
+}
+
+create_session() {
+  local response
+  start_server
+  response=$(NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1' \
+    python3 - "$server_url" "$issue_number" <<'PY'
+import base64
+import json
+import os
+import sys
+from urllib.request import Request, urlopen
+
+url, issue = sys.argv[1:]
+headers = {"Content-Type": "application/json", "x-opencode-directory": os.getcwd()}
+password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+if password:
+    username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    headers["Authorization"] = f"Basic {token}"
+request = Request(f"{url}/session", data=json.dumps({"title": f"AFK issue #{issue}"}).encode(),
+                  headers=headers, method="POST")
+with urlopen(request, timeout=30) as reply:
+    print(json.load(reply)["id"])
+PY
+  ) || fail "не удалось создать сессию для #$issue_number"
+  [[ $response == ses_* ]] || fail "OpenCode вернул неожиданный ID сессии: $response"
+  session_id=$response
+  log "Сессия #$issue_number: $session_id"
 }
 
 actual_model() {
@@ -173,10 +239,10 @@ run_agent() {
   local prompt=$1 read_fd write_fd stream_fd event type rc last_heartbeat=$SECONDS
   local -a options=(--format json --auto)
   AGENT_REPLY=''
-  if [[ -n $session_id ]]; then options+=(--session "$session_id"); fi
+  options+=(--attach "$server_url" --session "$session_id")
   if [[ -n $requested_model ]]; then options+=(--model "$requested_model"); fi
   if [[ -n $requested_variant ]]; then options+=(--variant "$requested_variant"); fi
-  log "Запуск opencode run ${session_id:+--session $session_id}"
+  log "Запуск opencode run --session $session_id"
   coproc AGENT { opencode_with_proxy run "${options[@]}" "$prompt" </dev/null; }
   agent_pid=$AGENT_PID
   read_fd=${AGENT[0]}
@@ -192,10 +258,8 @@ run_agent() {
     if IFS= read -r -t 1 event <&"$read_fd"; then
       type=$(jq -r '.type // empty' <<< "$event") || fail 'некорректный JSON от OpenCode'
       [[ -n $type ]] || fail 'событие OpenCode без типа'
-      if [[ -z $session_id ]]; then
-        session_id=$(jq -r '.sessionID // empty' <<< "$event")
-        [[ -z $session_id ]] || log "Сессия: $session_id"
-      fi
+      [[ $(jq -r '.sessionID // empty' <<< "$event") == "$session_id" ]] \
+        || fail "событие OpenCode относится к другой сессии, ожидалась $session_id"
       case $type in
         step_start) log 'Шаг агента начат' ;;
         step_finish)
@@ -267,6 +331,7 @@ while true; do
   variant=${requested_variant:-—}
   before=$(git rev-parse HEAD)
   log "Начинаю #$issue_number (HEAD $before)"
+  create_session
   run_agent "Implement issue #$issue_number. Read its full body and comments. Run the relevant checks. Do not close, commit or push yet. End with exactly one XML element: <result status=\"success\"><summary>What was implemented and verified</summary></result> or <result status=\"failure\"><summary>What prevented completion</summary></result>. No text outside the XML." \
     || fail "реализация #$issue_number не завершилась успешно"
 

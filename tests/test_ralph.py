@@ -46,10 +46,33 @@ else: raise SystemExit(f"unexpected gh: {a}")
 
 OPENCODE = '''#!/usr/bin/env python3
 import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 path = Path(os.environ["MOCK_STATE"])
 s = json.loads(path.read_text())
 a = sys.argv[1:]
+if a[0] == "serve":
+    assert a[1:] == ["--hostname", "127.0.0.1", "--port", "0"]
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path == "/session"
+            assert self.headers["x-opencode-directory"] == os.getcwd()
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            state = json.loads(path.read_text())
+            state.setdefault("server_calls", []).append(body["title"])
+            path.write_text(json.dumps(state))
+            response = json.dumps({"id": "ses_2"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+        def log_message(self, *args):
+            pass
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    print(f"opencode server listening on http://127.0.0.1:{server.server_port}", flush=True)
+    server.serve_forever()
+    raise SystemExit(0)
 if a[:2] == ["export", "--sanitize"]:
     assert a[2] == "ses_2"
     s.setdefault("proxy_seen", []).append({"command": "export", "http": os.environ.get("HTTP_PROXY"),
@@ -62,8 +85,9 @@ if a[:2] == ["export", "--sanitize"]:
 assert a[:3] == ["run", "--format", "json"] and "--auto" in a
 prompt = a[-1]
 session = "ses_2"
-if "--session" in a: assert a[a.index("--session") + 1] == session
-else: assert prompt.startswith("Implement issue #2.")
+assert a[a.index("--session") + 1] == session
+assert a[a.index("--attach") + 1].startswith("http://127.0.0.1:")
+assert s["server_calls"] == ["AFK issue #2"]
 s.setdefault("proxy_seen", []).append({"command": "run", "http": os.environ.get("HTTP_PROXY"),
     "https": os.environ.get("HTTPS_PROXY"), "no": os.environ.get("NO_PROXY"),
     "lower_no": os.environ.get("no_proxy")})
@@ -138,6 +162,9 @@ class RalphTests(unittest.TestCase):
         self.assertEqual(len(state["prompts"]), 2)
         self.assertIn("Implement issue #2", state["prompts"][0])
         self.assertEqual(state["prompts"][1], "Close the issue, commit all changes and push")
+        self.assertEqual(state["server_calls"], ["AFK issue #2"])
+        self.assertLess(result.stdout.index("Сессия #2: ses_2"),
+                        result.stdout.index("Запуск opencode run --session ses_2"))
         self.assertIn("Пропуск #4: назначен исполнитель", result.stdout)
         self.assertIn("контекст ≈140 токенов", result.stdout)
         self.assertIn("model provider/actual-model | variant high", result.stdout)
