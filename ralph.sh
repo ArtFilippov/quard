@@ -131,7 +131,7 @@ run_agent() {
   AGENT_REPLY=''
   if [[ -n $session_id ]]; then options+=(--session "$session_id"); fi
   log "Запуск opencode run ${session_id:+--session $session_id}"
-  coproc AGENT { opencode run "${options[@]}" "$prompt" </dev/null; }
+  coproc AGENT {HTTP_PROXY="http://proxyuser:password123456789@10.203.0.2:3128" HTTPS_PROXY="http://proxyuser:password123456789@10.203.0.2:3128" NO_PROXY="localhost,127.0.0.1,::1" opencode run "${options[@]}" "$prompt" </dev/null; }
   agent_pid=$AGENT_PID
   read_fd=${AGENT[0]}
   write_fd=${AGENT[1]}
