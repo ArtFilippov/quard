@@ -632,6 +632,143 @@ setattr(Alias, "dynamic", 5)
             (10, "NO_CLASS_STATE", "pkg.choices.Choices.dynamic"),
         ])
 
+    def test_indirect_access_in_production_and_tests(self):
+        self.put("src/pkg/model.py", '''\
+class Model:
+    value: int
+    shared = 1
+    def __init__(self):
+        self.value = 1
+        setattr(self, "indirect", 1)
+        vars(self)["via_dict"] = 1
+    @property
+    def public(self): return []
+    def own(self, peer: Model):
+        getattr(peer, "value")
+        setattr(peer, "value", 2)
+        delattr(peer, "value")
+        peer.__dict__["value"] = 3
+        return vars(peer)["value"]
+class Child(Model):
+    def outside(self): return getattr(self, "value")
+''')
+        self.put("src/pkg/use.py", '''\
+from pkg.model import Model
+import builtins as bi
+def use(obj: Model, unknown, field):
+    getattr(obj, "value")
+    getattr(obj, "value", None)
+    setattr(obj, "value", 2)
+    delattr(obj, "value")
+    obj.__dict__["value"]
+    obj.__dict__["value"] = 3
+    del obj.__dict__["value"]
+    vars(obj)["value"]
+    vars(obj)["value"] = 4
+    del vars(obj)["value"]
+    setattr(obj, "fresh", 1)
+    obj.__dict__["new"] = 1
+    vars(obj)["later"] = 1
+    bi.getattr(obj, "value")
+    getattr(obj, "indirect")
+    getattr(obj, "via_dict")
+    vars(obj).get("value")
+    vars(obj).pop("value")
+    vars(obj).setdefault("value", 1)
+    vars(obj).update({"value": 2})
+    obj.__dict__["shared"] = 1
+    vars(obj)["shared"]
+    Model.shared
+    getattr(Model, "shared")
+    setattr(Model, "shared", 2)
+    delattr(Model, "shared")
+    vars(Model)["shared"]
+    vars(Model)["shared"] = 3
+    del Model.__dict__["shared"]
+    setattr(Model, "new", 1)
+    delattr(Model, "missing")
+    getattr(obj, "public").append(1)
+    vars(obj)["public"].append(1)
+    getattr(obj, "value" + field)
+    vars(obj)[field]
+    getattr(unknown, "value")
+    unknown.__dict__["value"]
+    obj.build().value
+    Model().make().value
+''')
+        self.put("tests/test_use.py", '''\
+from pkg.model import Model
+from builtins import getattr as fetch, vars as dictionary
+def use(value: Model):
+    fetch(value, "value")
+    dictionary(value)["value"]
+    getattr(value, "public").append(2)
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        actual = [(d["path"], d["line"], d["rule"], d["symbol"], d["column"])
+                  for d in result["diagnostics"] if d["rule"] != "NO_CLASS_STATE"]
+        expected = [
+            ("src/pkg/model.py", 17, "EXTERNAL_INSTANCE_FIELD", "pkg.model.Model.value", 31),
+            *[("src/pkg/use.py", line, "EXTERNAL_INSTANCE_FIELD", f"pkg.model.Model.{field}", column)
+              for line, field, column in [
+                  (4, "value", 5), (5, "value", 5), (6, "value", 5), (7, "value", 5),
+                  (8, "value", 5), (9, "value", 5), (10, "value", 9),
+                  (11, "value", 5), (12, "value", 5), (13, "value", 9),
+                  (14, "fresh", 5), (15, "new", 5), (16, "later", 5),
+                  (17, "value", 5), (18, "indirect", 5), (19, "via_dict", 5),
+                  (20, "value", 5), (21, "value", 5), (22, "value", 5),
+                  (23, "value", 5)]],
+            ("src/pkg/use.py", 24, "EXTERNAL_CLASS_FIELD", "pkg.model.Model.shared", 5),
+            ("src/pkg/use.py", 26, "EXTERNAL_CLASS_FIELD", "pkg.model.Model.shared", 5),
+            *[("src/pkg/use.py", line, "EXTERNAL_CLASS_FIELD", "pkg.model.Model.shared", column)
+              for line, column in [(27, 5), (28, 5), (29, 5), (30, 5), (31, 5), (32, 9)]],
+            ("tests/test_use.py", 4, "EXTERNAL_INSTANCE_FIELD", "pkg.model.Model.value", 5),
+            ("tests/test_use.py", 5, "EXTERNAL_INSTANCE_FIELD", "pkg.model.Model.value", 5),
+        ]
+        self.assertEqual(actual, expected)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "NO_CLASS_STATE"], [
+            (3, "pkg.model.Model.shared"),
+            (33, "pkg.model.Model.new")])
+        self.assertEqual(len(raw["diagnostics"]), len(result["diagnostics"]))
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_indirect_unknown_names_owners_and_shadowed_builtins(self):
+        self.put("src/pkg/model.py", '''\
+class Model:
+    def __init__(self): self.value = 1
+    @property
+    def public(self): return []
+''')
+        self.put("tests/test_safe.py", '''\
+from pkg.model import Model
+from library import Foreign
+def use(value: Model, other: Foreign, unknown, field):
+    getattr(value, field)
+    setattr(value, field, 2)
+    delattr(value, field)
+    vars(value)[field]
+    value.__dict__[field] = 3
+    getattr(other, "value")
+    vars(other)["value"] = 2
+    unknown.__dict__["value"]
+    getattr(value, "public").append(1)
+    value.public.append(1)
+    value.method().value
+    Model().method().value
+def shadow(getattr, setattr, delattr, vars):
+    value = Model()
+    getattr(value, "value")
+    setattr(value, "value", 2)
+    delattr(value, "value")
+    vars(value)["value"]
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["diagnostics"], raw["diagnostics"]),
+                         ("passed", [], []))
+
     def test_local_classes_are_checked_without_treating_methods_as_state(self):
         self.put("src/pkg/local.py", '''\
 def factory():
@@ -648,13 +785,14 @@ def factory():
         ])
 
     def test_source_and_output_failures_are_infrastructure_errors(self):
-        self.put("src/pkg/good.py", "class Good:\n    def __init__(self): self.value = 1\nx = Good().value\n")
+        self.put("src/pkg/good.py", "class Good:\n    def __init__(self): self.value = 1\nx = getattr(Good(), 'value')\n")
         self.put("tests/broken.py", "class Broken(\n")
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("error", 2, "INSTANCE_FIELDS_PARSE_ERROR"))
         self.assertEqual({item["rule"] for item in result["diagnostics"]},
                          {"INSTANCE_FIELDS_PARSE_ERROR", "EXTERNAL_INSTANCE_FIELD"})
+        self.assertEqual(raw["diagnostics"][-1]["symbol"], "pkg.good.Good.value")
         job = self.job()
         (self.root / "tests/broken.py").unlink()
         missing = execute_job(job, self.root, self.root / ".eryx/reports/run", 30)

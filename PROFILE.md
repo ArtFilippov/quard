@@ -26,14 +26,17 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   positional instance receiver, regardless of its name or use in the body.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
-  class, in production and tests. A first assignment to an undeclared field on a
-  known consumer instance is also rejected. Same-class methods may access another
-  instance's fields; properties and methods remain available to callers.
+  class, in production and tests, including literal-name builtin attribute calls and
+  known keys in `vars(obj)`/`obj.__dict__` accesses. A first assignment to an undeclared
+  field on a known consumer instance is also rejected. Same-class methods may access
+  another instance's fields; properties and methods remain available to callers,
+  including mutable values returned by properties.
 * **Class state**: `NO_CLASS_STATE` rejects stored class values at their declarations,
-  including immutable `Final` constants, and direct writes or built-in `setattr` with
-  a literal attribute name through known consumer classes after creation.
+  including immutable `Final` constants, and statically named writes through known
+  consumer classes after creation (direct, builtin `setattr`, or class dictionary).
   `EXTERNAL_CLASS_FIELD` also rejects proven external reads,
-  writes and deletes of declared class values through either the class or an instance.
+  writes and deletes of declared class values through either the class or an instance,
+  including literal-name builtin calls and class dictionary access.
   Initialized dataclass instance fields, Enum members and `__slots__` declarations
   remain allowed.
 
@@ -82,7 +85,11 @@ consumer bases retain their declaring owner; subclass and nested-class methods
 have only their own class's access privilege. Discovered `.pyi` declarations also
 establish fields and types. Ambiguous bases, conflicting or union annotations,
 unknown or third-party owners, dynamic attributes and unresolved flow are not
-inferred. Source/worker/report failures are infrastructure errors.
+inferred. Literal-name builtin `getattr`, `setattr`, `delattr` (including explicit
+`builtins` imports) and literal-key subscripts or dictionary methods on `vars(obj)`
+and `obj.__dict__` use the same owner resolution. Instance dictionaries do not expose
+class fields. Calls to arbitrary methods/constructors do not establish fields.
+Source/worker/report failures are infrastructure errors.
 See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
 
 Class assignments and initialized class annotations establish prohibited class state;

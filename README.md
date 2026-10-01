@@ -81,9 +81,11 @@ The non-instance-method rule independently checks discovered `.py` and `.pyi` fi
 in both profiles, including when LCOM4 is narrowed or skipped.
 The instance-field boundary rule uses the same full scope and reports proven
 external access to consumer-defined stored fields, including first assignments
-to known consumer instances. It forbids stored class values, including `Final`
-constants, at declaration and statically named writes through known classes. Initialized
-dataclass instance fields, Enum members and `__slots__` remain allowed.
+to known consumer instances. Literal-name built-in `getattr`/`setattr`/`delattr`
+and known keys in `vars(obj)` or `obj.__dict__` follow the same boundary.
+It forbids stored class values, including `Final` constants, at declaration and
+statically named writes through known classes. Initialized dataclass instance
+fields, Enum members and `__slots__` remain allowed.
 
 ### Greenfield per-change LCOM4 checks
 

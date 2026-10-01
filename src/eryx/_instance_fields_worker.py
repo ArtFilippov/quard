@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from typing import override
 
-Binding = tuple[str, str]  # (class | instance | module, qualified name)
+Binding = tuple[str, str]  # (class | instance | module | builtins | builtin, name)
 
 
 def assigned_names(node: ast.AST) -> set[str]:
@@ -36,6 +36,29 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
                 fields.add(attr.attr)
             self.generic_visit(attr)
 
+        def visit_Call(self, call: ast.Call) -> None:
+            if (isinstance(call.func, ast.Name) and call.func.id == "setattr"
+                    and "setattr" not in shadowed and len(call.args) == 3 and not call.keywords
+                    and isinstance(call.args[0], ast.Name) and call.args[0].id == receiver
+                    and isinstance(call.args[1], ast.Constant)
+                    and isinstance(call.args[1].value, str)):
+                fields.add(call.args[1].value)
+            self.generic_visit(call)
+
+        def visit_Subscript(self, item: ast.Subscript) -> None:
+            target = item.value
+            direct = (isinstance(target, ast.Attribute) and target.attr == "__dict__"
+                      and isinstance(target.value, ast.Name) and target.value.id == receiver)
+            via_vars = (isinstance(target, ast.Call) and isinstance(target.func, ast.Name)
+                        and target.func.id == "vars" and "vars" not in shadowed
+                        and len(target.args) == 1 and not target.keywords
+                        and isinstance(target.args[0], ast.Name) and target.args[0].id == receiver)
+            if (isinstance(item.ctx, ast.Store) and (direct or via_vars)
+                    and isinstance(item.slice, ast.Constant)
+                    and isinstance(item.slice.value, str)):
+                fields.add(item.slice.value)
+            self.generic_visit(item)
+
         def visit_FunctionDef(self, unused: ast.FunctionDef) -> None:
             pass
 
@@ -56,6 +79,13 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
             args = method.args.posonlyargs + method.args.args
             if args:
                 receiver = args[0].arg
+                shadowed = {arg.arg for arg in (*args, *method.args.kwonlyargs)}
+                if method.args.vararg:
+                    shadowed.add(method.args.vararg.arg)
+                if method.args.kwarg:
+                    shadowed.add(method.args.kwarg.arg)
+                for statement in method.body:
+                    shadowed.update(assigned_names(statement))
                 for statement in method.body:
                     Stores().visit(statement)
     return fields
@@ -437,6 +467,8 @@ class Ownership:
         if owner is None:
             return None
         kind, qualified = owner
+        if kind == "builtins":
+            return ("builtin", name) if name in {"getattr", "setattr", "delattr", "vars"} else None
         if kind == "module":
             candidate = f"{qualified}.{name}"
             if candidate in self.modules:
@@ -481,6 +513,56 @@ class Accesses(ast.NodeVisitor):
                 return ("instance", target[1])
         return None
 
+    def builtin_call(self, node: ast.Call, name: str) -> bool:
+        """Accept unshadowed builtins and explicit imports, not lookalike functions."""
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == name and all(
+                name not in scope for scope in self.scopes):
+            return True
+        return self.value(func) == ("builtin", name)
+
+    def dictionary_owner(self, node: ast.expr) -> Binding | None:
+        if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+            return self.value(node.value)
+        if (isinstance(node, ast.Call) and self.builtin_call(node, "vars")
+                and len(node.args) == 1 and not node.keywords):
+            return self.value(node.args[0])
+        return None
+
+    def report_field(self, owner: Binding | None, field: str, ctx: ast.expr_context,
+                     node: ast.expr, dictionary: bool = False) -> None:
+        if owner is None or owner[0] not in {"class", "instance"}:
+            return
+        declaring = None
+        class_field = False
+        if owner[0] == "instance":
+            if isinstance(ctx, ast.Store):
+                declaring = self.ownership.first_write_owner(owner[1], field)
+            else:
+                declaring = self.ownership.field_owner(owner[1], field)
+            class_field = bool(declaring and field in self.ownership.class_fields[declaring]
+                               and field not in self.ownership.instance_fields[declaring])
+            if dictionary and class_field and not isinstance(ctx, ast.Store):
+                declaring = None  # Instance dictionaries do not contain class attributes.
+        else:
+            declaring = self.ownership.class_field_owner(owner[1], field)
+            class_field = declaring is not None
+        if declaring and declaring != self.method_owner:
+            operation = ("delete" if isinstance(ctx, ast.Del) else
+                         "assign" if isinstance(ctx, ast.Store) else "read")
+            kind = "class" if class_field else "instance"
+            self.diagnostics.append({
+                "rule": f"EXTERNAL_{kind.upper()}_FIELD", "path": self.path,
+                "line": node.lineno, "column": node.col_offset + 1,
+                "symbol": f"{declaring}.{field}",
+                "message": f"{operation} of stored {kind} field {declaring}.{field} outside its declaring class."})
+        elif owner[0] == "class" and isinstance(ctx, ast.Store):
+            self.diagnostics.append({
+                "rule": "NO_CLASS_STATE", "path": self.path,
+                "line": node.lineno, "column": node.col_offset + 1,
+                "symbol": f"{owner[1]}.{field}",
+                "message": f"Stored class value {owner[1]}.{field} is prohibited."})
+
     def annotation(self, node: ast.expr | None, owner: str | None = None) -> Binding | None:
         if node is None:
             return None
@@ -500,57 +582,49 @@ class Accesses(ast.NodeVisitor):
         return ("instance", target[1]) if target and target[0] == "class" else None
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        owner = self.value(node.value)
-        declaring = None
-        class_field = False
-        if owner and owner[0] == "instance":
-            if isinstance(node.ctx, ast.Store):
-                declaring = self.ownership.first_write_owner(owner[1], node.attr)
-            else:
-                declaring = self.ownership.field_owner(owner[1], node.attr)
-            class_field = bool(declaring and node.attr in self.ownership.class_fields[declaring]
-                               and node.attr not in self.ownership.instance_fields[declaring])
-        elif owner and owner[0] == "class":
-            declaring = self.ownership.class_field_owner(owner[1], node.attr)
-            class_field = declaring is not None
-        if declaring and declaring != self.method_owner:
-            operation = ("delete" if isinstance(node.ctx, ast.Del) else
-                         "assign" if isinstance(node.ctx, ast.Store) else "read")
-            kind = "class" if class_field else "instance"
-            self.diagnostics.append({
-                "rule": f"EXTERNAL_{kind.upper()}_FIELD", "path": self.path,
-                "line": node.lineno, "column": node.col_offset + 1,
-                "symbol": f"{declaring}.{node.attr}",
-                "message": f"{operation} of stored {kind} field {declaring}.{node.attr} outside its declaring class."})
-        elif owner and owner[0] == "class" and isinstance(node.ctx, ast.Store):
-            self.diagnostics.append({
-                "rule": "NO_CLASS_STATE", "path": self.path,
-                "line": node.lineno, "column": node.col_offset + 1,
-                "symbol": f"{owner[1]}.{node.attr}",
-                "message": f"Stored class value {owner[1]}.{node.attr} is prohibited."})
+        self.report_field(self.value(node.value), node.attr, node.ctx, node)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            self.report_field(self.dictionary_owner(node.value), node.slice.value,
+                              node.ctx, node, dictionary=True)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        if (isinstance(node.func, ast.Name) and node.func.id == "setattr"
-                and all("setattr" not in scope for scope in self.scopes)
-                and len(node.args) == 3 and not node.keywords
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, str)):
-            owner = self.value(node.args[0])
-            if owner and owner[0] == "class":
-                field = node.args[1].value
-                self.diagnostics.append({
-                    "rule": "NO_CLASS_STATE", "path": self.path,
-                    "line": node.lineno, "column": node.col_offset + 1,
-                    "symbol": f"{owner[1]}.{field}",
-                    "message": f"Stored class value {owner[1]}.{field} is prohibited."})
+        for name, size, context in (("getattr", (2, 3), ast.Load()), ("setattr", (3,), ast.Store()),
+                                    ("delattr", (2,), ast.Del())):
+            if (len(node.args) in size and not node.keywords and self.builtin_call(node, name)
+                    and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)):
+                self.report_field(self.value(node.args[0]), node.args[1].value, context, node)
+                break
+        if isinstance(node.func, ast.Attribute):
+            owner = self.dictionary_owner(node.func.value)
+            method = node.func.attr
+            context: ast.expr_context | None = {
+                "get": ast.Load(), "pop": ast.Del(), "setdefault": ast.Store(),
+                "__getitem__": ast.Load(), "__setitem__": ast.Store(),
+                "__delitem__": ast.Del(),
+            }.get(method)
+            if (owner and context and node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                self.report_field(owner, node.args[0].value, context, node, dictionary=True)
+            if (owner and method == "update" and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Dict)):
+                for key in node.args[0].keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        self.report_field(owner, key.value, ast.Store(), node, dictionary=True)
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             name = alias.asname or alias.name.split(".")[0]
             module = alias.name if alias.asname else name
-            self.scopes[-1][name] = ("module", module) if module in self.ownership.modules else None
+            if module == "builtins" and alias.name == "builtins":
+                self.scopes[-1][name] = ("builtins", "builtins")
+            else:
+                self.scopes[-1][name] = ("module", module) if module in self.ownership.modules else None
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         base = node.module or ""
@@ -559,7 +633,8 @@ class Accesses(ast.NodeVisitor):
             parts = package.split(".") if package else []
             base = ".".join([*parts[:len(parts) - node.level + 1], *([base] if base else [])])
         for alias in node.names:
-            self.scopes[-1][alias.asname or alias.name] = self.ownership.member(("module", base), alias.name)
+            source = ("builtins", "builtins") if base == "builtins" and node.level == 0 else ("module", base)
+            self.scopes[-1][alias.asname or alias.name] = self.ownership.member(source, alias.name)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         qualified = f"{self.module}.{node.name}" if self.current_class is None else f"{self.current_class}.{node.name}"
