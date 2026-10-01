@@ -35,6 +35,20 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   prove a contract; explicit imports outside customer package roots remain
   opaque external bases. Source failures and malformed worker reports are
   infrastructure errors.
+  `UNCOVERED_CLASS_MEMBER` points to each public instance method or property
+  declared on a customer implementation class that no inherited local Protocol or
+  abstract-interface declaration names. Multiple local contracts may cover
+  different members; contracts through customer ancestors, aliases and stubs
+  count. Decorated and statically assigned built-in or `functools.cached_property`
+  properties count; Python data-model hooks, private members, inherited methods
+  and non-instance methods do not require fresh declarations. The check compares
+  names, leaving signatures to Pyright. A proven explicitly inherited opaque
+  external base (directly or via customer ancestry) may supply otherwise uncovered
+  behavior, so the entire class is exempt from member coverage; its source is never
+  inspected. Unknown and unresolved customer bases do not grant this exemption.
+  Explicit `object` still satisfies the inheritance requirement but supplies no
+  public API exemption. This trade-off permits extra local methods on classes that also
+  inherit an external framework base.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and

@@ -87,7 +87,9 @@ It forbids stored class values, including `Final` constants, at declaration and
 statically named writes through known classes. Initialized dataclass instance
 fields, Enum members and `__slots__` remain allowed.
 The class-contract rule checks every discovered `.py` and `.pyi` class in both
-profiles for an explicit inherited contract, independently of LCOM4 selection.
+profiles for an explicit inherited contract and public member coverage by local
+contracts, independently of LCOM4 selection. See [PROFILE.md](PROFILE.md#tools-and-scope)
+for the opaque-external-base exception.
 
 ### Greenfield per-change LCOM4 checks
 

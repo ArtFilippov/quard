@@ -170,6 +170,138 @@ class UnknownBare(Unknown): pass
         result, _, _ = self.run_worker()
         self.assertEqual(result["diagnostics"], [])
 
+    def test_local_contracts_cover_methods_and_properties_together(self):
+        self.put("src/pkg/ports.pyi", '''\
+from typing import Protocol
+class Read(Protocol):
+    def read(self) -> str: ...
+    @property
+    def value(self) -> str: ...
+class Write(Protocol):
+    def write(self, value: str) -> None: ...
+''')
+        self.put("src/pkg/reexports.py", "from .ports import Read as Reader, Write as Writer\n")
+        self.put("src/pkg/implementation.py", '''\
+from .reexports import Reader, Writer
+class Middle(Reader): pass
+class Complete(Middle, Writer):
+    def read(self): return "ok"
+    def write(self, value): pass
+    @property
+    def value(self): return "ok"
+    @value.setter
+    def value(self, new_value): pass
+    def __str__(self): return "complete"
+class Extra(Complete):
+    def extra(self): return 1
+    @property
+    def other(self): return 2
+    @other.setter
+    def other(self, new_value): pass
+    def _helper(self): pass
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual({(d["symbol"], d["line"], d["column"], d["rule"])
+                          for d in result["diagnostics"]}, {
+                              ("Extra.extra", 12, 5, "UNCOVERED_CLASS_MEMBER"),
+                              ("Extra.other", 14, 5, "UNCOVERED_CLASS_MEMBER")})
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_abstract_contract_and_external_base_tradeoff(self):
+        self.put("src/ports.py", '''\
+from abc import ABC, abstractmethod
+class Port(ABC):
+    @abstractmethod
+    def run(self): ...
+    @property
+    @abstractmethod
+    def status(self): ...
+class Plain: pass
+''')
+        self.put("src/usage.py", '''\
+from ports import Port, Plain
+from pathlib import Path as External
+class Local(Port):
+    def run(self): pass
+    @property
+    def status(self): return "ok"
+    def extra(self): pass
+class Mixed(Port, External):
+    def run(self): pass
+    def extra(self): pass
+class Descendant(Mixed):
+    def another(self): pass
+class ObjectOnly(object):
+    def extra(self): pass
+class Unproven(Plain):
+    def extra(self): pass
+''')
+        self.put("tests/test_usage.py", '''\
+from ports import Port
+class TestImpl(Port):
+    def run(self): pass
+    def unlisted(self): pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({(d["path"], d["symbol"], d["rule"]) for d in result["diagnostics"]}, {
+            ("src/ports.py", "Plain", "MISSING_CLASS_CONTRACT"),
+            ("src/usage.py", "Local.extra", "UNCOVERED_CLASS_MEMBER"),
+            ("src/usage.py", "ObjectOnly.extra", "UNCOVERED_CLASS_MEMBER"),
+            ("src/usage.py", "Unproven", "MISSING_CLASS_CONTRACT"),
+            ("tests/test_usage.py", "TestImpl.unlisted", "UNCOVERED_CLASS_MEMBER")})
+
+    def test_stub_implementation_members_and_unknown_external_provenance(self):
+        self.put("src/pkg/ports.py", "from typing import Protocol\nclass Port(Protocol):\n    def run(self): ...\n")
+        self.put("src/pkg/usage.pyi", '''\
+from .ports import Port
+from pkg.unscanned import Missing
+class Impl(Port):
+    def run(self): ...
+    def unlisted(self): ...
+class Unknown(Port, Missing):
+    def unlisted(self): ...
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({d["symbol"] for d in result["diagnostics"]},
+                         {"Impl.unlisted", "Unknown.unlisted"})
+
+    def test_source_and_stub_resolve_their_own_ancestry(self):
+        self.put("src/ports.py", "from typing import Protocol\nclass Port(Protocol):\n    def run(self): ...\n")
+        self.put("src/usage.py", "class Both(object):\n    def extra(self): pass\n")
+        self.put("src/usage.pyi", '''\
+from ports import Port
+class Both(Port):
+    def run(self): ...
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({(d["path"], d["symbol"]) for d in result["diagnostics"]},
+                         {("src/usage.py", "Both.extra")})
+
+    def test_assigned_properties_and_non_instance_decorators(self):
+        self.put("src/usage.py", '''\
+from typing import Protocol
+from functools import cached_property as cache
+class Port(Protocol):
+    @property
+    def value(self): ...
+class Impl(Port):
+    def _value(self): return 1
+    value = property(_value)
+    extra = cache(_value)
+    @staticmethod
+    def factory(): pass
+    @classmethod
+    def create(cls): pass
+class Covered(Port):
+    @cache
+    def value(self): return 1
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({(d["symbol"], d["line"], d["rule"]) for d in result["diagnostics"]},
+                         {("Impl.extra", 9, "UNCOVERED_CLASS_MEMBER")})
+
     def test_python_source_and_stub_both_receive_diagnostics(self):
         self.put("src/pkg.py", "class Both: pass\n")
         self.put("src/pkg.pyi", "class Both: ...\n")
