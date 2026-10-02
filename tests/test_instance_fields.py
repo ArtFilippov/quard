@@ -1,6 +1,7 @@
 """Isolated consumer fixtures for field ownership and report failures."""
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import sys
@@ -11,6 +12,7 @@ ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
+from eryx._field_initialization import _block
 from eryx.check import execute_job, make_jobs
 
 
@@ -105,6 +107,165 @@ class Ready:
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
                          ("passed", 0, []))
+
+    def test_constructor_paths_returns_and_deferred_writes(self):
+        self.put("src/pkg/paths.py", '''\
+class Alternatives:
+    def __init__(self, flag):
+        if flag:
+            self.value = 1
+        else:
+            self.value = 2
+
+class MissingElse:
+    def __init__(self, flag):
+        if flag:
+            self.value = 1
+
+class EarlyReturn:
+    def __init__(self, flag):
+        if flag:
+            return
+        self.value = 1
+
+class RaisingBranch:
+    def __init__(self, flag):
+        if flag:
+            raise ValueError()
+        self.value = 1
+
+class AlwaysRaises:
+    def __init__(self):
+        raise ValueError()
+    def change(self):
+        self.value = 1
+
+class Deferred:
+    def __init__(self):
+        def later():
+            self.value = 1
+        callback = lambda: setattr(self, "other", 1)
+        self.fill()
+    def fill(self):
+        self.value = 2
+
+class LoopOnly:
+    def __init__(self, items):
+        for item in items:
+            self.value = item
+
+class WhileOnly:
+    def __init__(self, flag):
+        while flag:
+            self.value = 1
+
+class LoopElse:
+    def __init__(self, items):
+        for item in items:
+            self.value = item
+        else:
+            self.value = 0
+
+class BreakElse:
+    def __init__(self, items):
+        for item in items:
+            if item:
+                break
+        else:
+            self.value = 1
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (11, "pkg.paths.MissingElse.value"),
+            (17, "pkg.paths.EarlyReturn.value"),
+            (38, "pkg.paths.Deferred.value"),
+            (43, "pkg.paths.LoopOnly.value"),
+            (48, "pkg.paths.WhileOnly.value"),
+            (63, "pkg.paths.BreakElse.value"),
+        ])
+        self.assertTrue(all(d["rule"] == "MISSING_FIELD_INITIALIZATION" and
+                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_match_try_finally_and_loop_write_counts(self):
+        self.put("src/pkg/flow.py", '''\
+class Matched:
+    def __init__(self, choice):
+        match choice:
+            case 0:
+                self.value = 1
+            case _:
+                self.value = 2
+
+class Unmatched:
+    def __init__(self, choice):
+        match choice:
+            case 0:
+                self.value = 1
+
+class Finally:
+    def __init__(self, flag):
+        try:
+            if flag:
+                return
+        finally:
+            self.value = 1
+
+class Handler:
+    def __init__(self):
+        try:
+            self.value = compute()
+        except ValueError:
+            pass
+
+class Alternatives:
+    def __init__(self, flag):
+        if flag:
+            self.value = 1
+        else:
+            self.value = 2
+
+class Repeated:
+    def __init__(self, values):
+        for value in values:
+            self.value = value
+
+class LoopRaises:
+    def __init__(self):
+        while True:
+            raise ValueError()
+    def change(self):
+        self.value = 1
+
+class WithTarget:
+    def __init__(self, context):
+        with context as self.value:
+            pass
+
+class WithBody:
+    def __init__(self, context):
+        with context:
+            self.value = 1
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["symbol"], d["rule"]) for d in result["diagnostics"]], [
+            ("pkg.flow.Unmatched.value", "MISSING_FIELD_INITIALIZATION"),
+            ("pkg.flow.Handler.value", "MISSING_FIELD_INITIALIZATION"),
+            ("pkg.flow.Repeated.value", "MISSING_FIELD_INITIALIZATION"),
+            ("pkg.flow.WithBody.value", "MISSING_FIELD_INITIALIZATION"),
+        ])
+        # The later rebinding rule needs successive loop writes, not two
+        # mutually exclusive branch assignments, to reach count two.
+        tree = ast.parse((self.root / "src/pkg/flow.py").read_text(encoding="utf-8"))
+        alternatives, repeated = tree.body[4:6]
+        self.assertIsInstance(alternatives, ast.ClassDef)
+        self.assertIsInstance(repeated, ast.ClassDef)
+        self.assertIsInstance(alternatives.body[0], ast.FunctionDef)
+        self.assertIsInstance(repeated.body[0], ast.FunctionDef)
+        self.assertEqual(_block(alternatives.body[0].body, {0}, "value", "self")["normal"], {1})
+        self.assertEqual(_block(repeated.body[0].body, {0}, "value", "self")["normal"],
+                         {0, 1, 2})
 
     def test_external_reads_writes_deletes_and_known_owners_in_both_profiles(self):
         self.put("src/pkg/model.py", '''\

@@ -19,6 +19,13 @@ Computed names and fields supposedly produced by arbitrary method or constructor
 calls are not inferred. A property returning a mutable value remains public even
 when callers mutate that value.
 
+Directly stored receiver fields must be initialized by the owning constructor
+on every normal-return path. Alternative branches count independently; an
+always-raising path creates no instance. Loop-only writes, deferred nested
+functions and lambdas, helper calls and indirect writes cannot prove initialization.
+The analysis retains possible repeated writes through loops separately from
+mutually exclusive branch assignments for the later rebinding rule.
+
 Stored class values are prohibited at declaration, regardless of their name, value
 or `Final` annotation. Direct writes and built-in `setattr` calls with literal names
 through a known consumer class after creation are prohibited too. Proven external

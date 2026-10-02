@@ -83,8 +83,8 @@ The instance-field boundary rule uses the same full scope and reports proven
 external access to consumer-defined stored fields, including first assignments
 to known consumer instances. Literal-name built-in `getattr`/`setattr`/`delattr`
 and known keys in `vars(obj)` or `obj.__dict__` follow the same boundary.
-Directly stored receiver fields also require a direct assignment in the owning
-class's straight-line constructor; missing initialization is a violation.
+Directly stored receiver fields also require a direct assignment on every
+normal-return path of the owning constructor; missing initialization is a violation.
 It forbids stored class values, including `Final` constants, at declaration and
 statically named writes through known classes. Initialized dataclass instance
 fields, Enum members and `__slots__` remain allowed.
