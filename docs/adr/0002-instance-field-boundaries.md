@@ -27,8 +27,18 @@ declarations establish ownership without requiring executable initialization.
 Alternative branches count independently; an always-raising path creates no
 instance. Loop-only writes, deferred nested functions and lambdas, helper calls
 and indirect writes cannot prove initialization.
-The analysis retains possible repeated writes through loops separately from
-mutually exclusive branch assignments for the later rebinding rule.
+Every stored field needs a single resolved type. An exact static annotation of
+`bool`, `int`, `float`, `complex`, `str` or `bytes` permits direct reassignment
+after initialization, even if the runtime value is a subclass. A subclass
+annotation, union, `NoneType` or any other known type does not. Unannotated
+fields use reliable assignments such as literals and resolved return annotations;
+unknown expressions or conflicting source/stub evidence yield
+`UNKNOWN_FIELD_TYPE` at the declaration or first write. For a known non-primitive
+type, `NON_PRIMITIVE_FIELD_REBINDING` points to the later direct receiver write,
+even inside the constructor. Alternative first writes in exclusive branches do
+not count as rebinding; possible repeated loop writes do. Mutating the object
+already held in a field leaves its binding intact. A primitive written for the
+first time outside its owner constructor still violates initialization.
 
 Stored class values are prohibited at declaration, regardless of their name, value
 or `Final` annotation. Direct writes and built-in `setattr` calls with literal names

@@ -91,6 +91,17 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   considered; paths that raise do not create usable instances. Loop-only writes
   cannot prove initialization, and deferred nested bodies, helper calls and
   indirect writes do not count.
+  `UNKNOWN_FIELD_TYPE` reports an unresolvable or conflicting stored-field type
+  at its declaration or first receiver write. Exact static field annotations take
+  priority over runtime values (including subclasses); absent annotations, literal
+  values and resolved return annotations provide evidence. Conflicting source/stub
+  annotations and unknown expressions without a qualifying annotation are violations.
+  `NON_PRIMITIVE_FIELD_REBINDING` reports a direct receiver reassignment that can
+  follow an earlier write, including successive writes in a constructor or loop.
+  Only exact resolved `bool`, `int`, `float`, `complex`, `str` and `bytes` field
+  types may be rebound after initialization. `NoneType`, unions, subclasses and
+  other known types may not. Mutating the existing object is not rebinding; a
+  primitive first assigned outside the owner constructor still fails initialization.
 * **Class state**: `NO_CLASS_STATE` rejects stored class values at their declarations,
   including immutable `Final` constants, and statically named writes through known
   consumer classes after creation (direct, builtin `setattr`, or class dictionary).

@@ -8,7 +8,8 @@ from pathlib import Path
 import sys
 from typing import override
 
-from eryx._field_initialization import missing_fields
+from eryx._field_initialization import missing_fields, rebound_fields, written_fields
+from eryx._field_types import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
 
 Binding = tuple[str, str]  # (class | instance | module | builtins | builtin, name)
 
@@ -271,9 +272,12 @@ class Ownership(object):
         self.members: dict[str, set[str]] = {}
         self.bases: dict[str, tuple[str | None, ...]] = {}
         self.exports: dict[str, Binding] = {}
+        self.type_evidence = TypeEvidence(trees)
+        self.field_sources: dict[str, list[tuple[str, ast.ClassDef, dict[str, ast.expr], set[str]]]] = {}
         for path, tree in trees.items():
             self.index(tree.body, module_name(path), path, (set(), set()), (set(), set()),
                        (set(), set()))
+        self.binding_diagnostics()
         # Resolve explicit exports to a fixed point so file order does not affect aliases.
         for _ in range(len(trees) + 1):
             previous = self.exports.copy()
@@ -289,6 +293,50 @@ class Ownership(object):
     def declaration_diagnostics(self) -> list[dict[str, object]]:
         """Return prohibited class declarations found in discovered files."""
         return self.declarations
+
+    def binding_diagnostics(self) -> None:
+        """Require exact type proof and forbid direct non-primitive rebinding."""
+        start = len(self.declarations)
+        for owner, sources in self.field_sources.items():
+            for path, node, locations, generated in sources:
+                for field, location in locations.items():
+                    if path.endswith(".pyi") and any(
+                            source_path.endswith(".py") and field in source_locations
+                            for source_path, _, source_locations, _ in sources):
+                        continue
+                    annotations: list[str] = []
+                    writes: list[str] = []
+                    source_annotations: list[str] = []
+                    for other_path, other, other_locations, _ in sources:
+                        if field not in other_locations:
+                            continue
+                        evidence = field_evidence(other, {field}, module_name(other_path),
+                                                  self.type_evidence)[field]
+                        annotations.extend(evidence[0])
+                        if other_path.endswith(".py"):
+                            source_annotations.extend(evidence[0])
+                            writes.extend(evidence[1])
+                    proof = (annotations if source_annotations else annotations + writes
+                             if annotations else writes)
+                    kind = next(iter(proof), UNKNOWN)
+                    if kind == UNKNOWN or any(item != kind for item in proof):
+                        self.declarations.append({
+                            "rule": "UNKNOWN_FIELD_TYPE", "path": path,
+                            "line": location.lineno, "column": location.col_offset + 1,
+                            "symbol": f"{owner}.{field}",
+                            "message": f"Stored instance field {owner}.{field} has no single resolved type."})
+                        continue
+                    if kind in {f"builtins.{name}" for name in PRIMITIVES} or path.endswith(".pyi"):
+                        continue
+                    for store in rebound_fields(node, {field}, generated).get(field, []):
+                        self.declarations.append({
+                            "rule": "NON_PRIMITIVE_FIELD_REBINDING", "path": path,
+                            "line": store.lineno, "column": store.col_offset + 1,
+                            "symbol": f"{owner}.{field}",
+                            "message": f"Direct reassignment of non-primitive field {owner}.{field} is prohibited."})
+        self.declarations[start:] = sorted(
+            self.declarations[start:],
+            key=lambda item: (str(item["path"]), int(item["line"]), int(item["column"])))
 
     def index(self, body: list[ast.stmt], prefix: str, path: str,
               decorators: tuple[set[str], set[str]],
@@ -448,6 +496,10 @@ class Ownership(object):
                 self.class_fields[name] = class_fields
                 self.instance_fields[name] = instance - methods - properties - {"__slots__"}
                 self.fields[name] = (class_fields | instance) - methods - properties - {"__slots__"}
+                locations = {**written_fields(node), **field_declarations}
+                locations = {field: location for field, location in locations.items()
+                             if field in self.instance_fields[name]}
+                self.field_sources.setdefault(name, []).append((path, node, locations, generated))
                 if path.endswith(".py"):
                     for field, location in missing_fields(node, field_declarations, generated).items():
                         if field not in self.instance_fields[name]:

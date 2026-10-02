@@ -87,6 +87,10 @@ Stored receiver fields, source annotations and literal slots require a direct
 assignment on every normal-return path of the owning constructor; missing
 initialization is a violation. Standard dataclass-generated assignments count;
 stub-only declarations establish ownership without an initialization check.
+Stored fields also need a single resolved type: only exact `bool`, `int`, `float`,
+`complex`, `str` or `bytes` field types permit direct reassignment after initialization.
+Unknown types and conflicting source/stub evidence are violations; rebinding other
+fields is prohibited, while mutation of an existing value remains allowed.
 It forbids stored class values, including `Final` constants, at declaration and
 statically named writes through known classes. Initialized dataclass instance
 fields, Enum members and `__slots__` remain allowed.

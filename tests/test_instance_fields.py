@@ -48,6 +48,11 @@ class InstanceFieldTests(unittest.TestCase):
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text(encoding="utf-8"))
         return result, raw
 
+    def boundary_diagnostics(self, result):
+        """Keep older boundary fixtures focused on their original rules."""
+        return [item for item in result["diagnostics"] if item["rule"] not in {
+            "UNKNOWN_FIELD_TYPE", "NON_PRIMITIVE_FIELD_REBINDING"}]
+
     def test_direct_owner_constructor_initialization(self):
         self.put("src/pkg/initialized.py", '''\
 class Ready:
@@ -86,14 +91,14 @@ class Nested:
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
         self.assertEqual([(d["line"], d["column"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                          for d in self.boundary_diagnostics(result)], [
             (11, 9, "pkg.initialized.Missing.late"),
             (18, 9, "pkg.initialized.NoConstructor.absent"),
             (23, 13, "pkg.initialized.Conditional.maybe"),
             (30, 9, "pkg.initialized.Nested.later"),
         ])
         self.assertTrue(all(d["rule"] == "MISSING_FIELD_INITIALIZATION" and
-                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+                            not d["is_infrastructure_error"] for d in self.boundary_diagnostics(result)))
 
     def test_initialized_direct_fields_pass(self):
         self.put("src/pkg/ready.py", '''\
@@ -107,6 +112,144 @@ class Ready:
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
                          ("passed", 0, []))
+
+    def test_exact_types_and_path_sensitive_rebinding(self):
+        self.put("src/pkg/types.py", '''\
+from dataclasses import dataclass
+class Small(int): pass
+def number() -> int: return 1
+@dataclass
+class Data:
+    entries: list[int]
+    def change(self): self.entries.append(1)
+class Model:
+    def __init__(self, flag):
+        self.scalar: int = Small(1)
+        self.inferred = number()
+        self.none = None
+        self.union: int | str = 1
+        self.child: Small = Small(1)
+        self.items = []
+        if flag:
+            self.alternative = []
+        else:
+            self.alternative = []
+        self.items = []
+        self.none = None
+    def update(self):
+        self.scalar = 2
+        self.inferred = 2
+        self.items.append(1)
+        self.items = []
+        self.union = 2
+        self.child = Small(2)
+        self.alternative = []
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["line"], d["rule"], d["column"]) for d in result["diagnostics"]], [
+            (20, "NON_PRIMITIVE_FIELD_REBINDING", 9),
+            (21, "NON_PRIMITIVE_FIELD_REBINDING", 9),
+            (26, "NON_PRIMITIVE_FIELD_REBINDING", 9),
+            (27, "NON_PRIMITIVE_FIELD_REBINDING", 9),
+            (28, "NON_PRIMITIVE_FIELD_REBINDING", 9),
+            (29, "NON_PRIMITIVE_FIELD_REBINDING", 9),
+        ])
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_unknown_evidence_stub_conflicts_and_late_primitive(self):
+        self.put("src/pkg/model.py", '''\
+class Model:
+    known: int
+    def __init__(self):
+        self.known = 1
+        self.unknown = compute()
+        self.conflict = 1
+        self.conflict = "text"
+        self.stubbed = 1
+    def later(self):
+        self.late = 1
+''')
+        self.put("src/pkg/model.pyi", '''\
+class Model:
+    known: str
+    stubbed: str
+''')
+        result, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["rule"], d["path"], d["line"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", "src/pkg/model.py", 10, "pkg.model.Model.late"),
+            *[("UNKNOWN_FIELD_TYPE", "src/pkg/model.py", line, f"pkg.model.Model.{field}")
+              for line, field in [(2, "known"), (5, "unknown"), (6, "conflict"), (8, "stubbed")]],
+        ])
+
+    def test_aliases_resolved_returns_and_loop_rebindings(self):
+        self.put("src/pkg/factory.py", "def number() -> int: return 1\n")
+        self.put("src/pkg/values.py", '''\
+from pkg.factory import number as make
+from builtins import int as integer
+type Number = integer
+class Values:
+    def __init__(self, flag):
+        self.number: Number = make()
+        self.inferred = make()
+        self.pieces: list[int] = []
+        for _ in range(2):
+            self.pieces = []
+    def change(self):
+        self.number = make()
+        self.inferred = 2
+        self.pieces.append(1)
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("NON_PRIMITIVE_FIELD_REBINDING", 10, "pkg.values.Values.pieces")])
+
+    def test_conflicting_generic_source_and_stub_annotations(self):
+        self.put("src/pkg/generic.py", "class Generic:\n    values: list[int]\n"
+                 "    def __init__(self): self.values = []\n")
+        self.put("src/pkg/generic.pyi", "class Generic:\n    values: list[str]\n")
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["path"], d["line"])
+                          for d in result["diagnostics"]], [
+            ("UNKNOWN_FIELD_TYPE", "src/pkg/generic.py", 2)])
+
+    def test_each_exact_primitive_may_be_reassigned(self):
+        self.put("src/pkg/primitives.py", '''\
+class Primitives:
+    def make(self) -> str: return "made"
+    def __init__(self):
+        self.truth: bool = True
+        self.count: int = 1
+        self.measure: float = 1.0
+        self.imaginary: complex = 1j
+        self.text = self.make()
+        self.data: bytes = b"one"
+    def update(self):
+        self.truth = False
+        self.count = 2
+        self.measure = 2.0
+        self.imaginary = 2j
+        self.text = "two"
+        self.data = b"two"
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
+                         ("passed", 0, []))
+
+    def test_malformed_new_rule_report_is_an_error(self):
+        self.put("src/pkg/model.py", "class Model:\n    value: list[int]\n")
+        job = self.job()
+        for rule in ("UNKNOWN_FIELD_TYPE", "NON_PRIMITIVE_FIELD_REBINDING"):
+            payload = json.dumps({"eryx_instance_fields_adapter": 1, "execution_error": None,
+                                  "diagnostics": [{"rule": rule, "message": "missing location"}]})
+            result = execute_job(job, self.root, self.root / ".eryx/reports/run", 30,
+                                 capture_fn=lambda *args: {"stdout": payload, "stderr": "",
+                                                           "exit_code": 1, "duration_seconds": 0,
+                                                           "error": None})
+            self.assertEqual(result["status"], "error")
 
     def test_declared_source_fields_need_own_constructor(self):
         self.put("src/pkg/declarations.py", '''\
@@ -143,7 +286,8 @@ class DictionarySlots:
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
-        self.assertEqual([(d["line"], d["column"], d["symbol"]) for d in result["diagnostics"]], [
+        self.assertEqual([(d["line"], d["column"], d["symbol"])
+                          for d in self.boundary_diagnostics(result)], [
             (5, 5, "pkg.declarations.Interface.value"),
             (8, 18, "pkg.declarations.Abstract.slot"),
             (13, 5, "pkg.declarations.Mixed.declared"),
@@ -224,7 +368,8 @@ def use(protocol: ProtocolFields, abstract: AbstractFields):
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
-        self.assertEqual([(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+        self.assertEqual([(d["path"], d["line"], d["symbol"])
+                          for d in self.boundary_diagnostics(result)], [
             ("tests/test_interfaces.py", 3, "pkg.interfaces.ProtocolFields.value"),
             ("tests/test_interfaces.py", 3, "pkg.interfaces.AbstractFields.slot"),
         ])
@@ -308,7 +453,7 @@ class BreakElse:
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
-        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+        self.assertEqual([(d["line"], d["symbol"]) for d in self.boundary_diagnostics(result)], [
             (11, "pkg.paths.MissingElse.value"),
             (17, "pkg.paths.EarlyReturn.value"),
             (38, "pkg.paths.Deferred.value"),
@@ -317,7 +462,7 @@ class BreakElse:
             (63, "pkg.paths.BreakElse.value"),
         ])
         self.assertTrue(all(d["rule"] == "MISSING_FIELD_INITIALIZATION" and
-                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+                            not d["is_infrastructure_error"] for d in self.boundary_diagnostics(result)))
 
     def test_match_try_finally_and_loop_write_counts(self):
         self.put("src/pkg/flow.py", '''\
@@ -380,7 +525,7 @@ class WithBody:
             self.value = 1
 ''')
         result, _ = self.run_worker()
-        self.assertEqual([(d["symbol"], d["rule"]) for d in result["diagnostics"]], [
+        self.assertEqual([(d["symbol"], d["rule"]) for d in self.boundary_diagnostics(result)], [
             ("pkg.flow.Unmatched.value", "MISSING_FIELD_INITIALIZATION"),
             ("pkg.flow.Handler.value", "MISSING_FIELD_INITIALIZATION"),
             ("pkg.flow.Repeated.value", "MISSING_FIELD_INITIALIZATION"),
@@ -439,7 +584,7 @@ def test_field():
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
-        self.assertEqual([(item["path"], item["line"], item["symbol"]) for item in result["diagnostics"]
+        self.assertEqual([(item["path"], item["line"], item["symbol"]) for item in self.boundary_diagnostics(result)
                            if item["rule"] != "NO_CLASS_STATE"], [
             ("src/pkg/model.py", 2, "pkg.model.Record.declared"),
             *(("src/pkg/use.py", line, symbol) for line, symbol in (
@@ -679,7 +824,7 @@ def use(parent: Parent, slot: Slotted, annotated: Annotated, child: Child,
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
         self.assertEqual([(d["path"], d["line"], d["symbol"])
-                           for d in result["diagnostics"]], [
+                           for d in self.boundary_diagnostics(result)], [
             ("src/pkg/child.py", 5, "pkg.child.Child.own_field"),
             ("src/pkg/child.py", 12, "pkg.child.Overridden.item"),
             ("src/pkg/child.py", 21, "pkg.child.Container.item"),
@@ -731,7 +876,7 @@ Shadowed().value
 ''')
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["line"], d["symbol"])
-                           for d in result["diagnostics"]], [
+                           for d in self.boundary_diagnostics(result)], [
             ("src/pkg/models.py", 9, "pkg.models.Slots.field"),
             ("src/pkg/models.py", 13, "pkg.models.Unresolved.value"),
             ("src/pkg/models.py", 21, "pkg.models.Shadowed.value"),
@@ -928,7 +1073,7 @@ State.another = 5
 ''')
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
-                           for d in result["diagnostics"]], [
+                           for d in self.boundary_diagnostics(result)], [
             ("src/pkg/state.py", 6, "MISSING_FIELD_INITIALIZATION", "pkg.state.State.annotated"),
             ("src/pkg/state.py", 7, "MISSING_FIELD_INITIALIZATION", "pkg.state.State.field"),
             ("src/pkg/state.py", 3, "NO_CLASS_STATE", "pkg.state.State.IMMUTABLE"),
@@ -970,7 +1115,7 @@ Direction.NORTH
 ''')
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
-                           for d in result["diagnostics"]], [
+                           for d in self.boundary_diagnostics(result)], [
             ("src/pkg/model.py", 9, "NO_CLASS_STATE", "pkg.model.Item.shared"),
             ("src/pkg/model.py", 11, "MISSING_FIELD_INITIALIZATION", "pkg.model.Slotted.name"),
             ("src/pkg/model.py", 11, "MISSING_FIELD_INITIALIZATION", "pkg.model.Slotted.quantity"),
