@@ -93,22 +93,71 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
     return fields
 
 
-def slot_names(node: ast.expr) -> set[str]:
-    """Recognize literal slot declarations without guessing computed names."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return {node.value}
+def slot_locations(node: ast.expr) -> dict[str, ast.expr]:
+    """Locate literal slot names at their string token, including dictionary keys."""
+    special = {"__dict__", "__weakref__"}
+    if isinstance(node, ast.Constant):
+        return {node.value: node} if isinstance(node.value, str) and node.value not in special else {}
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
         items = node.elts
     elif isinstance(node, ast.Dict):
         items = node.keys
     else:
-        return set()
-    names: set[str] = set()
-    for item in items:
-        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
-            return set()
-        names.add(item.value)
-    return names
+        return {}
+    if not all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+               for item in items):
+        return {}
+    return {item.value: item for item in items if item.value not in special}
+
+
+def dataclass_options(node: ast.ClassDef, names: set[str], modules: set[str]) -> tuple[bool, bool]:
+    """Return whether the standard decorator generates an init and uses slots."""
+    for decorator in node.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if (isinstance(target, ast.Name) and target.id in names
+                or isinstance(target, ast.Attribute) and target.attr == "dataclass"
+                and isinstance(target.value, ast.Name) and target.value.id in modules):
+            if isinstance(decorator, ast.Call) and any(item.arg is None for item in decorator.keywords):
+                return False, False
+            options = {item.arg: item.value for item in decorator.keywords} if isinstance(
+                decorator, ast.Call) else {}
+            init = options.get("init", ast.Constant(value=True))
+            slots = options.get("slots", ast.Constant(value=False))
+            return (isinstance(init, ast.Constant) and init.value is True,
+                    isinstance(slots, ast.Constant) and slots.value is True)
+    return False, False
+
+
+def generated_field(item: ast.AnnAssign, field_names: set[str], modules: set[str],
+                    slots: bool) -> bool:
+    """Model the assignments emitted by dataclasses for a stored field."""
+    value = item.value
+    if not isinstance(value, ast.Call):
+        return True
+    target = value.func
+    if not (isinstance(target, ast.Name) and target.id in field_names
+            or isinstance(target, ast.Attribute) and target.attr == "field"
+            and isinstance(target.value, ast.Name) and target.value.id in modules):
+        return True
+    if any(argument.arg is None for argument in value.keywords):
+        return False
+    options = {argument.arg: argument.value for argument in value.keywords}
+    init = options.get("init", ast.Constant(value=True))
+    if not isinstance(init, ast.Constant):
+        return False
+    if init.value is True:
+        return True
+    if init.value is not False:
+        return False
+    return "default_factory" in options or slots and "default" in options
+
+
+def pseudo_field(annotation: ast.expr, names: set[str], modules: set[str]) -> bool:
+    """InitVar and KW_ONLY are dataclass parameters/markers, not stored fields."""
+    target = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    return (isinstance(target, ast.Name) and target.id in names
+            or isinstance(target, ast.Attribute) and target.attr in {"InitVar", "KW_ONLY"}
+            and isinstance(target.value, ast.Name) and target.value.id in modules)
 
 
 def stable_class(node: ast.ClassDef, decorators: tuple[set[str], set[str]]) -> bool:
@@ -244,10 +293,14 @@ class Ownership(object):
     def index(self, body: list[ast.stmt], prefix: str, path: str,
               decorators: tuple[set[str], set[str]],
               enums: tuple[set[str], set[str]],
-              classvars: tuple[set[str], set[str]]) -> None:
+              classvars: tuple[set[str], set[str]],
+              field_names: set[str] | None = None,
+              pseudo_names: set[str] | None = None) -> None:
         functions, modules = (set(decorators[0]), set(decorators[1]))
         enum_names, enum_modules = (set(enums[0]), set(enums[1]))
         classvar_names, classvar_modules = (set(classvars[0]), set(classvars[1]))
+        field_names = set(field_names or ())
+        pseudo_names = set(pseudo_names or ())
         descriptor_names: set[str] = set()
         descriptor_modules: set[str] = set()
         for node in body:
@@ -259,8 +312,14 @@ class Ownership(object):
                     enum_names.discard(bound)
                     classvar_names.discard(bound)
                     descriptor_names.discard(bound)
+                    field_names.discard(bound)
+                    pseudo_names.discard(bound)
                     if node.level == 0 and node.module == "dataclasses" and alias.name == "dataclass":
                         functions.add(bound)
+                    if node.level == 0 and node.module == "dataclasses" and alias.name == "field":
+                        field_names.add(bound)
+                    if node.level == 0 and node.module == "dataclasses" and alias.name in {"InitVar", "KW_ONLY"}:
+                        pseudo_names.add(bound)
                     if node.level == 0 and node.module == "enum" and alias.name in {
                             "Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"}:
                         enum_names.add(bound)
@@ -276,6 +335,8 @@ class Ownership(object):
                     enum_modules.discard(bound)
                     classvar_modules.discard(bound)
                     descriptor_modules.discard(bound)
+                    field_names.discard(bound)
+                    pseudo_names.discard(bound)
                     if alias.name == "dataclasses":
                         modules.add(bound)
                     if alias.name == "enum":
@@ -288,7 +349,11 @@ class Ownership(object):
                 name = f"{prefix}.{node.name}"
                 self.classes[name] = node
                 is_dataclass = bool(node.decorator_list) and stable_class(node, (functions, modules))
-                if stable_class(node, (functions, modules)):
+                generates_init, dataclass_slots = dataclass_options(node, functions, modules)
+                generates_init = is_dataclass and generates_init and not any(
+                    isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__"
+                    for item in node.body)
+                if not node.decorator_list or is_dataclass:
                     self.stable.add(name)
                 is_enum = any(
                     isinstance(base, ast.Name) and base.id in enum_names
@@ -316,15 +381,16 @@ class Ownership(object):
                     item.targets if isinstance(item, ast.Assign) else
                     [item.target] if isinstance(item, ast.AnnAssign) else [])
                     if isinstance(target, ast.Name)}
-                slots: set[str] = set()
+                slot_declarations: dict[str, ast.expr] = {}
                 for item in node.body:
                     if isinstance(item, ast.Assign) and any(
                             isinstance(target, ast.Name) and target.id == "__slots__"
                             for target in item.targets):
-                        slots.update(slot_names(item.value))
+                        slot_declarations.update(slot_locations(item.value))
                     elif (isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
                           and item.target.id == "__slots__" and item.value):
-                        slots.update(slot_names(item.value))
+                        slot_declarations.update(slot_locations(item.value))
+                slots = set(slot_declarations)
                 properties = {target.id for item in node.body if isinstance(item, ast.Assign)
                               and isinstance(item.value, ast.Call)
                               and isinstance(item.value.func, ast.Name) and item.value.func.id == "property"
@@ -347,18 +413,34 @@ class Ownership(object):
                 instance = receiver_fields(node) | slots | {
                     item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
                     and isinstance(item.target, ast.Name) and item.value is None
-                    and not classvar_annotation(item.annotation, classvar_names, classvar_modules)}
+                    and not classvar_annotation(item.annotation, classvar_names, classvar_modules)
+                    and not (is_dataclass and pseudo_field(item.annotation, pseudo_names, modules))}
                 dataclass_fields = {item.target.id for item in node.body
                                     if is_dataclass and isinstance(item, ast.AnnAssign)
                                     and isinstance(item.target, ast.Name)
                                     and not classvar_annotation(
-                                        item.annotation, classvar_names, classvar_modules)}
+                                        item.annotation, classvar_names, classvar_modules)
+                                    and not pseudo_field(item.annotation, pseudo_names, modules)}
                 instance.update(dataclass_fields)
+                generated = {item.target.id for item in node.body
+                             if generates_init and isinstance(item, ast.AnnAssign)
+                             and isinstance(item.target, ast.Name)
+                             and item.target.id in dataclass_fields
+                             and generated_field(item, field_names, modules, dataclass_slots)}
+                pseudo_fields = {item.target.id for item in node.body
+                                 if is_dataclass and isinstance(item, ast.AnnAssign)
+                                 and isinstance(item.target, ast.Name)
+                                 and pseudo_field(item.annotation, pseudo_names, modules)}
+                field_declarations = {item.target.id: item.target for item in node.body
+                                      if isinstance(item, ast.AnnAssign)
+                                      and isinstance(item.target, ast.Name)
+                                      and item.target.id in instance}
+                field_declarations.update(slot_declarations)
                 class_fields = ({target.id for item in node.body for target in (
                     item.targets if isinstance(item, ast.Assign) else
                     [item.target] if isinstance(item, ast.AnnAssign) and item.value is not None else [])
                     if isinstance(target, ast.Name)} | decorated_fields) - {
-                        "__slots__"} - methods - properties - dataclass_fields
+                        "__slots__"} - methods - properties - dataclass_fields - pseudo_fields
                 if is_enum:
                     class_fields = {field for field in class_fields if field.startswith("_")}
                 self.members[name] = declared | methods | {
@@ -367,7 +449,7 @@ class Ownership(object):
                 self.instance_fields[name] = instance - methods - properties - {"__slots__"}
                 self.fields[name] = (class_fields | instance) - methods - properties - {"__slots__"}
                 if path.endswith(".py"):
-                    for field, location in missing_fields(node).items():
+                    for field, location in missing_fields(node, field_declarations, generated).items():
                         if field not in self.instance_fields[name]:
                             continue
                         self.declarations.append({
@@ -386,6 +468,7 @@ class Ownership(object):
                                         and value.func.value.id in descriptor_modules))
                     if (field == "__slots__" or is_property
                             or is_dataclass and annotated and field in dataclass_fields
+                            or is_dataclass and annotated and field in pseudo_fields
                             or is_enum and not field.startswith("_")):
                         continue
                     self.declarations.append({
@@ -401,11 +484,11 @@ class Ownership(object):
                         "symbol": f"{name}.{field}",
                         "message": f"Stored class value {name}.{field} is prohibited."})
                 self.index(node.body, name, path, (functions, modules), (enum_names, enum_modules),
-                           (classvar_names, classvar_modules))
+                           (classvar_names, classvar_modules), field_names, pseudo_names)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.index(node.body, f"{prefix}.{node.name}", path,
                            (functions, modules), (enum_names, enum_modules),
-                           (classvar_names, classvar_modules))
+                           (classvar_names, classvar_modules), field_names, pseudo_names)
             if isinstance(node, (ast.Assign, ast.AnnAssign)):
                 for bound in assigned_names(node):
                     functions.discard(bound)
@@ -416,6 +499,8 @@ class Ownership(object):
                     classvar_modules.discard(bound)
                     descriptor_names.discard(bound)
                     descriptor_modules.discard(bound)
+                    field_names.discard(bound)
+                    pseudo_names.discard(bound)
             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.discard(node.name)
                 modules.discard(node.name)
@@ -425,6 +510,8 @@ class Ownership(object):
                 classvar_modules.discard(node.name)
                 descriptor_names.discard(node.name)
                 descriptor_modules.discard(node.name)
+                field_names.discard(node.name)
+                pseudo_names.discard(node.name)
 
     def field_owner(self, qualified: str, field: str,
                     seen: frozenset[str] | None = None) -> str | None:

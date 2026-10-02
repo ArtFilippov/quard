@@ -19,10 +19,14 @@ Computed names and fields supposedly produced by arbitrary method or constructor
 calls are not inferred. A property returning a mutable value remains public even
 when callers mutate that value.
 
-Directly stored receiver fields must be initialized by the owning constructor
-on every normal-return path. Alternative branches count independently; an
-always-raising path creates no instance. Loop-only writes, deferred nested
-functions and lambdas, helper calls and indirect writes cannot prove initialization.
+Source receiver fields, annotations and literal slots must be initialized by the
+owning constructor on every normal-return path, including in Protocol and abstract
+classes. A standard dataclass-generated constructor counts only assignments it
+actually makes; a custom constructor follows the ordinary rule. Stub-only
+declarations establish ownership without requiring executable initialization.
+Alternative branches count independently; an always-raising path creates no
+instance. Loop-only writes, deferred nested functions and lambdas, helper calls
+and indirect writes cannot prove initialization.
 The analysis retains possible repeated writes through loops separately from
 mutually exclusive branch assignments for the later rebinding rule.
 

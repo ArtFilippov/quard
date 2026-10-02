@@ -78,13 +78,19 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   field on a known consumer instance is also rejected. Same-class methods may access
   another instance's fields; properties and methods remain available to callers,
   including mutable values returned by properties.
-  `MISSING_FIELD_INITIALIZATION` reports a directly stored receiver field at its
-  first write unless every normal-return path through its owning `__init__`
-  directly assigns it. Alternative branches, early returns, matches and exception
-  handlers are considered; paths that raise do not create usable instances.
-  Loop-only writes cannot prove initialization, and deferred nested bodies,
-  helper calls and indirect writes do not count. Declaration-only fields and
-  stub-only classes are not checked for initialization yet.
+  `MISSING_FIELD_INITIALIZATION` reports a stored receiver field at its first
+  declaration (annotation or literal slot) or write unless every normal-return
+  path through its owning `__init__` directly assigns it. Source Protocols and
+  abstract classes follow the same rule. Standard dataclass-generated constructors
+  count only fields they assign: `field(init=False)` requires initialization
+  unless it has a default factory, or a default with `slots=True`. `init=False`
+  decorators and custom constructors follow the ordinary constructor rule.
+  `ClassVar`, `InitVar` and `KW_ONLY` are not stored dataclass fields. Stub-only
+  declarations establish ownership and type without requiring a constructor.
+  Alternative branches, early returns, matches and exception handlers are
+  considered; paths that raise do not create usable instances. Loop-only writes
+  cannot prove initialization, and deferred nested bodies, helper calls and
+  indirect writes do not count.
 * **Class state**: `NO_CLASS_STATE` rejects stored class values at their declarations,
   including immutable `Final` constants, and statically named writes through known
   consumer classes after creation (direct, builtin `setattr`, or class dictionary).

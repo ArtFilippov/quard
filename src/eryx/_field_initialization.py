@@ -207,23 +207,26 @@ def _written_fields(node: ast.ClassDef) -> dict[str, ast.Attribute]:
     return written
 
 
-def missing_fields(node: ast.ClassDef) -> dict[str, ast.Attribute]:
-    """Locate first direct writes without an owning constructor write on every exit.
+def missing_fields(node: ast.ClassDef, declarations: dict[str, ast.expr],
+                   generated: set[str]) -> dict[str, ast.expr]:
+    """Locate stored fields without an owning constructor write on every exit.
 
     Args:
         node (ast.ClassDef): Class whose receiver fields are being analyzed.
+        declarations (dict[str, ast.expr]): Source positions of declared fields.
+        generated (set[str]): Fields assigned by a generated dataclass constructor.
 
     Returns:
-        dict[str, ast.Attribute]: Uninitialized fields and their first direct write.
+        dict[str, ast.expr]: Uninitialized fields and their declaration or first write.
     """
-    written = _written_fields(node)
+    written: dict[str, ast.expr] = {**_written_fields(node), **declarations}
     constructor = next((method for method in reversed(node.body)
                         if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
                         and method.name == CONSTRUCTOR and _receiver(method) is not None), None)
     if constructor is None:
-        return written
+        return {field: location for field, location in written.items() if field not in generated}
     receiver = _receiver(constructor) or ""
-    missing: dict[str, ast.Attribute] = {}
+    missing: dict[str, ast.expr] = {}
     for field, location in written.items():
         exits = _block(constructor.body, {0}, field, receiver)
         if 0 in exits["normal"] | exits["return"]:

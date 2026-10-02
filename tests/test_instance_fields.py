@@ -108,6 +108,137 @@ class Ready:
         self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
                          ("passed", 0, []))
 
+    def test_declared_source_fields_need_own_constructor(self):
+        self.put("src/pkg/declarations.py", '''\
+from abc import ABC, abstractmethod
+from typing import Protocol
+
+class Interface(Protocol):
+    value: int
+
+class Abstract(ABC):
+    __slots__ = ("slot",)
+    @abstractmethod
+    def work(self): ...
+
+class Mixed:
+    declared: int
+    __slots__ = ("slot", "ready")
+    def __init__(self, flag):
+        self.ready = 1
+        if flag:
+            self.declared = 2
+        self.slot = 3
+
+class Ready:
+    value: int
+    __slots__ = ("slot",)
+    def __init__(self):
+        self.value = 1
+        self.slot = 2
+
+class DictionarySlots:
+    __slots__ = ("__dict__", "__weakref__")
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["line"], d["column"], d["symbol"]) for d in result["diagnostics"]], [
+            (5, 5, "pkg.declarations.Interface.value"),
+            (8, 18, "pkg.declarations.Abstract.slot"),
+            (13, 5, "pkg.declarations.Mixed.declared"),
+        ])
+
+    def test_dataclass_generated_and_custom_constructor_assignments(self):
+        self.put("src/pkg/data.py", '''\
+from dataclasses import dataclass as data, field as field_of, InitVar, KW_ONLY
+import dataclasses as dc
+from typing import ClassVar
+
+@data
+class Generated:
+    required: int
+    defaulted: int = 1
+    factory: list[int] = field_of(default_factory=list)
+    skipped: int = field_of(init=False)
+    shared_default: int = field_of(init=False, default=1)
+    built: list[int] = field_of(init=False, default_factory=list)
+    temp: InitVar[int] = 1
+    _: KW_ONLY
+    shared: ClassVar[int] = 2
+
+@dc.dataclass(slots=True)
+class Slotted:
+    initialized: int = dc.field(init=False, default=1)
+    missing: int = dc.field(init=False)
+
+@data(init=False)
+class NoGeneration:
+    value: int
+
+@data
+class Custom:
+    value: int
+    excluded: int = field_of(init=False)
+    def __init__(self):
+        self.excluded = 1
+
+@data
+class Complete:
+    value: int
+    excluded: int = field_of(init=False)
+    def __init__(self):
+        self.value = 1
+        self.excluded = 2
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["line"], d["column"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "MISSING_FIELD_INITIALIZATION"], [
+            (10, 5, "pkg.data.Generated.skipped"),
+            (11, 5, "pkg.data.Generated.shared_default"),
+            (20, 5, "pkg.data.Slotted.missing"),
+            (24, 5, "pkg.data.NoGeneration.value"),
+            (28, 5, "pkg.data.Custom.value"),
+        ])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "NO_CLASS_STATE"], [(15, "pkg.data.Generated.shared")])
+
+    def test_stub_protocol_and_abstract_fields_have_ownership_without_initialization(self):
+        self.put("src/pkg/interfaces.pyi", '''\
+from typing import Protocol
+from abc import ABC, abstractmethod
+class ProtocolFields(Protocol):
+    value: int
+class AbstractFields(ABC):
+    __slots__ = ("slot",)
+    @abstractmethod
+    def work(self) -> None: ...
+''')
+        self.put("tests/test_interfaces.py", '''\
+from pkg.interfaces import ProtocolFields, AbstractFields
+def use(protocol: ProtocolFields, abstract: AbstractFields):
+    return protocol.value, abstract.slot
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("tests/test_interfaces.py", 3, "pkg.interfaces.ProtocolFields.value"),
+            ("tests/test_interfaces.py", 3, "pkg.interfaces.AbstractFields.slot"),
+        ])
+
+    def test_source_still_requires_initialization_with_companion_stub(self):
+        self.put("src/pkg/model.py", "class Model:\n    value: int\n")
+        self.put("src/pkg/model.pyi", "class Model:\n    value: int\n")
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("src/pkg/model.py", 2, "pkg.model.Model.value"),
+        ])
+
     def test_constructor_paths_returns_and_deferred_writes(self):
         self.put("src/pkg/paths.py", '''\
 class Alternatives:
@@ -309,17 +440,18 @@ def test_field():
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
         self.assertEqual([(item["path"], item["line"], item["symbol"]) for item in result["diagnostics"]
-                          if item["rule"] != "NO_CLASS_STATE"], [
-            ("src/pkg/use.py", line, symbol) for line, symbol in (
+                           if item["rule"] != "NO_CLASS_STATE"], [
+            ("src/pkg/model.py", 2, "pkg.model.Record.declared"),
+            *(("src/pkg/use.py", line, symbol) for line, symbol in (
                 (5, "pkg.model.Record.value"), (6, "pkg.model.Record.value"),
                 (7, "pkg.model.Record.value"), (11, "pkg.model.Record.declared"),
-                (12, "pkg.model.Record.plain"), (13, "pkg.model.Record.value"))
+                (12, "pkg.model.Record.plain"), (13, "pkg.model.Record.value"))),
         ] + [("tests/test_use.py", 4, "pkg.model.Record.value")])
         self.assertEqual([(item["path"], item["line"], item["symbol"])
                           for item in result["diagnostics"] if item["rule"] == "NO_CLASS_STATE"],
                          [("src/pkg/model.py", 3, "pkg.model.Record.plain")])
-        self.assertEqual(raw["diagnostics"][0]["rule"], "NO_CLASS_STATE")
-        self.assertEqual(result["diagnostics"][1]["column"], 9)
+        self.assertEqual(raw["diagnostics"][0]["rule"], "MISSING_FIELD_INITIALIZATION")
+        self.assertEqual(result["diagnostics"][1]["column"], 5)
         self.assertTrue(all(not item["is_infrastructure_error"] for item in result["diagnostics"]))
 
     def test_unknown_third_party_properties_methods_and_rebinding(self):
@@ -547,7 +679,12 @@ def use(parent: Parent, slot: Slotted, annotated: Annotated, child: Child,
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("violations", 1, None))
         self.assertEqual([(d["path"], d["line"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                           for d in result["diagnostics"]], [
+            ("src/pkg/child.py", 5, "pkg.child.Child.own_field"),
+            ("src/pkg/child.py", 12, "pkg.child.Overridden.item"),
+            ("src/pkg/child.py", 21, "pkg.child.Container.item"),
+            ("src/pkg/model.py", 10, "pkg.model.Slotted.slot"),
+            ("src/pkg/model.py", 15, "pkg.model.Annotated.value"),
             ("src/pkg/child.py", 8, "pkg.model.Parent.item"),
             ("src/pkg/child.py", 9, "pkg.model.Parent.item"),
             ("src/pkg/child.py", 24, "pkg.child.Container.item"),
@@ -594,7 +731,10 @@ Shadowed().value
 ''')
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["line"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                           for d in result["diagnostics"]], [
+            ("src/pkg/models.py", 9, "pkg.models.Slots.field"),
+            ("src/pkg/models.py", 13, "pkg.models.Unresolved.value"),
+            ("src/pkg/models.py", 21, "pkg.models.Shadowed.value"),
             ("tests/test_data.py", 2, "pkg.models.Data.value"),
             ("tests/test_data.py", 3, "pkg.models.Slots.field"),
         ])
@@ -788,7 +928,9 @@ State.another = 5
 ''')
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                           for d in result["diagnostics"]], [
+            ("src/pkg/state.py", 6, "MISSING_FIELD_INITIALIZATION", "pkg.state.State.annotated"),
+            ("src/pkg/state.py", 7, "MISSING_FIELD_INITIALIZATION", "pkg.state.State.field"),
             ("src/pkg/state.py", 3, "NO_CLASS_STATE", "pkg.state.State.IMMUTABLE"),
             ("src/pkg/state.py", 4, "NO_CLASS_STATE", "pkg.state.State.mutable"),
             ("src/pkg/state.py", 5, "NO_CLASS_STATE", "pkg.state.State.callback"),
@@ -828,8 +970,10 @@ Direction.NORTH
 ''')
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["line"], d["rule"], d["symbol"])
-                          for d in result["diagnostics"]], [
+                           for d in result["diagnostics"]], [
             ("src/pkg/model.py", 9, "NO_CLASS_STATE", "pkg.model.Item.shared"),
+            ("src/pkg/model.py", 11, "MISSING_FIELD_INITIALIZATION", "pkg.model.Slotted.name"),
+            ("src/pkg/model.py", 11, "MISSING_FIELD_INITIALIZATION", "pkg.model.Slotted.quantity"),
             ("src/pkg/model.py", 16, "NO_CLASS_STATE", "pkg.model.Direction._cache"),
             ("src/pkg/model.py", 18, "NO_CLASS_STATE", "pkg.model.Ordinary.name"),
             ("tests/test_model.py", 2, "EXTERNAL_INSTANCE_FIELD", "pkg.model.Item.name"),
