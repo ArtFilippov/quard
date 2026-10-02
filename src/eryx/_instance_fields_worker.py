@@ -9,6 +9,7 @@ import sys
 from typing import override
 
 from eryx._field_initialization import missing_fields, rebound_fields, written_fields
+from eryx._field_operations import field_operations
 from eryx._field_types import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
 
 Binding = tuple[str, str]  # (class | instance | module | builtins | builtin, name)
@@ -28,52 +29,9 @@ def module_name(path: str) -> str:
     return ".".join(parts)
 
 
-def receiver_fields(node: ast.ClassDef) -> set[str]:
-    # Only method receiver stores define fields; deferred nested scopes do not.
+def receiver_fields(node: ast.ClassDef, tree: ast.Module) -> set[str]:
+    # Only proven method receiver stores define fields; deferred scopes do not.
     fields: set[str] = set()
-
-    class Stores(ast.NodeVisitor):
-        def visit_Attribute(self, attr: ast.Attribute) -> None:
-            if (isinstance(attr.ctx, (ast.Store, ast.Del)) and isinstance(attr.value, ast.Name)
-                    and attr.value.id == receiver and isinstance(attr.ctx, ast.Store)):
-                fields.add(attr.attr)
-            self.generic_visit(attr)
-
-        def visit_Call(self, call: ast.Call) -> None:
-            if (isinstance(call.func, ast.Name) and call.func.id == "setattr"
-                    and "setattr" not in shadowed and len(call.args) == 3 and not call.keywords
-                    and isinstance(call.args[0], ast.Name) and call.args[0].id == receiver
-                    and isinstance(call.args[1], ast.Constant)
-                    and isinstance(call.args[1].value, str)):
-                fields.add(call.args[1].value)
-            self.generic_visit(call)
-
-        def visit_Subscript(self, item: ast.Subscript) -> None:
-            target = item.value
-            direct = (isinstance(target, ast.Attribute) and target.attr == "__dict__"
-                      and isinstance(target.value, ast.Name) and target.value.id == receiver)
-            via_vars = (isinstance(target, ast.Call) and isinstance(target.func, ast.Name)
-                        and target.func.id == "vars" and "vars" not in shadowed
-                        and len(target.args) == 1 and not target.keywords
-                        and isinstance(target.args[0], ast.Name) and target.args[0].id == receiver)
-            if (isinstance(item.ctx, ast.Store) and (direct or via_vars)
-                    and isinstance(item.slice, ast.Constant)
-                    and isinstance(item.slice.value, str)):
-                fields.add(item.slice.value)
-            self.generic_visit(item)
-
-        def visit_FunctionDef(self, unused: ast.FunctionDef) -> None:
-            pass
-
-        def visit_AsyncFunctionDef(self, unused: ast.AsyncFunctionDef) -> None:
-            pass
-
-        def visit_ClassDef(self, unused: ast.ClassDef) -> None:
-            pass
-
-        def visit_Lambda(self, unused: ast.Lambda) -> None:
-            pass
-
     for method in node.body:
         if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if any(isinstance(decorator, ast.Name) and decorator.id in {"classmethod", "staticmethod"}
@@ -81,16 +39,9 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
                 continue
             args = method.args.posonlyargs + method.args.args
             if args:
-                receiver = args[0].arg
-                shadowed = {arg.arg for arg in (*args, *method.args.kwonlyargs)}
-                if method.args.vararg:
-                    shadowed.add(method.args.vararg.arg)
-                if method.args.kwarg:
-                    shadowed.add(method.args.kwarg.arg)
-                for statement in method.body:
-                    shadowed.update(assigned_names(statement))
-                for statement in method.body:
-                    Stores().visit(statement)
+                for events in field_operations(tree, method, args[0].arg).values():
+                    fields.update(event.name for event in events
+                                  if event.kind in {"write", "setdefault", "augment"})
     return fields
 
 
@@ -295,7 +246,7 @@ class Ownership(object):
         return self.declarations
 
     def binding_diagnostics(self) -> None:
-        """Require exact type proof and forbid direct non-primitive rebinding."""
+        """Require exact types, forbid non-primitive rebinding and bound-field deletion."""
         start = len(self.declarations)
         for owner, sources in self.field_sources.items():
             for path, node, locations, generated in sources:
@@ -311,7 +262,7 @@ class Ownership(object):
                         if field not in other_locations:
                             continue
                         evidence = field_evidence(other, {field}, module_name(other_path),
-                                                  self.type_evidence)[field]
+                                                  self.type_evidence, self.trees[other_path])[field]
                         annotations.extend(evidence[0])
                         if other_path.endswith(".py"):
                             source_annotations.extend(evidence[0])
@@ -319,6 +270,14 @@ class Ownership(object):
                     proof = (annotations if source_annotations else annotations + writes
                              if annotations else writes)
                     kind = next(iter(proof), UNKNOWN)
+                    rebindings, deletions = rebound_fields(node, {field}, generated,
+                                                             self.trees[path])
+                    for store in deletions.get(field, []):
+                        self.declarations.append({
+                            "rule": "DELETED_INSTANCE_FIELD", "path": path,
+                            "line": store.lineno, "column": store.col_offset + 1,
+                            "symbol": f"{owner}.{field}",
+                            "message": f"Deletion of initialized instance field {owner}.{field} is prohibited."})
                     if kind == UNKNOWN or any(item != kind for item in proof):
                         self.declarations.append({
                             "rule": "UNKNOWN_FIELD_TYPE", "path": path,
@@ -328,12 +287,12 @@ class Ownership(object):
                         continue
                     if kind in {f"builtins.{name}" for name in PRIMITIVES} or path.endswith(".pyi"):
                         continue
-                    for store in rebound_fields(node, {field}, generated).get(field, []):
+                    for store in rebindings.get(field, []):
                         self.declarations.append({
                             "rule": "NON_PRIMITIVE_FIELD_REBINDING", "path": path,
                             "line": store.lineno, "column": store.col_offset + 1,
                             "symbol": f"{owner}.{field}",
-                            "message": f"Direct reassignment of non-primitive field {owner}.{field} is prohibited."})
+                            "message": f"Reassignment of non-primitive field {owner}.{field} is prohibited."})
         self.declarations[start:] = sorted(
             self.declarations[start:],
             key=lambda item: (str(item["path"]), int(item["line"]), int(item["column"])))
@@ -458,7 +417,7 @@ class Ownership(object):
                                           or isinstance(dec, ast.Attribute) and dec.attr == "cached_property"
                                           and isinstance(dec.value, ast.Name) and dec.value.id in descriptor_modules
                                           for dec in item.decorator_list))
-                instance = receiver_fields(node) | slots | {
+                instance = receiver_fields(node, self.trees[path]) | slots | {
                     item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
                     and isinstance(item.target, ast.Name) and item.value is None
                     and not classvar_annotation(item.annotation, classvar_names, classvar_modules)
@@ -496,12 +455,13 @@ class Ownership(object):
                 self.class_fields[name] = class_fields
                 self.instance_fields[name] = instance - methods - properties - {"__slots__"}
                 self.fields[name] = (class_fields | instance) - methods - properties - {"__slots__"}
-                locations = {**written_fields(node), **field_declarations}
+                locations = {**written_fields(node, self.trees[path]), **field_declarations}
                 locations = {field: location for field, location in locations.items()
                              if field in self.instance_fields[name]}
                 self.field_sources.setdefault(name, []).append((path, node, locations, generated))
                 if path.endswith(".py"):
-                    for field, location in missing_fields(node, field_declarations, generated).items():
+                    for field, location in missing_fields(node, field_declarations, generated,
+                                                          self.trees[path]).items():
                         if field not in self.instance_fields[name]:
                             continue
                         self.declarations.append({

@@ -239,10 +239,203 @@ class Primitives:
         self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
                          ("passed", 0, []))
 
+    def test_indirect_constructor_bindings_and_proven_aliases(self):
+        self.put("src/pkg/indirect.py", '''\
+from builtins import setattr as store, vars as dictionary
+import builtins as bi
+class Ready:
+    def __init__(self, flag):
+        alias = self
+        if flag:
+            store(alias, "count", 1)
+        else:
+            bi.setattr(self, "count", 2)
+        dictionary(alias)["items"] = []
+        alias.__dict__.update({"name": "ready"})
+    def change(self):
+        alias = self
+        store(alias, "count", 3)
+        alias.__dict__["items"].append(1)
+class Conditional:
+    value: int
+    def __init__(self, flag):
+        if flag:
+            alias = self
+        store(alias, "value", 1)
+class Late:
+    def __init__(self): pass
+    def change(self):
+        alias = self
+        dictionary(alias)["value"] = 1
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", 17, "pkg.indirect.Conditional.value"),
+            ("MISSING_FIELD_INITIALIZATION", 26, "pkg.indirect.Late.value"),
+        ])
+
+    def test_indirect_rebinding_deletion_and_augmentation(self):
+        self.put("src/pkg/lifecycle.py", '''\
+from builtins import delattr as remove
+class Values:
+    def __init__(self):
+        self.items: list[int] = []
+        self.tuple_value: tuple[int] = (1,)
+        self.custom: object = object()
+        setattr(self, "unknown", factory())
+    def change(self):
+        alias = self
+        alias.items.append(1)
+        alias.tuple_value += (2,)
+        alias.custom += other
+        vars(alias)["items"] = []
+        setattr(alias, "tuple_value", (3,))
+        alias.__dict__.update({"custom": object()})
+        setattr(alias, "unknown", factory())
+        del alias.items
+        remove(alias, "tuple_value")
+        del alias.__dict__["custom"]
+        vars(alias).pop("unknown")
+class NotInitialized:
+    value: tuple[int]
+    def __init__(self):
+        self.value += (1,)
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", 22, "pkg.lifecycle.NotInitialized.value"),
+            ("UNKNOWN_FIELD_TYPE", 7, "pkg.lifecycle.Values.unknown"),
+            *[("NON_PRIMITIVE_FIELD_REBINDING", line, f"pkg.lifecycle.Values.{field}")
+              for line, field in [(13, "items"), (14, "tuple_value"), (15, "custom")]],
+            *[("DELETED_INSTANCE_FIELD", line, f"pkg.lifecycle.Values.{field}")
+              for line, field in [(17, "items"), (18, "tuple_value"),
+                                  (19, "custom"), (20, "unknown")]],
+        ])
+
+    def test_unknown_names_and_reassigned_aliases_do_not_initialize(self):
+        self.put("src/pkg/unproven.py", '''\
+class Model:
+    value: int
+    other: int
+    third: int
+    def __init__(self, unknown, field):
+        alias = self
+        alias = unknown
+        setattr(alias, "value", 1)
+        setattr(self, field, 1)
+        self = unknown
+        self.other = 1
+        vars(self)["third"] = 1
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "MISSING_FIELD_INITIALIZATION"], [
+            ("MISSING_FIELD_INITIALIZATION", 2, "pkg.unproven.Model.value"),
+            ("MISSING_FIELD_INITIALIZATION", 3, "pkg.unproven.Model.other"),
+            ("MISSING_FIELD_INITIALIZATION", 4, "pkg.unproven.Model.third"),
+        ])
+
+    def test_dictionary_setdefault_and_constructor_deletion(self):
+        self.put("src/pkg/dictionary.py", '''\
+class Defaults:
+    def __init__(self):
+        alias = self
+        vars(alias).setdefault("value", [])
+        alias.__dict__.setdefault("count", 1)
+    def change(self):
+        self.value.append(1)
+        vars(self).setdefault("value", [])
+        vars(self).setdefault("count", 2)
+class Deleted:
+    value: int
+    def __init__(self):
+        setattr(self, "value", 1)
+        delattr(self, "value")
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", 11, "pkg.dictionary.Deleted.value"),
+            ("DELETED_INSTANCE_FIELD", 14, "pkg.dictionary.Deleted.value"),
+        ])
+
+    def test_local_builtin_import_is_proven_but_shadowing_is_not(self):
+        self.put("src/pkg/builtins.py", '''\
+class Local:
+    def __init__(self):
+        from builtins import setattr as store
+        import builtins as bi
+        store(self, "count", 1)
+        bi.vars(self)["items"] = []
+class Shadowed:
+    count: int
+    def __init__(self, store):
+        from builtins import setattr as set_field
+        set_field = store
+        set_field(self, "count", 1)
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["symbol"]) for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", "pkg.builtins.Shadowed.count"),
+        ])
+
+    def test_annotated_alias_write_supplies_exact_field_type(self):
+        self.put("src/pkg/alias.py", '''\
+class Annotated:
+    def __init__(self):
+        alias = self
+        alias.value: int = compute()
+    def change(self):
+        alias = self
+        alias.value = 1
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
+                         ("passed", 0, []))
+
+    def test_deferred_or_empty_comprehensions_cannot_initialize(self):
+        self.put("src/pkg/deferred.py", '''\
+class Deferred:
+    value: int
+    other: int
+    def __init__(self):
+        generator = (setattr(self, "value", 1) for _ in [1])
+        empty = [setattr(self, "other", 1) for _ in []]
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["symbol"]) for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", "pkg.deferred.Deferred.value"),
+            ("MISSING_FIELD_INITIALIZATION", "pkg.deferred.Deferred.other"),
+        ])
+
+    def test_augmentation_alone_and_conditional_indirect_writes(self):
+        self.put("src/pkg/control.py", '''\
+class Augmented:
+    def __init__(self):
+        self.value += 1
+class Conditional:
+    def __init__(self, flag):
+        if setattr(self, "value", 1) or flag:
+            vars(self)["other"] = 1
+        else:
+            vars(self)["other"] = 2
+class WithBody:
+    def __init__(self, context):
+        with context as self.value:
+            setattr(self, "other", 1)
+''')
+        result, _ = self.run_worker()
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("MISSING_FIELD_INITIALIZATION", 3, "pkg.control.Augmented.value"),
+            ("MISSING_FIELD_INITIALIZATION", 13, "pkg.control.WithBody.other"),
+            ("UNKNOWN_FIELD_TYPE", 3, "pkg.control.Augmented.value"),
+            ("UNKNOWN_FIELD_TYPE", 12, "pkg.control.WithBody.value"),
+        ])
+
     def test_malformed_new_rule_report_is_an_error(self):
         self.put("src/pkg/model.py", "class Model:\n    value: list[int]\n")
         job = self.job()
-        for rule in ("UNKNOWN_FIELD_TYPE", "NON_PRIMITIVE_FIELD_REBINDING"):
+        for rule in ("UNKNOWN_FIELD_TYPE", "NON_PRIMITIVE_FIELD_REBINDING",
+                     "DELETED_INSTANCE_FIELD"):
             payload = json.dumps({"eryx_instance_fields_adapter": 1, "execution_error": None,
                                   "diagnostics": [{"rule": rule, "message": "missing location"}]})
             result = execute_job(job, self.root, self.root / ".eryx/reports/run", 30,

@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Set as AbstractSet
 from pathlib import Path
+from eryx._field_operations import field_operations
 
 PRIMITIVES = frozenset({"bool", "int", "float", "complex", "str", "bytes"})
 BUILTINS = PRIMITIVES | {"list", "dict", "set", "tuple", "frozenset", "object", "type"}
@@ -140,7 +141,8 @@ class TypeEvidence:
 
 
 def field_evidence(node: ast.ClassDef, fields: set[str], module: str,
-                   types: TypeEvidence) -> dict[str, tuple[list[str], list[str]]]:
+                   types: TypeEvidence, tree: ast.Module | None = None
+                   ) -> dict[str, tuple[list[str], list[str]]]:
     """Collect explicit annotations and unannotated write types per field."""
     evidence: dict[str, tuple[list[str], list[str]]] = {field: ([], []) for field in fields}
     for item in node.body:
@@ -155,7 +157,26 @@ def field_evidence(node: ast.ClassDef, fields: set[str], module: str,
         receiver = args[0].arg
         locals_ = {arg.arg for arg in (*args, *item.args.kwonlyargs)}
         parameters = {arg.arg: types.annotation(arg.annotation, module) for arg in
-                      (*args, *item.args.kwonlyargs) if arg.annotation is not None}
+                       (*args, *item.args.kwonlyargs) if arg.annotation is not None}
+        if tree is not None:
+            for statement, events in field_operations(tree, item, receiver).items():
+                for event in events:
+                    if (event.name not in fields or event.kind not in {"write", "setdefault"}
+                            or event.kind == "setdefault" and item.name != "__init__"):
+                        continue
+                    if isinstance(event.location, ast.Attribute) and isinstance(
+                            event.location.value, ast.Name) and event.location.value.id == receiver:
+                        continue  # The direct write below supplies annotation-aware evidence.
+                    if isinstance(statement, ast.AnnAssign) and statement.target is event.location:
+                        evidence[event.name][0].append(types.annotation(
+                            statement.annotation, module, locals_))
+                        continue
+                    expression = event.value
+                    inferred = (parameters.get(expression.id, UNKNOWN)
+                                if isinstance(expression, ast.Name) else
+                                types.expression(expression, module, locals_)
+                                if expression is not None else UNKNOWN)
+                    evidence[event.name][1].append(inferred)
         pending: list[ast.AST] = list(item.body)
         while pending:
             child = pending.pop()
@@ -196,8 +217,4 @@ def field_evidence(node: ast.ClassDef, fields: set[str], module: str,
                                     if method is not None and method.returns is not None:
                                         inferred = types.annotation(method.returns, module)
                                 evidence[part.attr][1].append(inferred)
-            elif (isinstance(child, ast.AugAssign) and isinstance(child.target, ast.Attribute)
-                  and isinstance(child.target.value, ast.Name) and child.target.value.id == receiver
-                  and child.target.attr in fields):
-                evidence[child.target.attr][1].append(UNKNOWN)
     return evidence

@@ -83,24 +83,29 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   path through its owning `__init__` directly assigns it. Source Protocols and
   abstract classes follow the same rule. Standard dataclass-generated constructors
   count only fields they assign: `field(init=False)` requires initialization
-  unless it has a default factory, or a default with `slots=True`. `init=False`
+  unless it has a default factory, or a default with `slots=True`. Literal-name
+  built-in `setattr` and known-key `vars(self)`/`self.__dict__` writes through
+  the receiver or a proven local alias also count on every normal-return path. `init=False`
   decorators and custom constructors follow the ordinary constructor rule.
   `ClassVar`, `InitVar` and `KW_ONLY` are not stored dataclass fields. Stub-only
   declarations establish ownership and type without requiring a constructor.
   Alternative branches, early returns, matches and exception handlers are
   considered; paths that raise do not create usable instances. Loop-only writes
   cannot prove initialization, and deferred nested bodies, helper calls and
-  indirect writes do not count.
+  computed names and unproven indirect writes do not count.
   `UNKNOWN_FIELD_TYPE` reports an unresolvable or conflicting stored-field type
   at its declaration or first receiver write. Exact static field annotations take
   priority over runtime values (including subclasses); absent annotations, literal
   values and resolved return annotations provide evidence. Conflicting source/stub
   annotations and unknown expressions without a qualifying annotation are violations.
-  `NON_PRIMITIVE_FIELD_REBINDING` reports a direct receiver reassignment that can
+  `NON_PRIMITIVE_FIELD_REBINDING` reports a recognized receiver reassignment that can
   follow an earlier write, including successive writes in a constructor or loop.
   Only exact resolved `bool`, `int`, `float`, `complex`, `str` and `bytes` field
   types may be rebound after initialization. `NoneType`, unions, subclasses and
-  other known types may not. Mutating the existing object is not rebinding; a
+  other known types may not. `DELETED_INSTANCE_FIELD` reports deletion of a bound
+  receiver field, including literal-name builtin and instance-dictionary deletion.
+  `+=` is allowed after initialization for every type and never establishes the
+  initial binding. Mutating the existing object is not rebinding; a
   primitive first assigned outside the owner constructor still fails initialization.
 * **Class state**: `NO_CLASS_STATE` rejects stored class values at their declarations,
   including immutable `Final` constants, and statically named writes through known

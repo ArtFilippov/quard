@@ -83,14 +83,16 @@ The instance-field boundary rule uses the same full scope and reports proven
 external access to consumer-defined stored fields, including first assignments
 to known consumer instances. Literal-name built-in `getattr`/`setattr`/`delattr`
 and known keys in `vars(obj)` or `obj.__dict__` follow the same boundary.
-Stored receiver fields, source annotations and literal slots require a direct
-assignment on every normal-return path of the owning constructor; missing
-initialization is a violation. Standard dataclass-generated assignments count;
+Stored receiver fields, source annotations and literal slots require a proven
+assignment on every normal-return path of the owning constructor; literal-name
+`setattr` and instance-dictionary writes through the receiver or a proven alias count.
+Missing initialization is a violation. Standard dataclass-generated assignments count;
 stub-only declarations establish ownership without an initialization check.
 Stored fields also need a single resolved type: only exact `bool`, `int`, `float`,
-`complex`, `str` or `bytes` field types permit direct reassignment after initialization.
+`complex`, `str` or `bytes` field types permit reassignment after initialization.
 Unknown types and conflicting source/stub evidence are violations; rebinding other
-fields is prohibited, while mutation of an existing value remains allowed.
+fields is prohibited, as is deleting an initialized field. `+=` after initialization
+is allowed for every type but never initializes a field. Mutation remains allowed.
 It forbids stored class values, including `Final` constants, at declaration and
 statically named writes through known classes. Initialized dataclass instance
 fields, Enum members and `__slots__` remain allowed.

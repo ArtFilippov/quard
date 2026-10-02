@@ -227,7 +227,7 @@ def parse_instance_fields(text: str, root: Path) -> tuple[list[dict[str, Any]], 
         if not isinstance(entry, dict) or entry.get("rule") not in {
                 "EXTERNAL_INSTANCE_FIELD", "EXTERNAL_CLASS_FIELD", "NO_CLASS_STATE",
                 "MISSING_FIELD_INITIALIZATION", "UNKNOWN_FIELD_TYPE",
-                "NON_PRIMITIVE_FIELD_REBINDING",
+                "NON_PRIMITIVE_FIELD_REBINDING", "DELETED_INSTANCE_FIELD",
                 "INSTANCE_FIELDS_PARSE_ERROR", "INSTANCE_FIELDS_EXECUTION_ERROR"}:
             raise ValueError("Malformed instance field diagnostic")
         rule = entry["rule"]
@@ -238,7 +238,7 @@ def parse_instance_fields(text: str, root: Path) -> tuple[list[dict[str, Any]], 
             raise ValueError("Malformed instance field diagnostic location")
         if rule in {"EXTERNAL_INSTANCE_FIELD", "EXTERNAL_CLASS_FIELD", "NO_CLASS_STATE",
                     "MISSING_FIELD_INITIALIZATION", "UNKNOWN_FIELD_TYPE",
-                    "NON_PRIMITIVE_FIELD_REBINDING"} and (
+                     "NON_PRIMITIVE_FIELD_REBINDING", "DELETED_INSTANCE_FIELD"} and (
                 not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
                 or type(entry.get("line")) is not int or type(entry.get("column")) is not int):
             raise ValueError("Missing instance field location")
@@ -248,7 +248,7 @@ def parse_instance_fields(text: str, root: Path) -> tuple[list[dict[str, Any]], 
                                 is_infrastructure_error=rule not in {
                                      "EXTERNAL_INSTANCE_FIELD", "EXTERNAL_CLASS_FIELD", "NO_CLASS_STATE",
                                      "MISSING_FIELD_INITIALIZATION", "UNKNOWN_FIELD_TYPE",
-                                     "NON_PRIMITIVE_FIELD_REBINDING"}))
+                                      "NON_PRIMITIVE_FIELD_REBINDING", "DELETED_INSTANCE_FIELD"}))
     if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
             error and not any(item["rule"] == error for item in items)):
         raise ValueError("Instance field error/diagnostic mismatch")
