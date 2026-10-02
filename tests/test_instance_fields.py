@@ -46,6 +46,66 @@ class InstanceFieldTests(unittest.TestCase):
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text(encoding="utf-8"))
         return result, raw
 
+    def test_direct_owner_constructor_initialization(self):
+        self.put("src/pkg/initialized.py", '''\
+class Ready:
+    def __init__(this):
+        this.value = 1
+        this.other: int = 2
+        this.left, this.right = 3, 4
+    def change(this):
+        this.value = 5
+
+class Missing:
+    def change(self):
+        self.late = 1
+        self.late = 2
+    def __init__(self):
+        pass
+
+class NoConstructor:
+    def change(self):
+        self.absent = 1
+
+class Conditional:
+    def __init__(self):
+        if condition:
+            self.maybe = 1
+
+class Nested:
+    def __init__(self):
+        def deferred():
+            self.later = 1
+    def change(self):
+        self.later = 2
+''')
+        self.put("src/pkg/declared.pyi", "class Stub:\n    value: int\n")
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["line"], d["column"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            (11, 9, "pkg.initialized.Missing.late"),
+            (18, 9, "pkg.initialized.NoConstructor.absent"),
+            (23, 13, "pkg.initialized.Conditional.maybe"),
+            (30, 9, "pkg.initialized.Nested.later"),
+        ])
+        self.assertTrue(all(d["rule"] == "MISSING_FIELD_INITIALIZATION" and
+                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_initialized_direct_fields_pass(self):
+        self.put("src/pkg/ready.py", '''\
+class Ready:
+    def __init__(self):
+        self.value = 1
+        self.name: str = "ready"
+    def change(self):
+        self.value = 2
+''')
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
+                         ("passed", 0, []))
+
     def test_external_reads_writes_deletes_and_known_owners_in_both_profiles(self):
         self.put("src/pkg/model.py", '''\
 class Record:
@@ -199,7 +259,13 @@ def use(value: Renamed, child: Child, foreign: Foreign, unknown):
     Renamed(label="test").from_keyword_call = 1
 ''')
         result, _ = self.run_worker()
-        self.assertEqual([(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+        self.assertEqual([(d["path"], d["line"], d["symbol"])
+                          for d in result["diagnostics"] if d["rule"] == "MISSING_FIELD_INITIALIZATION"], [
+            ("src/pkg/model.py", 4, "pkg.model.Model.new"),
+            ("src/pkg/model.py", 12, "pkg.model.Child.child_field"),
+        ])
+        self.assertEqual([(d["path"], d["line"], d["symbol"])
+                          for d in result["diagnostics"] if d["rule"] != "MISSING_FIELD_INITIALIZATION"], [
             ("src/pkg/use.py", 3, "pkg.model.Model.from_production")
         ] + [
             ("tests/test_first.py", line, f"pkg.model.{owner}.{field}")
@@ -785,13 +851,15 @@ def factory():
         ])
 
     def test_source_and_output_failures_are_infrastructure_errors(self):
-        self.put("src/pkg/good.py", "class Good:\n    def __init__(self): self.value = 1\nx = getattr(Good(), 'value')\n")
+        self.put("src/pkg/good.py", "class Good:\n    def __init__(self): self.value = 1\n"
+                 "    def later(self): self.extra = 2\nx = getattr(Good(), 'value')\n")
         self.put("tests/broken.py", "class Broken(\n")
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("error", 2, "INSTANCE_FIELDS_PARSE_ERROR"))
         self.assertEqual({item["rule"] for item in result["diagnostics"]},
-                         {"INSTANCE_FIELDS_PARSE_ERROR", "EXTERNAL_INSTANCE_FIELD"})
+                         {"INSTANCE_FIELDS_PARSE_ERROR", "EXTERNAL_INSTANCE_FIELD",
+                          "MISSING_FIELD_INITIALIZATION"})
         self.assertEqual(raw["diagnostics"][-1]["symbol"], "pkg.good.Good.value")
         job = self.job()
         (self.root / "tests/broken.py").unlink()
@@ -800,7 +868,10 @@ def factory():
         for payload, code in [("not json", 0), (json.dumps({
                 "eryx_instance_fields_adapter": 1, "diagnostics": [], "execution_error": None}), 1),
                 (json.dumps({"eryx_instance_fields_adapter": 1, "diagnostics": [
-                    {"rule": "EXTERNAL_INSTANCE_FIELD", "message": "bad"}], "execution_error": None}), 1)]:
+                    {"rule": "EXTERNAL_INSTANCE_FIELD", "message": "bad"}], "execution_error": None}), 1),
+                (json.dumps({"eryx_instance_fields_adapter": 1, "diagnostics": [
+                    {"rule": "MISSING_FIELD_INITIALIZATION", "message": "bad"}],
+                    "execution_error": None}), 1)]:
             with self.subTest(payload=payload):
                 corrupt = execute_job(job, self.root, self.root / ".eryx/reports/run", 30,
                                       capture_fn=lambda *args: {"stdout": payload, "stderr": "",

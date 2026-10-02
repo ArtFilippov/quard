@@ -91,6 +91,60 @@ def receiver_fields(node: ast.ClassDef) -> set[str]:
     return fields
 
 
+def direct_stores(statement: ast.stmt, receiver: str) -> list[ast.Attribute]:
+    # Deferred bodies must not establish stored fields in the enclosing method.
+    pending: list[ast.AST] = [statement]
+    stores: list[ast.Attribute] = []
+    while pending:
+        current = pending.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if (isinstance(current, ast.Attribute) and isinstance(current.ctx, ast.Store)
+                and isinstance(current.value, ast.Name) and current.value.id == receiver):
+            stores.append(current)
+        pending.extend(ast.iter_child_nodes(current))
+    return sorted(stores, key=lambda item: (item.lineno, item.col_offset))
+
+
+def direct_target_fields(target: ast.expr, receiver: str) -> set[str]:
+    if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+        return {target.attr} if target.value.id == receiver else set()
+    if isinstance(target, (ast.Tuple, ast.List)):
+        fields: set[str] = set()
+        for item in target.elts:
+            fields.update(direct_target_fields(item, receiver))
+        return fields
+    return set()
+
+
+def direct_field_initialization(node: ast.ClassDef) -> dict[str, ast.Attribute]:
+    # Declaration-only and generated fields are handled by later lifecycle slices.
+    written: dict[str, ast.Attribute] = {}
+    initialized: set[str] = set()
+
+    for method in node.body:
+        if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or any(
+                isinstance(dec, ast.Name) and dec.id in {"classmethod", "staticmethod"}
+                for dec in method.decorator_list):
+            continue
+        args = method.args.posonlyargs + method.args.args
+        if not args:
+            continue
+        receiver = args[0].arg
+        for statement in method.body:
+            for store in direct_stores(statement, receiver):
+                if store.attr not in written:
+                    written[store.attr] = store
+            if method.name != "__init__":
+                continue
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    initialized.update(direct_target_fields(target, receiver))
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                initialized.update(direct_target_fields(statement.target, receiver))
+    return {field: location for field, location in written.items() if field not in initialized}
+
+
 def slot_names(node: ast.expr) -> set[str]:
     """Recognize literal slot declarations without guessing computed names."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -364,6 +418,16 @@ class Ownership(object):
                 self.class_fields[name] = class_fields
                 self.instance_fields[name] = instance - methods - properties - {"__slots__"}
                 self.fields[name] = (class_fields | instance) - methods - properties - {"__slots__"}
+                if path.endswith(".py"):
+                    for field, location in direct_field_initialization(node).items():
+                        if field not in self.instance_fields[name]:
+                            continue
+                        self.declarations.append({
+                            "rule": "MISSING_FIELD_INITIALIZATION", "path": path,
+                            "line": location.lineno, "column": location.col_offset + 1,
+                            "symbol": f"{name}.{field}",
+                            "message": f"Stored instance field {name}.{field} is not initialized "
+                                       "in its owning constructor."})
                 for field, target, annotated, value in class_stores(node):
                     is_property = (field in properties and isinstance(value, ast.Call)
                                    and (isinstance(value.func, ast.Name)

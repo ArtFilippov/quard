@@ -78,6 +78,11 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   field on a known consumer instance is also rejected. Same-class methods may access
   another instance's fields; properties and methods remain available to callers,
   including mutable values returned by properties.
+  `MISSING_FIELD_INITIALIZATION` reports a directly stored receiver field at its
+  first write when its source class does not directly assign it in its own
+  straight-line `__init__`. This first slice does not establish initialization
+  through branches, loops, helper calls or indirect writes; declaration-only
+  fields and stub-only classes are not checked for initialization yet.
 * **Class state**: `NO_CLASS_STATE` rejects stored class values at their declarations,
   including immutable `Final` constants, and statically named writes through known
   consumer classes after creation (direct, builtin `setattr`, or class dictionary).
