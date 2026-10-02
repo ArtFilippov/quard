@@ -412,7 +412,7 @@ class Parent(Port):
                          ("error", 2, "CLASS_CONTRACTS_PARSE_ERROR"))
         self.assertIn("CUSTOMER_METHOD_OVERRIDE", {d["rule"] for d in result["diagnostics"]})
 
-    def test_redeclared_property_accessors_have_separate_locations(self):
+    def test_redeclared_property_accessors_have_one_member_location(self):
         self.put("src/usage.py", '''\
 class Base(object):
     @property
@@ -427,8 +427,117 @@ class Child(Base):
 ''')
         result, _, _ = self.run_worker()
         self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
-                          if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"],
-                         [(8, "Child.value"), (10, "Child.value")])
+                           if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"],
+                         [(8, "Child.value")])
+
+    def test_properties_match_methods_setters_and_assigned_properties(self):
+        self.put("src/properties.py", '''\
+from functools import cached_property as cache
+class Base(object):
+    @property
+    def value(self): return 1
+    def method(self): return 2
+    def _private(self): return 3
+    def source(self): return 4
+    assigned = property(source)
+    cached = cache(source)
+class Middle(Base): pass
+class Child(Middle):
+    @value.setter
+    def value(self, new_value): pass
+    @property
+    def method(self): return 1
+    def assigned(self): return 1
+    def cached(self): return 1
+    _private = property(lambda self: 1)
+class Sibling(Middle):
+    method = property(lambda self: 2)
+    @method.setter
+    def method(self, new_value): pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({(d["symbol"], d["line"], d["column"])
+                          for d in result["diagnostics"]
+                          if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"}, {
+                              ("Child.value", 13, 5), ("Child.method", 15, 5),
+                              ("Child.assigned", 16, 5), ("Child.cached", 17, 5),
+                              ("Child._private", 18, 5), ("Sibling.method", 20, 5)})
+        self.assertEqual(len([d for d in result["diagnostics"]
+                              if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"]), 6)
+
+    def test_all_ancestors_aliases_mro_and_source_stub_precedence(self):
+        self.put("src/pkg/ports.pyi", '''\
+from typing import Protocol
+class Port(Protocol):
+    def run(self): ...
+    @property
+    def state(self): ...
+''')
+        self.put("src/pkg/bases.pyi", '''\
+from .ports import Port
+class StubBase(Port):
+    def run(self): ...
+    @property
+    def state(self): ...
+class Dual(StubBase):
+    def stub_only(self): ...
+    def shared(self): ...
+''')
+        self.put("src/pkg/bases.py", '''\
+from .ports import Port
+class Dual(Port):
+    def shared(self): pass
+    def source_only(self): pass
+class Outer(object):
+    class Nested(Port):
+        def nested(self): pass
+''')
+        self.put("src/pkg/__init__.py", "from .bases import StubBase as PublicStub, "
+                 "Dual as PublicDual, Outer as PublicOuter\n")
+        self.put("src/pkg/relay.py", "from . import PublicStub as Stub, PublicDual as Dual, PublicOuter as Outer\n")
+        self.put("src/pkg/usage.py", '''\
+from .relay import Stub, Dual, Outer
+from .ports import Port
+from pathlib import Path as External
+from pkg.absent import Unknown
+class First(Port, Stub):
+    def run(self): pass
+    @state.setter
+    def state(self, value): pass
+class Middle(External, Outer.Nested, Dual): pass
+class Last(Port, Middle, Unknown):
+    def nested(self): pass
+    def shared(self): pass
+    def source_only(self): pass
+    def stub_only(self): pass
+    def run(self): pass
+class UnknownOnly(Unknown, External):
+    def missing(self): pass
+''')
+        self.put("src/pkg/usage.pyi", '''\
+from .relay import Stub, Dual
+class First(Stub):
+    def run(self): ...
+class Last(Dual):
+    def shared(self): ...
+    def source_only(self): ...
+    def stub_only(self): ...
+    def run(self): ...
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual({(d["path"], d["symbol"], d["line"])
+                          for d in result["diagnostics"]
+                          if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"}, {
+                              ("src/pkg/usage.py", "First.run", 6),
+                              ("src/pkg/usage.py", "First.state", 8),
+                              ("src/pkg/usage.py", "Last.nested", 11),
+                              ("src/pkg/usage.py", "Last.shared", 12),
+                              ("src/pkg/usage.py", "Last.source_only", 13),
+                              ("src/pkg/usage.pyi", "First.run", 3),
+                              ("src/pkg/usage.pyi", "Last.shared", 5),
+                              ("src/pkg/usage.pyi", "Last.source_only", 6)})
 
     def test_python_source_and_stub_both_receive_diagnostics(self):
         self.put("src/pkg.py", "class Both: pass\n")

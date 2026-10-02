@@ -12,9 +12,12 @@ writing `class Name(object)` is explicit.
 
 ## Customer method override
 
-A **customer method override** is a method declared directly on a customer class
-with the same name as a method declared by an inherited customer-owned class that
-is not a contract declaration. Inheritance may pass through other customer classes.
+A **customer method override** is a method or recognized property declared directly
+on a customer class with the same name as a method or recognized property declared
+by any reachable customer-owned ancestor that is not a contract declaration. A
+contract or another base preceding that ancestor does not erase its ownership.
+The member name identifies the override: a setter can replace a getter, and a
+method can replace a property. A getter/setter pair is one member per class.
 Local Protocol and abstract-interface declarations are contracts, even when a
-method has a body; they supply overridable methods, not forbidden implementations.
+method has a body; they supply overridable members, not forbidden implementations.
 An external or unresolved base cannot establish a customer method override.

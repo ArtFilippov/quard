@@ -90,8 +90,9 @@ The class-contract rule checks every discovered `.py` and `.pyi` class in both
 profiles for an explicit inherited contract and public member coverage by local
 contracts, independently of LCOM4 selection. See [PROFILE.md](PROFILE.md#tools-and-scope)
 for the opaque-external-base exception.
-It also rejects redeclarations of methods implemented by customer-owned non-contract
-ancestors, while allowing methods supplied by local contracts.
+It also rejects redeclarations of methods and recognized properties from any
+resolvable customer-owned non-contract ancestor, while allowing declarations supplied
+only by local contracts. Each member receives one violation per class and source file.
 
 ### Greenfield per-change LCOM4 checks
 

@@ -49,20 +49,28 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   Explicit `object` still satisfies the inheritance requirement but supplies no
   public API exemption. This trade-off permits extra local methods on classes that also
   inherit an external framework base.
-   `CUSTOMER_METHOD_OVERRIDE` reports a directly declared sync or async method
-   that redeclares a method on a customer-owned non-contract ancestor, including
-   through intermediate customer classes, imported aliases, re-exports and stubs.
-   Contract declarations (local Protocols and abstract interfaces) may provide
-   overridable methods with or without bodies; another inherited contract naming
-   the same method does not authorize overriding a concrete customer method.
-   Ordinary private methods, property accessors and built-in static/class methods
-   count. Python-recognized data-model hooks and name-mangled `__private` methods
-   are exempt; arbitrary `__custom__` methods are not. Assigned callables are not
-   method declarations. External and unresolved ancestry provides no proof of a
-   customer-owned implementation. This preserves a single owner for implemented
-   behavior while allowing explicit interface implementation. Overrides are normal
-   source-positioned violations (exit 1); parse and report failures remain errors
-   (exit 2) without suppressing other diagnostics.
+  `CUSTOMER_METHOD_OVERRIDE` reports a directly declared sync or async method or
+  recognized property that redeclares a member on any resolvable customer-owned
+  non-contract ancestor, even when a contract or other base comes first in MRO.
+  Imported aliases, re-exports, nested classes and discovered stubs resolve as
+  customer ancestry. A stub-only concrete ancestor establishes its methods and
+  properties; when source and stub declare the same ancestor, source establishes
+  its ancestry and members. Each descendant source and stub is checked separately.
+  Contract declarations (local Protocols and abstract interfaces) may provide
+  overridable members with or without bodies; another inherited contract naming
+  the same member does not authorize overriding a concrete customer member.
+  Matching is by name: a setter alone can override a getter, and a method can
+  replace a property (or vice versa). Decorated properties and assignments using
+  built-in `property` or `functools.cached_property` count, but assigned callables
+  do not. A getter/setter pair receives one violation at its first declaration
+  in each class and source file. Ordinary private members and built-in static/class
+  methods count. Python-recognized data-model hooks and name-mangled `__private`
+  methods are exempt; arbitrary `__custom__` methods are not. External and
+  unresolved ancestry provides no proof of a customer-owned implementation.
+  This preserves a single owner for implemented behavior while allowing explicit
+  interface implementation. Overrides are normal source-positioned violations
+  (exit 1); parse and report failures remain errors (exit 2) without suppressing
+  other diagnostics.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and

@@ -218,10 +218,38 @@ class Contracts(object):
                    and any(self.resolved(name, decorator, path) in {"abc.abstractmethod", "abc.abstractproperty"}
                            for decorator in item.decorator_list) for item in node.body)
 
+    def _override_members(self, name: str, node: ast.ClassDef, path: str
+                          ) -> dict[str, ast.stmt]:
+        """Collect first declarations by member name, including recognized properties.
+
+        Args:
+            name (str): Qualified customer class name.
+            node (ast.ClassDef): Class declaration being checked.
+            path (str): Source or stub path for resolving property constructors.
+
+        Returns:
+            dict[str, ast.stmt]: Member names mapped to their first declaration.
+        """
+        members: dict[str, ast.stmt] = {}
+        for item in node.body:
+            if isinstance(item, METHOD):
+                if item.name in SPECIAL_METHODS or (
+                        item.name.startswith("__") and not item.name.endswith("__")):
+                    continue
+                _ = members.setdefault(item.name, item)
+            elif (isinstance(item, ast.Assign) and isinstance(item.value, ast.Call)
+                  and self.resolved(name, item.value.func, path) in {
+                      "builtins.property", "functools.cached_property"}):
+                for target in item.targets:
+                    if isinstance(target, ast.Name) and target.id not in SPECIAL_METHODS and not (
+                            target.id.startswith("__") and not target.id.endswith("__")):
+                        _ = members.setdefault(target.id, item)
+        return members
+
     def inherited_implementations(self, name: str, seen: frozenset[str] | None = None,
-                                  source: tuple[ast.ClassDef, str] | None = None
-                                  ) -> dict[str, str]:
-        """Find methods declared by customer-owned, non-contract ancestors.
+                                   source: tuple[ast.ClassDef, str] | None = None
+                                   ) -> dict[str, str]:
+        """Find methods and properties on customer-owned, non-contract ancestors.
 
         Args:
             name (str): Qualified customer class name.
@@ -229,7 +257,7 @@ class Contracts(object):
             source (tuple[ast.ClassDef, str] | None, default=None): Separate stub declaration.
 
         Returns:
-            dict[str, str]: Method names mapped to their declaring classes.
+            dict[str, str]: Member names mapped to their declaring classes.
         """
         seen = seen or frozenset()
         if name in seen:
@@ -240,9 +268,8 @@ class Contracts(object):
             if (parent := self.resolved(name, base, path)) not in self.nodes:
                 continue
             if not self.declaration(parent):
-                for item in self.nodes[parent].body:
-                    if isinstance(item, METHOD) and item.name not in methods:
-                        methods[item.name] = parent
+                for member in self._override_members(parent, self.nodes[parent], self.paths[parent]):
+                    _ = methods.setdefault(member, parent)
             for member, owner in self.inherited_implementations(parent, seen | {name}).items():
                 if member not in methods:
                     methods[member] = owner
@@ -255,15 +282,11 @@ class Contracts(object):
         inherited = self.inherited_implementations(name, source=(node, path))
         module = module_name(path)
         results: list[dict[str, object]] = []
-        for item in node.body:
-            if not isinstance(item, METHOD) or item.name in SPECIAL_METHODS:
+        for member, item in self._override_members(name, node, path).items():
+            if member not in inherited:
                 continue
-            if item.name.startswith("__") and not item.name.endswith("__"):
-                continue
-            if item.name not in inherited:
-                continue
-            symbol = f"{name.removeprefix(module + '.')}.{item.name}"
-            message = f"{name}.{item.name}: overrides customer method from {inherited[item.name]}."
+            symbol = f"{name.removeprefix(module + '.')}.{member}"
+            message = f"{name}.{member}: overrides customer member from {inherited[member]}."
             results.append({"rule": "CUSTOMER_METHOD_OVERRIDE", "path": path,
                             "line": item.lineno, "column": item.col_offset + 1,
                             "symbol": symbol, "message": message})
