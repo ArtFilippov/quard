@@ -218,11 +218,63 @@ class Contracts(object):
                    and any(self.resolved(name, decorator, path) in {"abc.abstractmethod", "abc.abstractproperty"}
                            for decorator in item.decorator_list) for item in node.body)
 
+    def inherited_implementations(self, name: str, seen: frozenset[str] | None = None,
+                                  source: tuple[ast.ClassDef, str] | None = None
+                                  ) -> dict[str, str]:
+        """Find methods declared by customer-owned, non-contract ancestors.
+
+        Args:
+            name (str): Qualified customer class name.
+            seen (frozenset[str] | None, default=None): Ancestors visited on this path.
+            source (tuple[ast.ClassDef, str] | None, default=None): Separate stub declaration.
+
+        Returns:
+            dict[str, str]: Method names mapped to their declaring classes.
+        """
+        seen = seen or frozenset()
+        if name in seen:
+            return {}
+        node, path = source or (self.nodes[name], self.paths[name])
+        methods: dict[str, str] = {}
+        for base in node.bases:
+            if (parent := self.resolved(name, base, path)) not in self.nodes:
+                continue
+            if not self.declaration(parent):
+                for item in self.nodes[parent].body:
+                    if isinstance(item, METHOD) and item.name not in methods:
+                        methods[item.name] = parent
+            for member, owner in self.inherited_implementations(parent, seen | {name}).items():
+                if member not in methods:
+                    methods[member] = owner
+        return methods
+
+    def method_overrides(self, name: str, node: ast.ClassDef, path: str
+                         ) -> list[dict[str, object]]:
+        if self.declaration(name, source=(node, path)):
+            return []
+        inherited = self.inherited_implementations(name, source=(node, path))
+        module = module_name(path)
+        results: list[dict[str, object]] = []
+        for item in node.body:
+            if not isinstance(item, METHOD) or item.name in SPECIAL_METHODS:
+                continue
+            if item.name.startswith("__") and not item.name.endswith("__"):
+                continue
+            if item.name not in inherited:
+                continue
+            symbol = f"{name.removeprefix(module + '.')}.{item.name}"
+            message = f"{name}.{item.name}: overrides customer method from {inherited[item.name]}."
+            results.append({"rule": "CUSTOMER_METHOD_OVERRIDE", "path": path,
+                            "line": item.lineno, "column": item.col_offset + 1,
+                            "symbol": symbol, "message": message})
+        return results
+
     def diagnostics(self) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for name, node, path in self.declarations:
             module = module_name(path)
             source = (node, path)
+            results.extend(self.method_overrides(name, node, path))
             if not self.declaration(name, source=source) and not self.has_contract(name, source=source):
                 results.append({"rule": "MISSING_CLASS_CONTRACT", "path": path,
                                 "line": node.lineno, "column": node.col_offset + 1,

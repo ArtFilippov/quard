@@ -260,7 +260,7 @@ def parse_class_contracts(text: str, root: Path) -> tuple[list[dict[str, Any]], 
     items = []
     for entry in obj["diagnostics"]:
         if not isinstance(entry, dict) or entry.get("rule") not in {
-                "MISSING_CLASS_CONTRACT", "UNCOVERED_CLASS_MEMBER",
+                "MISSING_CLASS_CONTRACT", "UNCOVERED_CLASS_MEMBER", "CUSTOMER_METHOD_OVERRIDE",
                 "CLASS_CONTRACTS_PARSE_ERROR", "CLASS_CONTRACTS_EXECUTION_ERROR"}:
             raise ValueError("Malformed class contract diagnostic")
         rule = entry["rule"]
@@ -269,7 +269,7 @@ def parse_class_contracts(text: str, root: Path) -> tuple[list[dict[str, Any]], 
                 or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
                 or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)):
             raise ValueError("Malformed class contract location")
-        if rule in {"MISSING_CLASS_CONTRACT", "UNCOVERED_CLASS_MEMBER"} and (
+        if rule in {"MISSING_CLASS_CONTRACT", "UNCOVERED_CLASS_MEMBER", "CUSTOMER_METHOD_OVERRIDE"} and (
                 not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
                 or type(entry.get("line")) is not int or type(entry.get("column")) is not int):
             raise ValueError("Missing class contract location")
@@ -277,7 +277,8 @@ def parse_class_contracts(text: str, root: Path) -> tuple[list[dict[str, Any]], 
                                 path=relative_path(entry.get("path"), root), line=entry.get("line"),
                                 column=entry.get("column"), symbol=entry.get("symbol"),
                                 is_infrastructure_error=rule not in {
-                                    "MISSING_CLASS_CONTRACT", "UNCOVERED_CLASS_MEMBER"}))
+                                    "MISSING_CLASS_CONTRACT", "UNCOVERED_CLASS_MEMBER",
+                                    "CUSTOMER_METHOD_OVERRIDE"}))
     if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
             error and not any(item["rule"] == error for item in items)):
         raise ValueError("Class contract error/diagnostic mismatch")

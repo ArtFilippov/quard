@@ -9,3 +9,12 @@ external type it extends. A locally declared Protocol or abstract interface is
 itself a contract declaration. An external base is opaque: Eryx does not inspect
 its source. An implicit inheritance from `object` is not an explicit contract;
 writing `class Name(object)` is explicit.
+
+## Customer method override
+
+A **customer method override** is a method declared directly on a customer class
+with the same name as a method declared by an inherited customer-owned class that
+is not a contract declaration. Inheritance may pass through other customer classes.
+Local Protocol and abstract-interface declarations are contracts, even when a
+method has a body; they supply overridable methods, not forbidden implementations.
+An external or unresolved base cannot establish a customer method override.

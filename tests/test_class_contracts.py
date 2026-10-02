@@ -302,6 +302,134 @@ class Covered(Port):
         self.assertEqual({(d["symbol"], d["line"], d["rule"]) for d in result["diagnostics"]},
                          {("Impl.extra", 9, "UNCOVERED_CLASS_MEMBER")})
 
+    def test_customer_method_redeclaration_across_source_test_and_stub(self):
+        self.put("src/pkg/ports.py", '''\
+from typing import Protocol
+class Port(Protocol):
+    def run(self): return 1
+class Base(Port):
+    def run(self): return 2
+    def _helper(self): return 3
+    @property
+    def value(self): return 4
+    @staticmethod
+    def create(): return 5
+''')
+        self.put("src/pkg/public.py", "from .ports import Base as Parent\n")
+        self.put("src/pkg/usage.py", '''\
+from .public import Parent
+from .ports import Port
+class Middle(Parent): pass
+class Impl(Middle, Port):
+    def run(self): return 1
+    def _helper(self): return 2
+    @property
+    def value(self): return 3
+    @classmethod
+    def create(cls): return cls
+''')
+        self.put("tests/test_usage.py", '''\
+from pkg.ports import Base
+class TestImpl(Base):
+    async def run(self): return 1
+''')
+        self.put("src/pkg/stubs.pyi", '''\
+from .ports import Base
+class Stub(Base):
+    def _helper(self) -> None: ...
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        overrides = [d for d in result["diagnostics"] if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"]
+        self.assertEqual({(d["path"], d["symbol"], d["line"], d["column"])
+                          for d in overrides}, {
+                              ("src/pkg/usage.py", "Impl.run", 5, 5),
+                              ("src/pkg/usage.py", "Impl._helper", 6, 5),
+                              ("src/pkg/usage.py", "Impl.value", 8, 5),
+                              ("src/pkg/usage.py", "Impl.create", 10, 5),
+                              ("tests/test_usage.py", "TestImpl.run", 3, 5),
+                              ("src/pkg/stubs.pyi", "Stub._helper", 3, 5)})
+        self.assertTrue(all(not d["is_infrastructure_error"] and "Base" in d["message"]
+                            for d in overrides))
+
+    def test_contract_bodies_magic_methods_and_unproven_bases_are_not_overrides(self):
+        self.put("src/pkg/usage.py", '''\
+from typing import Protocol
+from abc import ABC, abstractmethod
+from pathlib import Path
+class Port(Protocol):
+    def run(self): return 1
+class Interface(ABC):
+    @abstractmethod
+    def work(self): return 2
+class Base(Port):
+    def run(self): return 3
+    def __str__(self): return "base"
+    def __hidden(self): return 4
+    def __custom__(self): return 5
+    def assigned(self): return 6
+class FromContracts(Port, Interface):
+    def run(self): return 1
+    def work(self): return 2
+class FromExternal(Path):
+    def run(self): return 1
+class FromUnknown(Unknown):
+    def run(self): return 1
+class Child(Base):
+    def __str__(self): return "child"
+    def __hidden(self): return 1
+    def __custom__(self): return 1
+    assigned = lambda self: None
+class ContractChild(Port):
+    def run(self): return 1
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual({(d["symbol"], d["rule"]) for d in result["diagnostics"]
+                          if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"},
+                         {("Child.__custom__", "CUSTOMER_METHOD_OVERRIDE")})
+
+    def test_override_from_stub_base_in_both_source_and_stub_and_parse_failure(self):
+        self.put("src/pkg/parent.pyi", '''\
+from typing import Protocol
+class Port(Protocol):
+    def run(self) -> None: ...
+class Parent(Port):
+    def run(self) -> None: ...
+''')
+        self.put("src/pkg/usage.py", "from .parent import Parent\nclass Impl(Parent):\n"
+                 "    def run(self): pass\n")
+        self.put("src/pkg/usage.pyi", "from .parent import Parent\nclass Impl(Parent):\n"
+                 "    def run(self) -> None: ...\n")
+        result, _, _ = self.run_worker()
+        self.assertEqual({(d["path"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"},
+                         {("src/pkg/usage.py", "Impl.run"),
+                          ("src/pkg/usage.pyi", "Impl.run")})
+        self.put("src/bad.py", "class Broken(\n")
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("error", 2, "CLASS_CONTRACTS_PARSE_ERROR"))
+        self.assertIn("CUSTOMER_METHOD_OVERRIDE", {d["rule"] for d in result["diagnostics"]})
+
+    def test_redeclared_property_accessors_have_separate_locations(self):
+        self.put("src/usage.py", '''\
+class Base(object):
+    @property
+    def value(self): return 1
+    @value.setter
+    def value(self, new_value): pass
+class Child(Base):
+    @property
+    def value(self): return 2
+    @value.setter
+    def value(self, new_value): pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "CUSTOMER_METHOD_OVERRIDE"],
+                         [(8, "Child.value"), (10, "Child.value")])
+
     def test_python_source_and_stub_both_receive_diagnostics(self):
         self.put("src/pkg.py", "class Both: pass\n")
         self.put("src/pkg.pyi", "class Both: ...\n")
