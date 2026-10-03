@@ -11,6 +11,7 @@ from typing import override
 from eryx._field_initialization import missing_fields, rebound_fields, written_fields
 from eryx._field_operations import field_operations
 from eryx._field_types import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
+from eryx._markers import MarkerIndex
 
 Binding = tuple[str, str]  # (class | instance | module | builtins | builtin, name)
 
@@ -112,18 +113,19 @@ def pseudo_field(annotation: ast.expr, names: set[str], modules: set[str]) -> bo
             and isinstance(target.value, ast.Name) and target.value.id in modules)
 
 
-def stable_class(node: ast.ClassDef, decorators: tuple[set[str], set[str]]) -> bool:
-    """An explicit dataclass decorator preserves the class's identity."""
+def dataclass_decorator(node: ast.expr, decorators: tuple[set[str], set[str]]) -> bool:
     functions, modules = decorators
-    for decorator in node.decorator_list:
-        target = decorator.func if isinstance(decorator, ast.Call) else decorator
-        if isinstance(target, ast.Name) and target.id in functions:
-            continue
-        if (isinstance(target, ast.Attribute) and target.attr == "dataclass"
-                and isinstance(target.value, ast.Name) and target.value.id in modules):
-            continue
-        return False
-    return True
+    target = node.func if isinstance(node, ast.Call) else node
+    return (isinstance(target, ast.Name) and target.id in functions
+            or isinstance(target, ast.Attribute) and target.attr == "dataclass"
+            and isinstance(target.value, ast.Name) and target.value.id in modules)
+
+
+def stable_class(node: ast.ClassDef, decorators: tuple[set[str], set[str]],
+                 markers: MarkerIndex | None = None) -> bool:
+    """An explicit dataclass decorator preserves the class's identity."""
+    return all(markers is not None and markers.is_identity(dec)
+               or dataclass_decorator(dec, decorators) for dec in node.decorator_list)
 
 
 def class_stores(node: ast.ClassDef) -> list[tuple[str, ast.expr, bool, ast.expr | None]]:
@@ -213,6 +215,7 @@ class Ownership(object):
 
     def __init__(self, trees: dict[str, ast.Module]):
         self.trees = trees
+        self.markers = MarkerIndex(trees)
         self.modules = {module_name(path): path for path in trees}
         self.fields: dict[str, set[str]] = {}
         self.class_fields: dict[str, set[str]] = {}
@@ -355,12 +358,14 @@ class Ownership(object):
             if isinstance(node, ast.ClassDef):
                 name = f"{prefix}.{node.name}"
                 self.classes[name] = node
-                is_dataclass = bool(node.decorator_list) and stable_class(node, (functions, modules))
+                is_dataclass = (any(dataclass_decorator(dec, (functions, modules))
+                                    for dec in node.decorator_list)
+                                and stable_class(node, (functions, modules), self.markers))
                 generates_init, dataclass_slots = dataclass_options(node, functions, modules)
                 generates_init = is_dataclass and generates_init and not any(
                     isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__"
                     for item in node.body)
-                if not node.decorator_list or is_dataclass:
+                if stable_class(node, (functions, modules), self.markers):
                     self.stable.add(name)
                 is_enum = any(
                     isinstance(base, ast.Name) and base.id in enum_names
@@ -369,6 +374,8 @@ class Ownership(object):
                     and isinstance(base.value, ast.Name) and base.value.id in enum_modules
                     for base in node.bases)
                 def known_decorator(dec: ast.expr) -> bool:
+                    if self.markers.is_identity(dec):
+                        return True
                     if isinstance(dec, ast.Call):
                         dec = dec.func
                     if isinstance(dec, ast.Name):
@@ -579,7 +586,7 @@ class Ownership(object):
             return None
         kind, qualified = owner
         if kind == "builtins":
-            return ("builtin", name) if name in {"getattr", "setattr", "delattr", "vars"} else None
+            return ("builtin", name) if name in {"getattr", "setattr", "delattr", "vars", "super"} else None
         if kind == "module":
             candidate = f"{qualified}.{name}"
             if candidate in self.modules:

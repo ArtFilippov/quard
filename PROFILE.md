@@ -177,6 +177,64 @@ Enum bases are exempt. The rule is syntactic: dynamic owners and computed attrib
 names cannot be proved. Same-class reads of prohibited declarations are not separately
 reported.
 
+## Encapsulated-only explicit calls
+
+The `encapsulated-only` job scans every discovered production and test `.py` and
+`.pyi` file independently of LCOM4 selection. `ENCAPSULATED_ONLY_CALL` identifies
+the qualified directly marked method at the explicit call's one-based position.
+Consumer source is parsed, never imported or executed. Raw worker output retains
+separate declaration evidence for source, companion stubs and overload signatures;
+the normalized report uses the ordinary report schema and archived raw logs.
+
+Consumers supply the marker; Eryx has no runtime decorator API. Use a generic
+identity function so Pyright retains class identity, callable signatures and binding:
+
+```python
+def encapsulated_only[T](value: T) -> T:
+    return value
+```
+
+For Python 3.12+, this works for methods and classes. A stub may declare the same
+signature with `...`. Source recognition requires a synchronous function named
+`encapsulated_only` whose only executable statement returns its sole positional
+argument (an optional docstring is allowed). Explicit imports of that named marker
+from opaque external modules use the same identity convention; Eryx cannot verify
+their runtime implementation. Local bindings, imported module references, simple
+aliases and consumer re-exports resolve at declaration time. Shadowed, reassigned,
+conditional and unresolved customer bindings do not establish the marker. A name
+or attribute spelling alone is insufficient. Recognized markers preserve method
+receiver checks, field/method classification and decorated class identity in the
+existing Eryx workers; they grant no exemption from native or other Eryx diagnostics.
+
+An explicit `receiver.method(...)` call to a directly marked method qualifies only
+through the proven current method's first positional instance receiver (regardless
+of its spelling), one direct stored instance field of that receiver, or proven
+builtin `super()` / `super(CurrentClass, receiver)`. Ordinary fields, literal slots
+and standard dataclass instance fields qualify. Properties, cached properties and
+class values do not confer stored-field permission. Established calls through peer
+parameters, constructor results, property results, class values and deeper field
+chains are violations. Mutable objects returned by ordinary properties remain
+subject to the independent field and contract policies.
+
+Targets resolve through explicit customer imports, class aliases, re-exports,
+unambiguous class annotations and straightforward constructor bindings. Stored
+field types use exact annotations or consistent initializer evidence, including
+annotated constructor parameters. Property/method return annotations can establish
+the type of a produced receiver without granting it permission. Builtin super
+identity respects imports, aliases and shadowing; this slice resolves a single
+known direct customer base, without guessing multiple-inheritance dispatch.
+Unknown, conflicting or dynamic evidence alone is not a violation.
+
+This first slice restricts directly marked explicit method calls. Class-wide and
+inherited restriction propagation, extracted callables, reflective attribute calls,
+receiver-alias privileges, nested-function privileges, mixed flow alternatives,
+property access restrictions, declaration agreement and implicit protocol dispatch
+are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md). It does
+not claim universal runtime coverage. Source read/parse errors, execution failures,
+timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
+valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain
+their diagnostics. Ordinary reports, manifests and logs stay in the chosen consumer.
+
 ## Basic LCOM4
 
 Every eligible concrete class in discovered production and test `.py` files is checked,

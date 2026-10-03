@@ -7,18 +7,22 @@ import json
 from pathlib import Path
 import sys
 
+from eryx._markers import MarkerIndex
+
 METHODS = ("staticmethod", "classmethod")
 BUILTINS = (*METHODS, "setattr")
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 IMPLICIT_CLASS_HOOKS = {"__new__", "__init_subclass__", "__class_getitem__"}
 
 
-def needs_receiver(method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def needs_receiver(method: ast.FunctionDef | ast.AsyncFunctionDef,
+                   markers: MarkerIndex | None = None) -> bool:
     """Check plain methods and abstract declarations; other decorators may change binding."""
     if method.name in IMPLICIT_CLASS_HOOKS:
         return False
     if method.decorator_list and not all(
-            isinstance(decorator, ast.Name) and decorator.id == "abstractmethod"
+             markers is not None and markers.is_identity(decorator)
+             or isinstance(decorator, ast.Name) and decorator.id == "abstractmethod"
             or isinstance(decorator, ast.Attribute) and decorator.attr == "abstractmethod"
             for decorator in method.decorator_list):
         return False
@@ -61,8 +65,9 @@ def function_locals(method: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
 class Declarations(object):
     """Track proven builtin bindings as class/module/function suites execute."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, markers: MarkerIndex | None = None):
         self.path = path
+        self.markers = markers
         self.scopes: list[dict[str, str | None]] = [{}]
         self.classes: list[str] = []
         self.class_scopes = [False]
@@ -175,11 +180,13 @@ class Declarations(object):
                 self.scopes.pop()
                 self.classes.pop()
                 self.assign_target(ast.Name(id=node.name, ctx=ast.Store()),
-                                   None if conditional or node.decorator_list else class_id,
+                                    None if conditional or any(
+                                        self.markers is None or not self.markers.is_identity(dec)
+                                        for dec in node.decorator_list) else class_id,
                                    None, node, conditional)
             elif isinstance(node, FUNCTIONS):
                 if self.class_scopes[-1]:
-                    if needs_receiver(node):
+                    if needs_receiver(node, self.markers):
                         symbol = ".".join([*self.classes, node.name])
                         self.diagnostics.append({
                             "rule": "MISSING_INSTANCE_RECEIVER", "path": self.path,
@@ -209,7 +216,9 @@ class Declarations(object):
                 self.class_scopes.pop()
                 self.scopes.pop()
                 self.assign_target(ast.Name(id=node.name, ctx=ast.Store()),
-                                   "function" if not node.decorator_list else None,
+                                    "function" if all(self.markers is not None and
+                                                      self.markers.is_identity(dec)
+                                                      for dec in node.decorator_list) else None,
                                    None, node, conditional)
             elif isinstance(node, ast.Assign):
                 self.setattr_call(node.value, conditional)
@@ -257,20 +266,23 @@ class Declarations(object):
 
 def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
     diagnostics: list[dict[str, object]] = []
+    trees: dict[str, ast.Module] = {}
     error = None
     for path in paths:
         if (not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts
                 or Path(path).suffix not in {".py", ".pyi"}):
             raise ValueError(f"Invalid method decorator source path: {path!r}")
         try:
-            tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=path)
+            trees[path] = ast.parse((root / path).read_text(encoding="utf-8"), filename=path)
         except (OSError, UnicodeError, SyntaxError) as exc:
             error = "METHOD_DECORATORS_PARSE_ERROR"
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
             continue
-        visitor = Declarations(path)
+    markers = MarkerIndex(trees)
+    for path, tree in trees.items():
+        visitor = Declarations(path, markers)
         visitor.suite(tree.body)
         diagnostics.extend(visitor.results())
     return diagnostics, error

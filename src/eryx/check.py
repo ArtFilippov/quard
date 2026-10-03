@@ -108,6 +108,10 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "class-contracts", "tool": "class-contracts", "argv": [sys.executable,
                   str(tool_dir() / "_class_contracts_worker.py"), "--manifest", str(manifest)]})
+    manifest = run_dir / "encapsulated-only-files.json"
+    write_json(manifest, sorted(files["production"] + files["tests"]), root)
+    jobs.append({"name": "encapsulated-only", "tool": "encapsulated-only", "argv": [sys.executable,
+                  str(tool_dir() / "_encapsulated_only_worker.py"), "--manifest", str(manifest)]})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])

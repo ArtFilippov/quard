@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from eryx._restricted_reports import parse_encapsulated_only
+
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
@@ -337,6 +339,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             expected = 2 if parse_error else (1 if items else 0)
             if result.get("exit_code") != expected:
                 error = error or "CLASS_CONTRACTS_EXECUTION_ERROR"
+        elif tool == "encapsulated-only":
+            items, parse_error = parse_encapsulated_only(result.get("stdout", ""), diagnostic)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "ENCAPSULATED_ONLY_EXECUTION_ERROR"
         elif tool.startswith("tach"):
             if '"eryx_tach_adapter"' in text:
                 obj = find_json(text, "eryx_tach_adapter")
