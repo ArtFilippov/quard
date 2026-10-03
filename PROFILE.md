@@ -285,8 +285,33 @@ restricted intermediate target fails even if another branch is unknown. Without 
 proven intermediate type, advancement is unresolved. Runtime-inferred return types,
 coroutine machinery around async hooks,
 awaitable objects returned by `__anext__` and `__aenter__`, and operations within
-unresolved external iterators are not inferred. Other implicit protocols remain
-later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
+unresolved external iterators are not inferred. Unary `+`, `-`, `~`, all binary
+arithmetic/bitwise operators and their augmented forms check type-level normal,
+reflected and in-place methods. Rich comparisons (`<`, `<=`, `==`, `!=`, `>`, `>=`)
+check both dispatch sides; the default `__ne__` delegates to `__eq__` (and tests
+its result) when its absence is proven. Identity comparisons do not call methods. A distinct
+subclass's overriding reflected method runs first. Same-type operands do not call
+reflected methods twice. In-place dispatch falls back to ordinary binary dispatch;
+a direct, unshadowed `return NotImplemented` establishes fallback, while an
+unambiguous direct literal or receiver return proves a later target unreachable.
+Other return paths retain possible fallback targets, including marked methods
+mixed with unresolved results. A reflected target requires established types for
+both operands; unresolved operands alone supply no dispatch proof.
+
+Membership checks `__contains__` on the container; when absent, it checks
+`__iter__` and the produced iterator's `__next__`, or indexed `__getitem__`
+if iteration is absent. Known element types also check equality comparison
+with the needle. A typed containment result undergoes truth testing. Augmented
+subscriptions check both the read and write hooks and the element's operator.
+Conditionals, assertions, boolean expressions, `not`, comprehension filters,
+match guards and builtin `bool(x)` check `__bool__`, falling back to `__len__`
+only when `__bool__` is absent. Chained comparisons test intermediate results.
+Known operator return types can establish later protocol targets, but their
+produced objects do not inherit operand permission. Receiver origins for each
+operand are checked independently. No claim is made about unknown runtime
+results, dynamic slot replacement, external operator implementations or
+arbitrary expression/type inference. Other implicit protocols remain later
+slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
 `ENCAPSULATED_ONLY_DECLARATION` reports inconsistent marking on newly declared
 implementations of explicitly inherited Protocol or abstract contracts, conflicting
 inherited contract requirements, companion source/stub members and overload groups.

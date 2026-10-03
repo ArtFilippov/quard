@@ -135,18 +135,69 @@ class Restrictions(object):
 
     def special_target(self, owner: str, name: str) -> str | None:
         """Resolve type-level protocol lookup, never an instance field or property."""
+        return self.target(owner, name) if self.special_method(owner, name) else None
+
+    def special_method(self, owner: str, name: str) -> str | None:
+        """Find the dispatched method even when it is not restricted."""
+        method, _ = self.special_lookup(owner, name)
+        return method
+
+    def special_lookup(self, owner: str, name: str) -> tuple[str | None, bool]:
+        """Return the method and whether absence is proved across the MRO."""
         order = self.mro(owner)
         if order is None:
-            return None
+            return None, False
         for base in order:
             if base not in self.ownership.stable:
-                return None
+                return None, False
             if (name in self.own_properties.get(base, ())
                     or self.ownership.class_field_owner(base, name) == base):
-                return None
+                return None, False
             if name in self.own_methods.get(base, ()):
-                return self.target(owner, name)
-        return None
+                return f"{base}.{name}", False
+        return None, True
+
+    def truth_method(self, owner: str) -> str | None:
+        method, absent = self.special_lookup(owner, "__bool__")
+        return "__bool__" if method else "__len__" if absent else None
+
+    def comparison_method(self, owner: str, name: str) -> str:
+        """The default inequality slot delegates to equality when unoverridden."""
+        if name == "__ne__" and self.special_lookup(owner, name)[1]:
+            return "__eq__"
+        return name
+
+    def method_outcome(self, owner: str, name: str) -> str:
+        """Only a direct, unambiguous return proves an operator's fallback fate."""
+        symbol = self.special_method(owner, name)
+        if symbol is None:
+            return "missing"
+        declaring = symbol.rpartition(".")[0]
+        node = self.ownership.classes.get(declaring)
+        if node is None:
+            return "possible"
+        methods = [item for item in node.body if isinstance(item, FUNCTIONS) and item.name == name]
+        if len(methods) != 1 or len(methods[0].body) != 1:
+            return "possible"
+        statement = methods[0].body[0]
+        if not isinstance(statement, ast.Return) or statement.value is None:
+            return "possible"
+        value = statement.value
+        if (isinstance(value, ast.Name) and value.id == "NotImplemented"
+                and "NotImplemented" not in local_names(methods[0])
+                and not any("NotImplemented" in assigned_names(item)
+                            or isinstance(item, (ast.FunctionDef, ast.ClassDef))
+                            and item.name == "NotImplemented"
+                            or isinstance(item, (ast.Import, ast.ImportFrom))
+                            and any((alias.asname or alias.name.split(".")[0]) == "NotImplemented"
+                                    for alias in item.names)
+                            for tree in self.ownership.trees.values() for item in tree.body)):
+            return "fallback"
+        if isinstance(value, ast.Constant) or (isinstance(value, ast.Name)
+                and bool(methods[0].args.posonlyargs + methods[0].args.args)
+                and value.id == (methods[0].args.posonlyargs + methods[0].args.args)[0].arg):
+            return "value"
+        return "possible"
 
     def has_attribute(self, owner: str, name: str) -> bool:
         """Prove ordinary default instance lookup finds a declared member."""
@@ -356,6 +407,27 @@ class DispatchSite:
     candidates: tuple[str, ...]
 
 
+_BINARY = {
+    ast.Add: ("__add__", "__radd__", "__iadd__"),
+    ast.Sub: ("__sub__", "__rsub__", "__isub__"),
+    ast.Mult: ("__mul__", "__rmul__", "__imul__"),
+    ast.MatMult: ("__matmul__", "__rmatmul__", "__imatmul__"),
+    ast.Div: ("__truediv__", "__rtruediv__", "__itruediv__"),
+    ast.FloorDiv: ("__floordiv__", "__rfloordiv__", "__ifloordiv__"),
+    ast.Mod: ("__mod__", "__rmod__", "__imod__"),
+    ast.Pow: ("__pow__", "__rpow__", "__ipow__"),
+    ast.LShift: ("__lshift__", "__rlshift__", "__ilshift__"),
+    ast.RShift: ("__rshift__", "__rrshift__", "__irshift__"),
+    ast.BitAnd: ("__and__", "__rand__", "__iand__"),
+    ast.BitOr: ("__or__", "__ror__", "__ior__"),
+    ast.BitXor: ("__xor__", "__rxor__", "__ixor__"),
+}
+_COMPARE = {ast.Lt: ("__lt__", "__gt__"), ast.LtE: ("__le__", "__ge__"),
+            ast.Eq: ("__eq__", "__eq__"), ast.NotEq: ("__ne__", "__ne__"),
+            ast.Gt: ("__gt__", "__lt__"), ast.GtE: ("__ge__", "__le__")}
+_UNARY = {ast.UAdd: "__pos__", ast.USub: "__neg__", ast.Invert: "__invert__"}
+
+
 class Calls(ast.NodeVisitor):
     """Resolve explicit calls while keeping identity separate from known types."""
 
@@ -373,6 +445,8 @@ class Calls(ast.NodeVisitor):
         # the current instance can have the same type but different permissions.
         self.provenance: list[dict[str, frozenset[Binding]]] = [{}]
         self._assigned_origin: frozenset[Binding] = frozenset()
+        self._operator_seen: set[tuple[int, int, str]] = set()
+        self._operator_results: dict[int, frozenset[Binding]] = {}
 
     def results(self) -> list[dict[str, object]]:
         return self.diagnostics
@@ -381,6 +455,10 @@ class Calls(ast.NodeVisitor):
         return self.origins(node) == frozenset({("current", self.method_owner)}) if self.method_owner else False
 
     def origins(self, node: ast.expr) -> frozenset[Binding]:
+        if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare)):
+            return self._operator_results.get(id(node), frozenset())
+        if isinstance(node, ast.BoolOp):
+            return frozenset().union(*(self.origins(value) for value in node.values))
         if isinstance(node, ast.Name):
             for scope in reversed(self.provenance):
                 if node.id in scope:
@@ -543,11 +621,194 @@ class Calls(ast.NodeVisitor):
                                 + "or proven current-instance super."})
 
     def dispatch_site(self, node: ast.expr, receiver: ast.expr,
-                      names: tuple[str, ...]) -> DispatchSite:
+                       names: tuple[str, ...]) -> DispatchSite:
         origins = self.origins(receiver)
         candidates = {target for kind, owner in origins if kind in {"instance", "current", "field"}
                       for name in names if (target := self.restrictions.special_target(owner, name))}
         return DispatchSite(node, receiver, origins, tuple(sorted(candidates)))
+
+    def operand_origins(self, node: ast.expr) -> frozenset[Binding]:
+        origins = self.origins(node)
+        if isinstance(node, ast.Constant) and type(node.value) in {int, float, str, bytes, bool, complex}:
+            return frozenset({("builtin", type(node.value).__name__)})
+        return origins
+
+    def operator_call(self, node: ast.expr, receiver: ast.expr,
+                      origin: Binding, name: str) -> None:
+        if origin[0] not in {"instance", "current", "field"}:
+            return
+        target = self.restrictions.special_target(origin[1], name)
+        if target:
+            forbidden = (origin[0] == "instance" or origin[0] == "field"
+                         and not self.direct_field_origin(receiver, origin))
+            if not forbidden:
+                return
+            key = (id(node), id(receiver), target)
+            if key in self._operator_seen:
+                return
+            self._operator_seen.add(key)
+            self.implicit_call(DispatchSite(node, receiver, frozenset({origin}), (target,)),
+                               intermediate=True)
+
+    def direct_field_origin(self, receiver: ast.expr, origin: Binding) -> bool:
+        if isinstance(receiver, ast.IfExp):
+            return any(origin in self.origins(branch) and self.direct_field_origin(branch, origin)
+                       for branch in (receiver.body, receiver.orelse))
+        if isinstance(receiver, ast.BoolOp):
+            return any(origin in self.origins(value) and self.direct_field_origin(value, origin)
+                       for value in receiver.values)
+        return self.allowed(receiver)
+
+    def binary_dispatch(self, node: ast.expr, left: ast.expr, right: ast.expr,
+                        normal: str, reflected: str, inplace: str | None = None,
+                        left_evidence: frozenset[Binding] | None = None
+                        ) -> frozenset[Binding]:
+        """Follow attempted slots; a proven value stops subsequent alternatives."""
+        left_origins = left_evidence if left_evidence is not None else self.operand_origins(left)
+        right_origins = self.operand_origins(right)
+        results: set[Binding] = set()
+        def attempt(receiver: ast.expr, origin: Binding, name: str) -> str:
+            original = name
+            name = self.restrictions.comparison_method(origin[1], name)
+            self.operator_call(node, receiver, origin, name)
+            outcome = self.restrictions.method_outcome(origin[1], name)
+            if outcome != "fallback" and (returned := self.restrictions.protocol_return_type(
+                    origin[1], name)):
+                if original != name:
+                    self.truth_results(node, frozenset({returned}))
+                else:
+                    results.add(returned)
+            return outcome
+        for left_origin in left_origins:
+            if left_origin[0] not in {"instance", "current", "field", "builtin"}:
+                continue
+            # An unresolved right operand does not establish a reflected target.
+            pairs = right_origins or frozenset({("unknown", "")})
+            for right_origin in pairs:
+                left_owner, right_owner = left_origin[1], right_origin[1]
+                right_name = self.restrictions.comparison_method(right_owner, reflected)
+                left_name = self.restrictions.comparison_method(left_owner, reflected)
+                early = (right_origin[0] in {"instance", "current", "field"}
+                         and left_owner != right_owner
+                         and left_owner in (self.restrictions.mro(right_owner) or [])[1:]
+                         and self.restrictions.special_method(right_owner, right_name) is not None
+                         and self.restrictions.special_method(right_owner, right_name) !=
+                             self.restrictions.special_method(left_owner, left_name))
+                if inplace:
+                    if attempt(left, left_origin, inplace) == "value":
+                        continue
+                if early:
+                    if attempt(right, right_origin, reflected) == "value":
+                        continue
+                if attempt(left, left_origin, normal) == "value":
+                    continue
+                if (not early and right_origin[0] in {"instance", "current", "field"}
+                        and left_owner != right_owner):
+                    _ = attempt(right, right_origin, reflected)
+        return frozenset(results)
+
+    def truth(self, node: ast.expr) -> None:
+        if isinstance(node, ast.BoolOp):
+            self.truth(node.values[-1])
+            return
+        if isinstance(node, ast.IfExp):
+            self.truth(node.body)
+            self.truth(node.orelse)
+            return
+        for origin in self.operand_origins(node):
+            if origin[0] not in {"instance", "current", "field"}:
+                continue
+            if name := self.restrictions.truth_method(origin[1]):
+                self.operator_call(node, node, origin, name)
+
+    def membership(self, node: ast.Compare, container: ast.expr) -> None:
+        for origin in self.operand_origins(container):
+            if origin[0] not in {"instance", "current", "field"}:
+                continue
+            owner = origin[1]
+            contains, absent = self.restrictions.special_lookup(owner, "__contains__")
+            if contains:
+                self.operator_call(node, container, origin, "__contains__")
+                returned = self.restrictions.protocol_return_type(owner, "__contains__")
+                if returned and (name := self.restrictions.truth_method(returned[1])):
+                    self.operator_call(node, container, returned, name)
+            elif absent:
+                iterator, missing = self.restrictions.special_lookup(owner, "__iter__")
+                if iterator:
+                    elements = self.protocol_iteration(node, container, "__iter__", "__next__")
+                elif missing:
+                    self.operator_call(node, container, origin, "__getitem__")
+                    returned = self.restrictions.protocol_return_type(owner, "__getitem__")
+                    elements = frozenset({returned}) if returned else frozenset()
+                else:
+                    elements = frozenset()
+                if elements:
+                    _ = self.binary_dispatch(node, container, node.left, "__eq__", "__eq__",
+                                             left_evidence=elements)
+
+    @override
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        self.generic_visit(node)
+        names = _BINARY.get(type(node.op))
+        if names:
+            self._operator_results[id(node)] = self.binary_dispatch(
+                node, node.left, node.right, names[0], names[1])
+
+    @override
+    def visit_UnaryOp(self, node: ast.UnaryOp) -> None:
+        self.generic_visit(node)
+        if isinstance(node.op, ast.Not):
+            self.truth(node.operand)
+        elif name := _UNARY.get(type(node.op)):
+            results: set[Binding] = set()
+            for origin in self.operand_origins(node.operand):
+                self.operator_call(node, node.operand, origin, name)
+                if origin[0] in {"instance", "current", "field"} and (
+                        returned := self.restrictions.protocol_return_type(origin[1], name)):
+                    results.add(returned)
+            self._operator_results[id(node)] = frozenset(results)
+
+    @override
+    def visit_Compare(self, node: ast.Compare) -> None:
+        self.visit(node.left)
+        left = node.left
+        for index, (op, right) in enumerate(zip(node.ops, node.comparators)):
+            self.visit(right)
+            site = ast.copy_location(ast.Compare(left=left, ops=[op], comparators=[right]), node)
+            if names := _COMPARE.get(type(op)):
+                results = self.binary_dispatch(site, left, right, names[0], names[1])
+                if index < len(node.ops) - 1:
+                    self.truth_results(site, results)
+                else:
+                    self._operator_results[id(node)] = results
+            elif isinstance(op, (ast.In, ast.NotIn)):
+                self.membership(site, right)
+            left = right
+
+    def truth_results(self, node: ast.expr, origins: frozenset[Binding]) -> None:
+        for origin in origins:
+            if (origin[0] in {"instance", "current", "field"}
+                    and (name := self.restrictions.truth_method(origin[1]))):
+                self.operator_call(node, node, origin, name)
+
+    @override
+    def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        for value in node.values[:-1]:
+            self.visit(value)
+            self.truth(value)
+        self.visit(node.values[-1])
+
+    @override
+    def visit_IfExp(self, node: ast.IfExp) -> None:
+        self.visit(node.test)
+        self.truth(node.test)
+        self.visit(node.body)
+        self.visit(node.orelse)
+
+    @override
+    def visit_Assert(self, node: ast.Assert) -> None:
+        self.generic_visit(node)
+        self.truth(node.test)
 
     def implicit_call(self, site: DispatchSite, *, intermediate: bool = False) -> None:
         if (not intermediate and self.allowed(site.receiver)
@@ -619,6 +880,7 @@ class Calls(ast.NodeVisitor):
             self.bind_protocol_result(generator.target, results)
             for condition in generator.ifs:
                 self.visit(condition)
+                self.truth(condition)
         if isinstance(node, ast.DictComp):
             self.visit(node.key)
             self.visit(node.value)
@@ -682,6 +944,8 @@ class Calls(ast.NodeVisitor):
 
     @override
     def visit_Call(self, node: ast.Call) -> None:
+        truth_call = (self.resolver.builtin_call(node, "bool")
+                      and len(node.args) == 1 and not node.keywords)
         for operation, count in (("getattr", 2), ("setattr", 3), ("delattr", 2)):
             if (self.resolver.builtin_call(node, operation) and len(node.args) == count
                     and not node.keywords and isinstance(node.args[1], ast.Constant)
@@ -718,6 +982,8 @@ class Calls(ast.NodeVisitor):
                     "message": f"Call to restricted method {target} requires the current instance, " +
                                "one direct stored instance field, or proven current-instance super."})
         self.generic_visit(node)
+        if truth_call:
+            self.truth(node.args[0])
 
     @override
     def visit_Import(self, node: ast.Import) -> None:
@@ -842,6 +1108,14 @@ class Calls(ast.NodeVisitor):
 
     @override
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if isinstance(node.target, ast.Subscript):
+            self.implicit_call(self.dispatch_site(node.target, node.target.value, ("__getitem__",)))
+        elif isinstance(node.target, ast.Attribute):
+            self.property_access(node.target.value, node.target.attr, node.target, "read")
+            self.attribute_dispatch(node.target.value, node.target.attr, node.target, "read")
+        names = _BINARY.get(type(node.op))
+        if names:
+            self.binary_dispatch(node, node.target, node.value, names[0], names[1], names[2])
         self.generic_visit(node)
         self._assigned_origin = frozenset()
         self.assign(node.target, None)
@@ -862,6 +1136,7 @@ class Calls(ast.NodeVisitor):
     @override
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
+        self.truth(node.test)
         self.branches([node.body, node.orelse])
 
     def branches(self, paths: list[list[ast.stmt]], invalid: set[str] | None = None) -> None:
@@ -933,6 +1208,7 @@ class Calls(ast.NodeVisitor):
     @override
     def visit_While(self, node: ast.While) -> None:
         self.visit(node.test)
+        self.truth(node.test)
         self.conditional_body([*node.body, *node.orelse])
 
     @override
@@ -984,6 +1260,7 @@ class Calls(ast.NodeVisitor):
                 self.assign(ast.Name(id=name, ctx=ast.Store()), None)
             if case.guard:
                 self.visit(case.guard)
+                self.truth(case.guard)
             paths.append(case.body)
         self.branches(paths)
 

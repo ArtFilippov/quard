@@ -614,6 +614,279 @@ class Owner:
             (28, "example.Service.__call__"), (30, "example.Service.__getitem__"),
             (33, "example.Service.__call__")])
 
+    def test_operator_receiver_precedence_and_notimplemented_fallbacks(self):
+        self.maxDiff = None
+        source = '''\
+def encapsulated_only(value): return value
+class Base:
+    @encapsulated_only
+    def __add__(self, other): return NotImplemented
+    @encapsulated_only
+    def __iadd__(self, other): return NotImplemented
+    @encapsulated_only
+    def __neg__(self): return 1
+class Right:
+    @encapsulated_only
+    def __radd__(self, other): return 1
+class Child(Base):
+    @encapsulated_only
+    def __radd__(self, other): return 1
+class Wins:
+    def __add__(self, other): return 1
+class Same:
+    @encapsulated_only
+    def __add__(self, other): return NotImplemented
+    @encapsulated_only
+    def __radd__(self, other): return 1
+class Owner:
+    def __init__(self, base: Base, right: Right):
+        self.base, self.right = base, right
+    def run(self, peer: Base, other: Right, unknown, child: Child, flag):
+        -self.base
+        -peer
+        self.base + other
+        peer + self.right
+        self.base + self.right
+        peer + unknown
+        unknown + other
+        peer += other
+        self.base += other
+        self.base + child
+        Wins() + other
+        Same() + Same()
+'''
+        self.put("src/example.py", source)
+        result, raw, _ = self.run_worker()
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (27, "example.Base.__neg__"),
+            (28, "example.Right.__radd__"),
+            (29, "example.Base.__add__"),
+            (31, "example.Base.__add__"),
+            (33, "example.Base.__iadd__"), (33, "example.Base.__add__"),
+            (33, "example.Right.__radd__"),
+            (34, "example.Right.__radd__"),
+            (35, "example.Child.__radd__"),
+            (37, "example.Same.__add__")])
+        self.assertTrue(all(d["column"] is not None and not d["is_infrastructure_error"]
+                            for d in result["diagnostics"]))
+
+    def test_truth_membership_comparisons_and_independent_origins(self):
+        self.maxDiff = None
+        source = '''\
+def encapsulated_only(value): return value
+class Truth:
+    @encapsulated_only
+    def __bool__(self): return True
+    @encapsulated_only
+    def __len__(self): return 1
+class Length:
+    @encapsulated_only
+    def __len__(self): return 1
+class Cursor:
+    @encapsulated_only
+    def __next__(self): return 1
+class Iterable:
+    def __iter__(self) -> Cursor: return Cursor()
+class Sequence:
+    @encapsulated_only
+    def __getitem__(self, index): return 1
+class Contains:
+    @encapsulated_only
+    def __contains__(self, item) -> Truth: return Truth()
+    def __iter__(self) -> Cursor: return Cursor()
+class Compared:
+    @encapsulated_only
+    def __lt__(self, other): return NotImplemented
+    @encapsulated_only
+    def __gt__(self, other): return True
+class Owner:
+    def __init__(self, value: Truth, container: Contains, compared: Compared):
+        self.value, self.container, self.compared = value, container, compared
+    def run(self, peer: Truth, collection: Contains, first: Compared, second: Compared,
+            iterable: Iterable, sequence: Sequence, unknown, choice):
+        if self.value: pass
+        if peer: pass
+        if Length(): pass
+        if not peer: pass
+        assert peer
+        peer and self.value
+        peer or unknown
+        bool(peer)
+        1 in self.container
+        1 not in collection
+        1 in iterable
+        1 in sequence
+        first < second
+        self.compared < second
+        first > self.compared
+        second == unknown
+        (peer if choice else unknown) and self.value
+'''
+        self.put("src/example.py", source)
+        result, raw, _ = self.run_worker(selected=[])
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (33, "example.Truth.__bool__"), (34, "example.Length.__len__"),
+            (35, "example.Truth.__bool__"), (36, "example.Truth.__bool__"),
+            (37, "example.Truth.__bool__"), (38, "example.Truth.__bool__"),
+            (39, "example.Truth.__bool__"), (40, "example.Truth.__bool__"),
+            (41, "example.Contains.__contains__"), (41, "example.Truth.__bool__"),
+            (42, "example.Cursor.__next__"),
+            (43, "example.Sequence.__getitem__"),
+            (44, "example.Compared.__lt__"),
+            (46, "example.Compared.__gt__"),
+            (48, "example.Truth.__bool__")])
+
+    def test_operator_results_subtype_dispatch_and_conditional_evidence(self):
+        self.maxDiff = None
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Truth:
+    @encapsulated_only
+    def __bool__(self): return True
+class Base:
+    @encapsulated_only
+    def __add__(self, other) -> Truth: return Truth()
+    @encapsulated_only
+    def __iadd__(self, other): return 1
+    @encapsulated_only
+    def __lt__(self, other) -> Truth: return Truth()
+class Sub(Base):
+    @encapsulated_only
+    def __radd__(self, other): return 1
+    @encapsulated_only
+    def __gt__(self, other): return 1
+class Maybe:
+    @encapsulated_only
+    def __add__(self, other):
+        if other: return NotImplemented
+        return 1
+class Right:
+    @encapsulated_only
+    def __radd__(self, other): return 1
+class Owner:
+    def __init__(self, base: Base, sub: Sub):
+        self.base, self.sub = base, sub
+    def use(self, peer: Base, other: Sub, right: Right, unknown, flag):
+        peer + other
+        self.base + other
+        peer + self.sub
+        if self.base + peer: pass
+        if peer + self.base: pass
+        if self.base < peer: pass
+        peer < other
+        maybe = peer if flag else unknown
+        if maybe + right: pass
+        Maybe() + right
+        other + unknown
+        peer += right
+        (self.base if flag else unknown) + unknown
+        (self.base if flag else other) + unknown
+''')
+        result, raw, _ = self.run_worker()
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (29, "example.Sub.__radd__"), (30, "example.Sub.__radd__"),
+            (32, "example.Truth.__bool__"),
+            (33, "example.Base.__add__"), (33, "example.Truth.__bool__"),
+            (34, "example.Truth.__bool__"),
+            (35, "example.Sub.__gt__"),
+            (37, "example.Base.__add__"), (37, "example.Right.__radd__"),
+            (37, "example.Truth.__bool__"),
+            (38, "example.Maybe.__add__"), (38, "example.Right.__radd__"),
+            (39, "example.Base.__add__"), (40, "example.Base.__iadd__"),
+            (42, "example.Base.__add__")])
+
+    def test_magic_marking_and_proven_fallback_exclusion(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+@encapsulated_only
+class Ordinary:
+    def __add__(self, other): return 1
+    def __bool__(self): return True
+class Explicit:
+    @encapsulated_only
+    def __add__(self, other): return 1
+class NoFallback:
+    @property
+    def __bool__(self): return None
+    @encapsulated_only
+    def __len__(self): return 1
+class NoMembershipFallback:
+    @property
+    def __contains__(self): return None
+    @encapsulated_only
+    def __getitem__(self, index): return 1
+def use(ordinary: Ordinary, explicit: Explicit, truth: NoFallback,
+        container: NoMembershipFallback, unknown):
+    ordinary + ordinary
+    if ordinary: pass
+    explicit + unknown
+    if truth: pass
+    1 in container
+''')
+        result, raw, _ = self.run_worker()
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (23, "example.Explicit.__add__")])
+
+    def test_membership_element_comparison_and_augmented_subscription(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Element:
+    @encapsulated_only
+    def __eq__(self, other): return True
+    @encapsulated_only
+    def __iadd__(self, other): return 1
+class Cursor:
+    def __next__(self) -> Element: return Element()
+class Iterated:
+    def __iter__(self) -> Cursor: return Cursor()
+class Indexed:
+    @encapsulated_only
+    def __getitem__(self, index) -> Element: return Element()
+    @encapsulated_only
+    def __setitem__(self, index, value): pass
+class Owner:
+    def __init__(self, indexed: Indexed): self.indexed = indexed
+    def run(self, iterated: Iterated, indexed: Indexed, unknown):
+        unknown in iterated
+        unknown in indexed
+        self.indexed[0] += 1
+        indexed[0] += 1
+''')
+        result, raw, _ = self.run_worker()
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (19, "example.Element.__eq__"),
+            (20, "example.Indexed.__getitem__"), (20, "example.Element.__eq__"),
+            (21, "example.Element.__iadd__"),
+            (22, "example.Indexed.__getitem__"), (22, "example.Element.__iadd__"),
+            (22, "example.Indexed.__setitem__")])
+
+    def test_default_inequality_delegates_to_marked_equality(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Truth:
+    @encapsulated_only
+    def __bool__(self): return True
+class Eq:
+    @encapsulated_only
+    def __eq__(self, other) -> Truth: return Truth()
+class Ne(Eq):
+    def __ne__(self, other): return False
+def use(peer: Eq, overridden: Ne, unknown):
+    peer != unknown
+    overridden != unknown
+    if peer != unknown: pass
+''')
+        result, raw, _ = self.run_worker()
+        self.assertIsNone(raw["execution_error"])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (11, "example.Eq.__eq__"), (11, "example.Truth.__bool__"),
+            (13, "example.Eq.__eq__"), (13, "example.Truth.__bool__")])
+
     def test_context_protocols_use_manager_not_bound_result(self):
         self.put("src/example.py", '''\
 def encapsulated_only(value): return value
