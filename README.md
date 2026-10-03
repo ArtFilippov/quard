@@ -114,8 +114,8 @@ values and deeper chains fail with `ENCAPSULATED_ONLY_CALL` for methods and
 extracted callable invocation, class-qualified unbound calls, literal-name builtin
 `getattr` calls, and proven receiver aliases in nested functions. Statically resolved
 construction, callable objects, subscriptions, attribute hooks, context managers,
-iteration, awaiting, operators, comparisons, membership and truth tests also check
-explicitly restricted protocol methods. It keeps
+iteration, awaiting, operators, comparisons, membership, truth tests and proven
+builtin protocol helpers also check explicitly restricted protocol methods. It keeps
 full discovered scope when LCOM4 is selected or skipped. See
 [PROFILE.md](PROFILE.md#encapsulated-only-explicit-calls) for the marker convention
 and implemented inference boundaries.

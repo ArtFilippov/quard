@@ -7,7 +7,8 @@ from typing import override
 
 from eryx._class_contracts_worker import Contracts
 from eryx._field_types import UNKNOWN, field_evidence
-from eryx._instance_fields_worker import Accesses, Binding, Ownership, assigned_names, module_name
+from eryx._instance_fields_worker import (Accesses, Binding, Ownership, PROTOCOL_BUILTINS,
+                                          assigned_names, module_name)
 from eryx._markers import FUNCTIONS, local_names
 
 
@@ -426,6 +427,16 @@ _COMPARE = {ast.Lt: ("__lt__", "__gt__"), ast.LtE: ("__le__", "__ge__"),
             ast.Eq: ("__eq__", "__eq__"), ast.NotEq: ("__ne__", "__ne__"),
             ast.Gt: ("__gt__", "__lt__"), ast.GtE: ("__ge__", "__le__")}
 _UNARY = {ast.UAdd: "__pos__", ast.USub: "__neg__", ast.Invert: "__invert__"}
+_BUILTIN_DIRECT = {"len": "__len__", "repr": "__repr__", "ascii": "__repr__",
+                   "bin": "__index__", "oct": "__index__",
+                   "hex": "__index__", "abs": "__abs__", "round": "__round__",
+                   "hash": "__hash__"}
+_BUILTIN_FALLBACK = {"str": ("__str__", "__repr__"),
+                     "int": ("__int__", "__index__"),
+                     "float": ("__float__", "__index__"),
+                     "complex": ("__complex__", "__float__", "__index__")}
+_BUILTIN_ITERATION = {"iter", "next", "list", "tuple", "any", "all"}
+_BUILTIN_OPTIONAL_ARGUMENT = {"format", "round", "next"}
 
 
 class Calls(ast.NodeVisitor):
@@ -447,6 +458,7 @@ class Calls(ast.NodeVisitor):
         self._assigned_origin: frozenset[Binding] = frozenset()
         self._operator_seen: set[tuple[int, int, str]] = set()
         self._operator_results: dict[int, frozenset[Binding]] = {}
+        self._reassigned_builtins: set[str] = set()
 
     def results(self) -> list[dict[str, object]]:
         return self.diagnostics
@@ -500,6 +512,8 @@ class Calls(ast.NodeVisitor):
                              if kind in {"instance", "current", "field"}
                              if (returned := self.restrictions.return_type(owner, "__getitem__")))
         if isinstance(node, ast.Call):
+            if self.builtin_call(node, "iter") and len(node.args) == 1 and not node.keywords:
+                return self.iterator_origins(node.args[0])
             if (self.resolver.builtin_call(node, "getattr") and len(node.args) == 2
                     and not node.keywords and isinstance(node.args[1], ast.Constant)
                     and isinstance(node.args[1].value, str)):
@@ -555,7 +569,8 @@ class Calls(ast.NodeVisitor):
         return bases[0] if len(bases) == 1 and bases[0] in self.restrictions.ownership.stable else None
 
     def value(self, node: ast.expr) -> Binding | None:
-        if isinstance(node, ast.Name) and node.id in {"super", "getattr", "setattr", "delattr"} and all(
+        if isinstance(node, ast.Name) and node.id in PROTOCOL_BUILTINS | {
+                "super", "getattr", "setattr", "delattr", "vars", "bool"} and all(
                 node.id not in scope for scope in self.resolver.scopes):
             return ("builtin", node.id)
         if isinstance(node, ast.Name):
@@ -570,6 +585,8 @@ class Calls(ast.NodeVisitor):
                     break
         if isinstance(node, ast.Attribute):
             owner = self.value(node.value)
+            if (owner == ("builtins", "builtins") and node.attr in self._reassigned_builtins):
+                return None
             if owner and owner[0] == "instance":
                 return (self.restrictions.field_type(owner[1], node.attr)
                         or self.restrictions.return_type(owner[1], node.attr, property_only=True))
@@ -594,9 +611,45 @@ class Calls(ast.NodeVisitor):
             return None
         return self.resolver.value(node)
 
+    def builtin_call(self, node: ast.Call, name: str) -> bool:
+        """Prove a helper binding without borrowing a replaced builtins member.
+
+        Args:
+            node (ast.Call): Candidate invocation.
+            name (str): Expected builtin.
+
+        Returns:
+            bool: Whether the callee still names that builtin.
+        """
+        if not self.resolver.builtin_call(node, name) or self.value(node.func) != ("builtin", name):
+            return False
+        return not (name in self._reassigned_builtins and isinstance(node.func, ast.Name)
+                    and node.func.id == name and all(name not in scope for scope in self.resolver.scopes))
+
+    def iterator_origins(self, receiver: ast.expr) -> frozenset[Binding]:
+        """Keep original identity only for a proven direct return of self.
+
+        Args:
+            receiver (ast.expr): Expression passed to iter.
+
+        Returns:
+            frozenset[Binding]: Possible resulting iterator origins.
+        """
+        return frozenset(
+            (kind, owner) if self.restrictions.protocol_returns_self(owner, "__iter__")
+            else returned
+            for kind, owner in self.origins(receiver) if kind in {"instance", "current", "field"}
+            if (returned := self.restrictions.protocol_return_type(owner, "__iter__")))
+
     def allowed(self, node: ast.expr) -> bool:
         if self.current(node):
             return True
+        if (isinstance(node, ast.Call) and self.builtin_call(node, "iter")
+                and len(node.args) == 1 and not node.keywords and self.iterator_origins(node.args[0])
+                and all(self.restrictions.protocol_returns_self(owner, "__iter__")
+                        for kind, owner in self.origins(node.args[0])
+                        if kind in {"instance", "current", "field"})):
+            return self.allowed(node.args[0])
         if isinstance(node, ast.Call) and self.super_owner(node):
             return self.current(node.args[1]) if node.args else self.receiver_valid
         if isinstance(node, ast.Attribute) and self.current(node.value):
@@ -837,18 +890,92 @@ class Calls(ast.NodeVisitor):
         """
         site = self.dispatch_site(node, receiver, (acquire,))
         self.implicit_call(site)
-        produced = {returned for kind, owner in site.origins
-                    if kind in {"instance", "current", "field"}
-                    if (returned := self.restrictions.protocol_return_type(owner, acquire))}
-        candidates = {target for _, owner in produced
-                      if (target := self.restrictions.special_target(owner, advance))}
-        same_receiver = bool(produced) and all(
-            self.restrictions.protocol_returns_self(owner, acquire)
-            for kind, owner in site.origins if kind in {"instance", "current", "field"})
-        self.implicit_call(DispatchSite(node, receiver, frozenset(produced),
-                                        tuple(sorted(candidates))), intermediate=not same_receiver)
+        produced: set[Binding] = set()
+        for kind, owner in site.origins:
+            if kind not in {"instance", "current", "field"}:
+                continue
+            if returned := self.restrictions.protocol_return_type(owner, acquire):
+                produced.add(returned)
+                advancement = ((kind, owner)
+                               if self.restrictions.protocol_returns_self(owner, acquire) else returned)
+                self.operator_call(node, receiver, advancement, advance)
         return frozenset(returned for _, owner in produced
-                         if (returned := self.restrictions.protocol_return_type(owner, advance)))
+                          if (returned := self.restrictions.protocol_return_type(owner, advance)))
+
+    def builtin_protocol(self, node: ast.Call) -> None:
+        """Check supported builtins only after proving their lexical identity.
+
+        Args:
+            node (ast.Call): Potential builtin invocation.
+        """
+        name = next((candidate for candidate in PROTOCOL_BUILTINS
+                     if self.builtin_call(node, candidate)), None)
+        if (name is None or node.keywords or len(node.args) not in
+                ({1, 2} if name in _BUILTIN_OPTIONAL_ARGUMENT else {1})):
+            return
+        first = node.args[0]
+        if name in _BUILTIN_ITERATION:
+            self.builtin_iteration(node, first, name)
+            return
+        for origin in self.origins(first):
+            if origin[0] in {"instance", "current", "field"}:
+                if name == "format":
+                    self.builtin_format(node, first, origin)
+                elif name in _BUILTIN_DIRECT:
+                    self.operator_call(node, first, origin, _BUILTIN_DIRECT[name])
+                else:
+                    self.builtin_conversion(node, first, origin, name)
+
+    def builtin_format(self, node: ast.Call, receiver: ast.expr, origin: Binding) -> None:
+        """Follow the default empty-spec formatting fallback to string conversion.
+
+        Args:
+            node (ast.Call): Formatting call site.
+            receiver (ast.expr): Formatted expression.
+            origin (Binding): Possible receiver origin.
+        """
+        method, absent = self.restrictions.special_lookup(origin[1], "__format__")
+        if method:
+            self.operator_call(node, receiver, origin, "__format__")
+        elif (absent and (len(node.args) == 1 or isinstance(node.args[1], ast.Constant)
+                          and node.args[1].value == "")):
+            self.builtin_conversion(node, receiver, origin, "str")
+
+    def builtin_conversion(self, node: ast.Call, receiver: ast.expr,
+                           origin: Binding, name: str) -> None:
+        """Attempt a fallback only when earlier protocol slots are proven absent.
+
+        Args:
+            node (ast.Call): Conversion call site.
+            receiver (ast.expr): Converted expression.
+            origin (Binding): Possible receiver origin.
+            name (str): Proven conversion builtin.
+        """
+        for hook in _BUILTIN_FALLBACK[name]:
+            method, absent = self.restrictions.special_lookup(origin[1], hook)
+            if method:
+                self.operator_call(node, receiver, origin, hook)
+                break
+            if not absent:
+                break
+
+    def builtin_iteration(self, node: ast.Call, receiver: ast.expr, name: str) -> None:
+        """Check acquisition and advancement with distinct receiver origins.
+
+        Args:
+            node (ast.Call): Helper call site.
+            receiver (ast.expr): Iterable or iterator expression.
+            name (str): Proven iterator helper.
+        """
+        if name in {"iter", "next"}:
+            self.implicit_call(self.dispatch_site(
+                node, receiver, ("__iter__" if name == "iter" else "__next__",)))
+            return
+        if name in {"list", "tuple"}:
+            self.implicit_call(self.dispatch_site(node, receiver, ("__len__",)))
+        elements = self.protocol_iteration(node, receiver, "__iter__", "__next__")
+        if name in {"any", "all"}:
+            self.truth_results(node, elements)
 
     def bind_protocol_result(self, target: ast.expr, results: frozenset[Binding]) -> None:
         """Bind an intermediate's result type without passing receiver permission.
@@ -982,6 +1109,7 @@ class Calls(ast.NodeVisitor):
                     "message": f"Call to restricted method {target} requires the current instance, " +
                                "one direct stored instance field, or proven current-instance super."})
         self.generic_visit(node)
+        self.builtin_protocol(node)
         if truth_call:
             self.truth(node.args[0])
 
@@ -1078,6 +1206,8 @@ class Calls(ast.NodeVisitor):
         self.visit_FunctionDef(node)
 
     def assign(self, target: ast.expr, binding: Binding | None) -> None:
+        if (isinstance(target, ast.Attribute) and self.value(target.value) == ("builtins", "builtins")):
+            self._reassigned_builtins.add(target.attr)
         if isinstance(target, ast.Name) and target.id == self.receiver:
             self.receiver_valid = False
         self.resolver.assign(target, binding)

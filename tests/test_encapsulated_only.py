@@ -54,6 +54,150 @@ class EncapsulatedOnlyTests(unittest.TestCase):
         self.assertTrue(all(d["rule"] == "ENCAPSULATED_ONLY_CALL" and
                             not d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_builtin_protocol_helpers_match_direct_receivers_and_shadowing(self):
+        self.put("src/example.py", '''\
+import builtins as native
+from builtins import len as length
+def encapsulated_only(value): return value
+class Item:
+    @encapsulated_only
+    def __len__(self): return 1
+    @encapsulated_only
+    def __str__(self): return "item"
+    @encapsulated_only
+    def __repr__(self): return "item"
+    @encapsulated_only
+    def __format__(self, spec): return "item"
+    @encapsulated_only
+    def __index__(self): return 1
+class Owner:
+    def __init__(self, field: Item): self.field = field
+    def run(self, peer: Item):
+        len(self.field)
+        length(self.field)
+        native.str(self.field)
+        len(peer)
+        length(peer)
+        native.str(peer)
+        repr(peer)
+        ascii(peer)
+        format(peer, "")
+        int(peer)
+        hex(peer)
+        peer.__len__()
+        alias = native.len
+        alias(peer)
+        saved = native.len
+        alias = lambda obj: 0
+        alias(peer)
+        def shadow():
+            def len(obj): return 0
+            len(peer)
+        native.len = lambda obj: 0
+        native.len(peer)
+        saved(peer)
+''')
+        result, _, _ = self.run_worker(selected=[])
+        calls = [(d["line"], d["symbol"], d["column"]) for d in result["diagnostics"]
+                 if d["rule"] == "ENCAPSULATED_ONLY_CALL"]
+        self.assertEqual(calls, [
+            (21, "example.Item.__len__", 9), (22, "example.Item.__len__", 9),
+            (23, "example.Item.__str__", 9), (24, "example.Item.__repr__", 9),
+            (25, "example.Item.__repr__", 9), (26, "example.Item.__format__", 9),
+            (27, "example.Item.__index__", 9), (28, "example.Item.__index__", 9),
+            (29, "example.Item.__len__", 9), (31, "example.Item.__len__", 9),
+            (40, "example.Item.__len__", 9)])
+        self.assertEqual(result["status"], "violations")
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_builtin_iterator_helpers_check_generated_and_self_iterators(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Generated:
+    @encapsulated_only
+    def __next__(self): return 1
+class Stream:
+    @encapsulated_only
+    def __iter__(self) -> Generated: return Generated()
+class SelfStream:
+    @encapsulated_only
+    def __iter__(self): return self
+    @encapsulated_only
+    def __next__(self): return 1
+class Owner:
+    def __init__(self, field: SelfStream): self.field = field
+    def run(self, peer: SelfStream, stream: Stream):
+        iter(self.field)
+        next(iter(self.field))
+        next(iter(peer))
+        next(iter(stream))
+        list(stream)
+        tuple(stream)
+        any(stream)
+        all(stream)
+        iter(peer)
+        peer.__iter__()
+        iterator = iter(self.field)
+        next(iterator)
+        maybe = stream if True else object()
+        next(iter(maybe))
+''')
+        result, _, _ = self.run_worker(selected=[])
+        calls = [(d["line"], d["symbol"]) for d in result["diagnostics"]
+                 if d["rule"] == "ENCAPSULATED_ONLY_CALL"]
+        self.assertEqual(calls, [
+            (18, "example.SelfStream.__iter__"), (18, "example.SelfStream.__next__"),
+            (19, "example.Stream.__iter__"), (19, "example.Generated.__next__"),
+            (20, "example.Stream.__iter__"), (20, "example.Generated.__next__"),
+            (21, "example.Stream.__iter__"), (21, "example.Generated.__next__"),
+            (22, "example.Stream.__iter__"), (22, "example.Generated.__next__"),
+            (23, "example.Stream.__iter__"), (23, "example.Generated.__next__"),
+            (24, "example.SelfStream.__iter__"), (25, "example.SelfStream.__iter__"),
+            (27, "example.SelfStream.__next__"),
+            (29, "example.Stream.__iter__"), (29, "example.Generated.__next__")])
+
+    def test_builtin_fallback_targets_mixed_evidence_and_field_aliases(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Base:
+    @encapsulated_only
+    def __index__(self): return 2
+    @encapsulated_only
+    def __repr__(self): return "base"
+class Override(Base):
+    def __int__(self): return 3
+    def __str__(self): return "overridden"
+class Owner:
+    def __init__(self, field: Base): self.field = field
+    def run(self, peer: Base, choose: bool):
+        int(self.field)
+        int(peer)
+        int(Override())
+        str(peer)
+        str(Override())
+        value = self.field
+        int(value)
+        option = peer if choose else object()
+        int(option)
+        float(peer)
+        complex(peer)
+        float(Override())
+        from builtins import int as convert
+        convert(peer)
+        convert = lambda x: 0
+        convert(peer)
+        format(peer)
+        format(peer, "x")
+''')
+        result, _, _ = self.run_worker(selected=[])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "ENCAPSULATED_ONLY_CALL"], [
+            (14, "example.Base.__index__"), (16, "example.Base.__repr__"),
+            (19, "example.Base.__index__"), (21, "example.Base.__index__"),
+            (22, "example.Base.__index__"), (23, "example.Base.__index__"),
+            (24, "example.Base.__index__"), (26, "example.Base.__index__"),
+            (29, "example.Base.__repr__")])
+
     def test_agreement_contracts_conflicts_and_access_survive_mismatch(self):
         self.put("src/example.py", '''\
 from typing import Protocol

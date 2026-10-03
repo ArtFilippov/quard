@@ -14,6 +14,9 @@ from eryx._field_types import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
 from eryx._markers import MarkerIndex
 
 Binding = tuple[str, str]  # (class | instance | module | builtins | builtin, name)
+PROTOCOL_BUILTINS = frozenset({"len", "str", "repr", "ascii", "format", "int", "float",
+                               "complex", "bin", "oct", "hex", "abs", "round", "hash",
+                               "iter", "next", "list", "tuple", "any", "all"})
 
 
 def assigned_names(node: ast.AST) -> set[str]:
@@ -565,7 +568,8 @@ class Ownership(object):
             return None
         kind, qualified = owner
         if kind == "builtins":
-            return ("builtin", name) if name in {"getattr", "setattr", "delattr", "vars", "super"} else None
+            return (("builtin", name) if name in PROTOCOL_BUILTINS |
+                    {"getattr", "setattr", "delattr", "vars", "super", "bool"} else None)
         if kind == "module":
             candidate = f"{qualified}.{name}"
             if candidate in self.modules:

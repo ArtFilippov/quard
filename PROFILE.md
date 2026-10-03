@@ -250,6 +250,35 @@ Straightforward assignments, if/else branches, loops and exception handlers
 conservatively invalidate receiver proof on reassignment. This is syntactic
 provenance, not general interprocedural alias or dynamically computed-name analysis.
 
+Proven builtin calls also check the following dispatch (positional arguments only):
+
+| Helper | Statically checked receiver protocol |
+|---|---|
+| `len(x)` | `x.__len__` |
+| `str(x)` | `x.__str__`, or `x.__repr__` via the default string conversion when `__str__` is absent |
+| `repr(x)`, `ascii(x)` | `x.__repr__` |
+| `format(x[, spec])` | `x.__format__`; when absent, empty-spec default formatting calls `__str__` (or its `__repr__` fallback) |
+| `int(x)`, `float(x)` | `__int__` / `__float__`, otherwise `__index__` if the preceding slot is proven absent |
+| `complex(x)` | `__complex__`, otherwise `__float__`, otherwise `__index__` if earlier slots are proven absent |
+| `bin(x)`, `oct(x)`, `hex(x)` | `x.__index__` |
+| `abs(x)`, `round(x[, ndigits])`, `hash(x)` | `__abs__`, `__round__`, `__hash__`, respectively |
+| `iter(x)` | `x.__iter__` |
+| `next(iterator[, default])` | `iterator.__next__` |
+| `list(x)`, `tuple(x)` | `x.__len__` when declared, `x.__iter__`, then the returned iterator's `__next__` |
+| `any(x)`, `all(x)` | `x.__iter__`, the returned iterator's `__next__`, then truth testing of a typed yielded value |
+
+These forms require an unshadowed builtin or a proven explicit `builtins` import,
+qualified reference or binding alias. Lexical shadowing and reassignment remove
+the corresponding proof. Each protocol receiver keeps its own origin: a generated
+iterator is not privileged, whereas a proven direct `return self` preserves the
+original iterator's identity. Conditional restricted targets count; an unknown
+target alone does not. Conversion fallbacks require proven absence of the earlier
+slot, and a known override excludes an inherited fallback. Positional diagnostics
+use `ENCAPSULATED_ONLY_CALL` at the helper call. Only these proven slots are
+checked: `iter(callable, sentinel)`, `reversed`, `bytes`, keyword forms, iterator
+length hints, builtins' internal optimizations and arbitrary callback/library
+dispatch are outside this matrix. It does not claim universal runtime coverage.
+
 The job restricts directly marked and class/inheritance-restricted explicit method
 calls and ordinary/cached property access, including literal-name reflection. A marker
 on any recognized getter, setter or deleter restricts all three property operations,
