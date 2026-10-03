@@ -80,9 +80,11 @@ class MarkerIndex(object):
         self.modules = {module_name(path) for path in trees}
         self.exports: dict[str, str | None] = {}
         self.decorators: dict[ast.expr, str | None] = {}
+        self.descriptor_assignments: dict[ast.stmt, str] = {}
         for _ in range(len(trees) + 2):
             previous = self.exports.copy()
             self.decorators.clear()
+            self.descriptor_assignments.clear()
             for path, tree in trees.items():
                 bindings = MarkerBindings(self, path)
                 bindings.suite(tree.body)
@@ -97,6 +99,27 @@ class MarkerIndex(object):
 
     def symbol(self, node: ast.expr) -> str | None:
         return self.decorators.get(node)
+
+    def property_declarations(self, node: ast.ClassDef) -> dict[str, list[tuple[ast.stmt, str, str]]]:
+        """Return proven descriptor declarations without collapsing accessors."""
+        result: dict[str, list[tuple[ast.stmt, str, str]]] = {}
+        for item in node.body:
+            if isinstance(item, FUNCTIONS):
+                for dec in item.decorator_list:
+                    symbol = self.symbol(dec)
+                    if symbol in {"builtins.property", "functools.cached_property"}:
+                        result.setdefault(item.name, []).append((item, "getter", symbol))
+                    elif (symbol in {"builtins.property.setter", "builtins.property.deleter",
+                                      "builtins.property.getter"} and isinstance(dec, ast.Attribute)
+                          and isinstance(dec.value, ast.Name)):
+                        result.setdefault(dec.value.id, []).append((item, dec.attr, "builtins.property"))
+            elif isinstance(item, (ast.Assign, ast.AnnAssign)) and item in self.descriptor_assignments:
+                kind = self.descriptor_assignments[item]
+                targets = item.targets if isinstance(item, ast.Assign) else [item.target]
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        result.setdefault(target.id, []).append((item, "constructor", kind))
+        return result
 
     def imported(self, qualified: str) -> str | None:
         if qualified in self.exports:
@@ -163,6 +186,10 @@ class MarkerBindings(object):
             elif isinstance(node, FUNCTIONS + (ast.ClassDef,)):
                 for decorator in node.decorator_list:
                     self.index.decorators[decorator] = self.value(decorator)
+                descriptor = next((self.value(dec) for dec in node.decorator_list
+                                   if self.value(dec) in {"builtins.property", "functools.cached_property",
+                                                         "builtins.property.setter", "builtins.property.deleter",
+                                                         "builtins.property.getter"}), None)
                 previous = self.class_scope
                 class_namespace = self.scopes.pop() if previous and isinstance(node, FUNCTIONS) else None
                 self.scopes.append(dict.fromkeys(local_names(node)) if isinstance(node, FUNCTIONS) else {})
@@ -173,12 +200,19 @@ class MarkerBindings(object):
                     self.scopes.append(class_namespace)
                 self.class_scope = previous
                 self.scopes[-1][node.name] = (MARKER if not conditional and isinstance(node, FUNCTIONS)
-                                              and identity_definition(node, self.path) else None)
+                                              and identity_definition(node, self.path) else
+                                              "builtins.property" if not conditional and descriptor and
+                                              descriptor.startswith("builtins.property") else
+                                              descriptor if not conditional else None)
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                if isinstance(node.value, ast.Call) and not conditional:
+                    kind = self.value(node.value.func)
+                    if kind in {"builtins.property", "functools.cached_property"}:
+                        self.index.descriptor_assignments[node] = kind
                 value = self.value(node.value) if node.value is not None and not conditional else None
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
-                    self.assign(target, value)
+                    self.assign(target, self.index.descriptor_assignments.get(node, value))
             elif isinstance(node, (ast.AugAssign, ast.Delete)):
                 targets = node.targets if isinstance(node, ast.Delete) else [node.target]
                 for target in targets:

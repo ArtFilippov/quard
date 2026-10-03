@@ -177,13 +177,15 @@ Enum bases are exempt. The rule is syntactic: dynamic owners and computed attrib
 names cannot be proved. Same-class reads of prohibited declarations are not separately
 reported.
 
-## Encapsulated-only explicit calls
+## Encapsulated-only explicit calls and property access
 
 The `encapsulated-only` job scans every discovered production and test `.py` and
 `.pyi` file independently of LCOM4 selection. `ENCAPSULATED_ONLY_CALL` identifies
-the qualified dispatch-owner method at the explicit call's one-based position.
+the qualified dispatch-owner method at the explicit call's one-based position;
+`ENCAPSULATED_ONLY_PROPERTY` identifies a restricted property at the attribute or
+literal-name builtin operation's position.
 Consumer source is parsed, never imported or executed. Raw worker output retains
-separate method/class declaration evidence for source, companion stubs and overload
+separate method/property-accessor/class evidence for source, companion stubs and overload
 signatures, plus effective restricted targets and marking origins. The normalized
 report uses the ordinary report schema and archived raw logs.
 
@@ -249,9 +251,12 @@ conservatively invalidate receiver proof on reassignment. This is syntactic
 provenance, not general interprocedural alias or dynamically computed-name analysis.
 
 This slice restricts directly marked and class/inheritance-restricted explicit method
-calls, including proven callable aliases and literal-name reflection. Restricted
-property access, declaration agreement and implicit protocol dispatch
-are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md). It does
+calls and ordinary/cached property access, including literal-name reflection. A marker
+on any recognized getter, setter or deleter restricts all three property operations,
+even after a cached value is stored. Proven `@property`, `@functools.cached_property`,
+accessor aliases and static descriptor constructors count; shadowed lookalikes do not.
+Property results never grant stored-field permission. Declaration agreement and implicit
+protocol dispatch are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md). It does
 not claim universal runtime coverage. Source read/parse errors, execution failures,
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
 valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain

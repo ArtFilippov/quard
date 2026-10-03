@@ -405,25 +405,7 @@ class Ownership(object):
                           and item.target.id == "__slots__" and item.value):
                         slot_declarations.update(slot_locations(item.value))
                 slots = set(slot_declarations)
-                properties = {target.id for item in node.body if isinstance(item, ast.Assign)
-                              and isinstance(item.value, ast.Call)
-                              and isinstance(item.value.func, ast.Name) and item.value.func.id == "property"
-                              for target in item.targets if isinstance(target, ast.Name)}
-                properties.update(target.id for item in node.body if isinstance(item, ast.Assign)
-                                  and isinstance(item.value, ast.Call)
-                                  and (isinstance(item.value.func, ast.Name)
-                                       and item.value.func.id in descriptor_names
-                                       or isinstance(item.value.func, ast.Attribute)
-                                       and item.value.func.attr == "cached_property"
-                                       and isinstance(item.value.func.value, ast.Name)
-                                       and item.value.func.value.id in descriptor_modules)
-                                  for target in item.targets if isinstance(target, ast.Name))
-                properties.update(item.name for item in node.body
-                                  if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                                  and any(isinstance(dec, ast.Name) and dec.id in descriptor_names
-                                          or isinstance(dec, ast.Attribute) and dec.attr == "cached_property"
-                                          and isinstance(dec.value, ast.Name) and dec.value.id in descriptor_modules
-                                          for dec in item.decorator_list))
+                properties = set(self.markers.property_declarations(node))
                 instance = receiver_fields(node, self.trees[path]) | slots | {
                     item.target.id for item in node.body if isinstance(item, ast.AnnAssign)
                     and isinstance(item.target, ast.Name) and item.value is None
@@ -479,12 +461,9 @@ class Ownership(object):
                                        "in its owning constructor."})
                 for field, target, annotated, value in class_stores(node):
                     is_property = (field in properties and isinstance(value, ast.Call)
-                                   and (isinstance(value.func, ast.Name)
-                                        and value.func.id in {"property"} | descriptor_names
-                                        or isinstance(value.func, ast.Attribute)
-                                        and value.func.attr == "cached_property"
-                                        and isinstance(value.func.value, ast.Name)
-                                        and value.func.value.id in descriptor_modules))
+                                   and any(item in self.markers.descriptor_assignments
+                                           for item in node.body if isinstance(item, (ast.Assign, ast.AnnAssign))
+                                           and item.value is value))
                     if (field == "__slots__" or is_property
                             or is_dataclass and annotated and field in dataclass_fields
                             or is_dataclass and annotated and field in pseudo_fields

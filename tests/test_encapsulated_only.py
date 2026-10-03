@@ -54,6 +54,222 @@ class EncapsulatedOnlyTests(unittest.TestCase):
         self.assertTrue(all(d["rule"] == "ENCAPSULATED_ONLY_CALL" and
                             not d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_property_accessors_and_cached_values_follow_receiver_boundary(self):
+        self.put("src/example.py", '''\
+from functools import cached_property as cached
+import builtins as bi
+def encapsulated_only(value): return value
+class Service:
+    @property
+    def item(self) -> int: return 1
+    @item.setter
+    @encapsulated_only
+    def item(self, value: int): pass
+    @item.deleter
+    def item(self): pass
+    @encapsulated_only
+    @cached
+    def result(self) -> int: return 1
+    def work(self, peer: Service):
+        alias = self
+        alias.item
+        alias.item = 2
+        del alias.item
+        self.result
+        self.result = 2
+        del self.result
+        peer.item
+        peer.item = 2
+        del peer.item
+        peer.result
+        peer.result = 3
+        del peer.result
+        bi.getattr(peer, "item")
+        bi.setattr(peer, "item", 2)
+        bi.delattr(peer, "item")
+        g = bi.getattr
+        g(peer, "result")
+        g = lambda obj, name: None
+        g(peer, "item")
+        def getattr(obj, name): return None
+        getattr(peer, "item")
+''')
+        result, raw, _ = self.run_worker(selected=[])
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (23, "example.Service.item"), (24, "example.Service.item"),
+            (25, "example.Service.item"), (26, "example.Service.result"),
+            (27, "example.Service.result"), (28, "example.Service.result"),
+            (29, "example.Service.item"), (30, "example.Service.item"),
+            (31, "example.Service.item"), (33, "example.Service.result")])
+        self.assertTrue(all(d["rule"] == "ENCAPSULATED_ONLY_PROPERTY" for d in result["diagnostics"]))
+        self.assertEqual([(d["accessor"], d["marked"]) for d in raw["declarations"]
+                          if d["member"] == "item"],
+                         [("getter", False), ("setter", True), ("deleter", False)])
+
+    def test_accessors_keep_current_instance_receiver(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    @property
+    def item(self) -> int: return 1
+    @item.setter
+    def item(self, value: int):
+        self.item
+        peer: Service = Service()
+        peer.item
+    @item.deleter
+    def item(self): self.item
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(10, "example.Service.item")])
+
+    def test_inherited_property_and_property_result_are_not_stored_fields(self):
+        self.put("src/example.py", '''\
+from typing import Protocol
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def run(self): pass
+class Base:
+    @property
+    def payload(self) -> Service: return Service()
+class Contract(Protocol):
+    @encapsulated_only
+    @property
+    def guarded(self) -> Service: ...
+@encapsulated_only
+class Marked(Base):
+    @encapsulated_only
+    def use(self, peer: Marked):
+        self.payload
+        peer.payload
+        self.payload.run()
+class Child(Marked):
+    @property
+    def fresh(self) -> int: return 1
+class Owner:
+    def __init__(self, child: Child): self.child = child
+    def use(self, peer: Owner, contract: Contract):
+        self.child.payload
+        peer.child.payload
+        self.child.fresh
+        contract.guarded
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["rule"], d["symbol"]) for d in result["diagnostics"]], [
+            (18, "ENCAPSULATED_ONLY_PROPERTY", "example.Base.payload"),
+            (19, "ENCAPSULATED_ONLY_CALL", "example.Service.run"),
+            (27, "ENCAPSULATED_ONLY_PROPERTY", "example.Base.payload"),
+            (29, "ENCAPSULATED_ONLY_PROPERTY", "example.Contract.guarded")])
+        self.assertEqual(raw["effective_targets"]["example.Base.payload"], "example.Marked")
+        fields, _, _ = self.run_worker("instance-fields")
+        self.assertFalse(any(d["symbol"] == "example.Base.payload" for d in fields["diagnostics"]))
+
+    def test_static_descriptor_construction_aliases_shadowing_and_stub_evidence(self):
+        self.put("src/example.py", '''\
+from functools import cached_property as cached
+from builtins import property as descriptor
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def get(self) -> int: return 1
+    def set(self, value: int): pass
+    item = descriptor(get, set)
+    result = cached(get)
+Service().item
+Service().result
+def property(value): return value
+class Fake:
+    @encapsulated_only
+    def get(self) -> int: return 1
+    item = property(get)
+Fake().item
+''')
+        self.put("src/example.pyi", '''\
+class Service:
+    @property
+    def item(self) -> int: ...
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(10, "example.Service.item"), (11, "example.Service.result")])
+        self.assertEqual([(d["path"], d["accessor"], d["marked"]) for d in raw["declarations"]
+                          if d["member"] == "item" and "kind" in d],
+                         [("src/example.py", "constructor", False),
+                          ("src/example.py", "getter", True),
+                          ("src/example.py", "setter", False),
+                          ("src/example.pyi", "getter", False)])
+
+    def test_property_super_stored_receiver_and_reflection_aliases(self):
+        self.put("src/example.py", '''\
+import builtins as bi
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    @property
+    def item(self) -> int: return 1
+class Child(Service):
+    def work(self, peer: Child):
+        super().item
+        super(Child, self).item
+        super(Child, peer).item
+        bi.getattr(super(), "item")
+class Owner:
+    def __init__(self, service: Service): self.service = service
+    def work(self, peer: Owner):
+        self.service.item
+        bi.getattr(self.service, "item")
+        bi.setattr(self.service, "item", 2)
+        bi.delattr(self.service, "item")
+        peer.service.item
+        obj = self.service
+        obj.item
+        read = bi.getattr
+        read(peer.service, "item")
+        read = lambda obj, key: None
+        read(peer.service, "item")
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["rule"]) for d in result["diagnostics"]], [
+            (11, "ENCAPSULATED_ONLY_PROPERTY"),
+            (20, "ENCAPSULATED_ONLY_PROPERTY"),
+            (22, "ENCAPSULATED_ONLY_PROPERTY"),
+            (24, "ENCAPSULATED_ONLY_PROPERTY")])
+
+    def test_property_diagnostics_share_full_report_with_independent_violations(self):
+        from eryx._common import capture
+        from eryx.check import run_checks
+        from test_infrastructure import create_repo, RunnerTests
+
+        with TemporaryDirectory(prefix="eryx-property-report-") as directory:
+            root = Path(directory)
+            create_repo(root)
+            (root / "src/demo/domain/api.py").write_text('''\
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    @property
+    def item(self) -> int: return 1
+Service().item
+''', encoding="utf-8")
+            fake, _ = RunnerTests().fake_tools()
+
+            def mixed(argv, cwd, timeout):
+                if any(str(ERYX / name) in argv for name in ("_encapsulated_only_worker.py",
+                                                              "_class_contracts_worker.py")):
+                    return capture(argv, cwd, timeout)
+                return fake(argv, cwd, timeout)
+
+            report = run_checks(root, lcom_files="", capture_fn=mixed,
+                                versions_fn=lambda _: ({}, []))
+            validate(report, json.loads((ERYX / "report.schema.json").read_text(encoding="utf-8")))
+            self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
+            self.assertIn("ENCAPSULATED_ONLY_PROPERTY", {d["rule"] for d in report["diagnostics"]})
+            self.assertIn("MISSING_CLASS_CONTRACT", {d["rule"] for d in report["diagnostics"]})
+
     def test_callable_extraction_reflection_and_unbound_invocation(self):
         self.assert_calls('''\
 import builtins as bi

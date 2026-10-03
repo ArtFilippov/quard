@@ -21,6 +21,8 @@ class Restrictions(object):
         self.effective_targets: dict[str, str] = {}
         self.methods: dict[tuple[str, str], list[dict[str, object]]] = {}
         self.own_methods: dict[str, set[str]] = {}
+        self.properties: dict[tuple[str, str], list[dict[str, object]]] = {}
+        self.own_properties: dict[str, set[str]] = {}
         self.class_marked: set[str] = set()
         self.contracts = Contracts(ownership.trees)
         self.parents: dict[str, tuple[str | None, ...]] = {}
@@ -43,15 +45,51 @@ class Restrictions(object):
                                                 "marked": class_marker})
                 if class_marker:
                     self.class_marked.add(owner)
+                descriptors = ownership.markers.property_declarations(node)
+                functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+                referenced_by: dict[ast.stmt, list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]] = {}
+                for statement in node.body:
+                    if isinstance(statement, (ast.Assign, ast.AnnAssign)) and isinstance(statement.value, ast.Call):
+                        arguments = [(role, arg) for role, arg in zip(
+                            ("getter", "setter", "deleter"), statement.value.args)]
+                        arguments.extend(({"fget": "getter", "fset": "setter", "fdel": "deleter",
+                                           "func": "getter"}.get(keyword.arg or "", ""), keyword.value)
+                                         for keyword in statement.value.keywords)
+                        referenced_by[statement] = [(role, functions[arg.id]) for role, arg in arguments
+                                                     if role and isinstance(arg, ast.Name) and arg.id in functions]
+                    for bound in assigned_names(statement) if not isinstance(statement, FUNCTIONS) else ():
+                        functions.pop(bound, None)
+                    if isinstance(statement, FUNCTIONS):
+                        functions[statement.name] = statement
+                for name, entries in descriptors.items():
+                    for member, role, kind in entries:
+                        marked = (any(ownership.markers.is_identity(dec) for dec in member.decorator_list)
+                                  if isinstance(member, FUNCTIONS) else False)
+                        evidence: dict[str, object] = {"owner": owner, "member": name, "path": path,
+                            "line": member.lineno, "column": member.col_offset + 1,
+                            "marked": marked, "kind": kind, "accessor": role}
+                        self.declarations.append(evidence)
+                        self.properties.setdefault((owner, name), []).append(evidence)
+                        for accessor, function in referenced_by.get(member, ()):
+                            accessor_evidence = {"owner": owner, "member": name, "path": path,
+                                "line": function.lineno, "column": function.col_offset + 1,
+                                "marked": any(ownership.markers.is_identity(dec)
+                                              for dec in function.decorator_list),
+                                "kind": kind, "accessor": accessor}
+                            self.declarations.append(accessor_evidence)
+                            self.properties[owner, name].append(accessor_evidence)
+                        if path == primary[owner]:
+                            self.own_properties.setdefault(owner, set()).add(name)
                 for member in node.body:
                     if isinstance(member, FUNCTIONS):
                         decorators = member.decorator_list
-                        # Properties and binding-changing decorators are later slices.
                         symbols = {ownership.markers.symbol(dec) for dec in decorators
                                    if not ownership.markers.is_identity(dec)}
                         if not symbols <= {"abc.abstractmethod", "typing.override",
-                                           "typing.overload", "typing_extensions.override",
-                                           "typing_extensions.overload"}:
+                                            "typing.overload", "typing_extensions.override",
+                                            "typing_extensions.overload"}:
+                            continue
+                        if member.name in descriptors:
                             continue
                         evidence: dict[str, object] = {"owner": owner, "member": member.name, "path": path,
                                     "line": member.lineno, "column": member.col_offset + 1,
@@ -89,25 +127,37 @@ class Restrictions(object):
         return ("instance", exported[1]) if exported and exported[0] == "class" else None
 
     def target(self, owner: str, name: str) -> str | None:
+        return self._target(owner, name, property_access=False)
+
+    def property_target(self, owner: str, name: str) -> str | None:
+        return self._target(owner, name, property_access=True)
+
+    def _target(self, owner: str, name: str, property_access: bool) -> str | None:
         if owner not in self.ownership.stable:
             return None
         order = self.mro(owner)
         if order is None:
             return None
-        declaring = next((candidate for candidate in order if name in self.own_methods.get(candidate, ())), None)
-        if declaring is None or declaring not in self.ownership.stable:
+        def declared(candidate: str) -> bool:
+            return (name in self.own_methods.get(candidate, ())
+                    or name in self.own_properties.get(candidate, ()))
+        declaring = next((candidate for candidate in order if declared(candidate)), None)
+        if (declaring is None or declaring not in self.ownership.stable
+                or property_access != (name in self.own_properties.get(declaring, ()))):
             return None
         # An earlier opaque base may supply the runtime method instead.
         if any(candidate not in self.ownership.stable for candidate in order[:order.index(declaring)]):
             return None
-        direct = any(item["marked"] for item in self.methods.get((declaring, name), ()))
+        declarations = self.properties if property_access else self.methods
+        direct = any(item["marked"] for item in declarations.get((declaring, name), ()))
         origin = f"{declaring}.{name}" if direct else None
         if not origin:
             for candidate in order:
-                if candidate in self.class_marked and not (name.startswith("__") and name.endswith("__")):
+                if candidate in self.class_marked and (property_access or not (
+                        name.startswith("__") and name.endswith("__"))):
                     ancestor_order = self.mro(candidate)
                     if ancestor_order and next((base for base in ancestor_order
-                                                if name in self.own_methods.get(base, ())), None) == declaring:
+                                                if declared(base)), None) == declaring:
                         origin = candidate
                         break
         # Explicitly inherited contracts constrain a new implementation even
@@ -115,7 +165,7 @@ class Restrictions(object):
         if not origin:
             for candidate in order[1:]:
                 if candidate in self.contracts.nodes and self.contracts.declaration(candidate):
-                    requirement = self.contract_target(candidate, name)
+                    requirement = self.contract_target(candidate, name, property_access)
                     if requirement:
                         origin = requirement
                         break
@@ -125,18 +175,23 @@ class Restrictions(object):
             return symbol
         return None
 
-    def contract_target(self, owner: str, name: str) -> str | None:
+    def contract_target(self, owner: str, name: str, property_access: bool = False) -> str | None:
         order = self.mro(owner)
         if order is None:
             return None
-        declaring = next((base for base in order if name in self.own_methods.get(base, ())), None)
+        def declared(base: str) -> bool:
+            return (name in self.own_properties.get(base, ()) if property_access
+                    else name in self.own_methods.get(base, ()))
+        declaring = next((base for base in order if declared(base)), None)
         for candidate in order:
-            if any(item["marked"] for item in self.methods.get((candidate, name), ())):
+            declarations = self.properties if property_access else self.methods
+            if any(item["marked"] for item in declarations.get((candidate, name), ())):
                 return f"{candidate}.{name}"
-            if candidate in self.class_marked and not (name.startswith("__") and name.endswith("__")):
+            if candidate in self.class_marked and (property_access or not (
+                    name.startswith("__") and name.endswith("__"))):
                 lineage = self.mro(candidate)
                 if lineage and next((base for base in lineage
-                                     if name in self.own_methods.get(base, ())), None) == declaring:
+                                     if declared(base)), None) == declaring:
                     return candidate
         return None
 
@@ -174,14 +229,27 @@ class Restrictions(object):
         return self.instance_type(qualified)
 
     def return_type(self, owner: str, name: str, property_only: bool = False) -> Binding | None:
+        if property_only:
+            order = self.mro(owner) or [owner]
+            owner = next((base for base in order if name in self.own_properties.get(base, ())), owner)
         node = self.ownership.classes.get(owner)
         if node is None:
             return None
+        descriptors = self.ownership.markers.property_declarations(node).get(name, [])
+        getters = {item for item, role, _ in descriptors if role == "getter"}
+        for item, role, _ in descriptors:
+            if role == "constructor" and isinstance(item, (ast.Assign, ast.AnnAssign)) \
+                    and isinstance(item.value, ast.Call):
+                args = [*item.value.args, *(kw.value for kw in item.value.keywords if kw.arg in {"fget", "func"})]
+                getters.update(function for function in node.body if isinstance(function, FUNCTIONS)
+                               for arg in args[:1] if isinstance(arg, ast.Name) and arg.id == function.name)
         returns = {self.ownership.type_evidence.annotation(item.returns, owner.rpartition(".")[0])
-                   for item in node.body if isinstance(item, FUNCTIONS)
-                   and item.name == name and item.returns is not None
-                   and (not property_only or any(self.ownership.markers.symbol(dec) in {
-                       "builtins.property", "functools.cached_property"} for dec in item.decorator_list))}
+                    for item in node.body if isinstance(item, FUNCTIONS)
+                    and item.name == name and item.returns is not None
+                    and (not property_only or item in getters)}
+        if property_only:
+            returns.update(self.ownership.type_evidence.annotation(item.returns, owner.rpartition(".")[0])
+                           for item in getters if isinstance(item, FUNCTIONS) and item.returns is not None)
         qualified = next(iter(returns)) if len(returns) == 1 else None
         return self.instance_type(qualified)
 
@@ -247,7 +315,8 @@ class Calls(ast.NodeVisitor):
             if (self.resolver.builtin_call(node, "getattr") and len(node.args) == 2
                     and not node.keywords and isinstance(node.args[1], ast.Constant)
                     and isinstance(node.args[1].value, str)):
-                return frozenset(("method", target) for target in self.targets(node))
+                synthetic = ast.Attribute(value=node.args[0], attr=node.args[1].value, ctx=ast.Load())
+                return self.origins(synthetic)
             if self.super_owner(node):
                 superclass = self.super_owner(node)
                 return frozenset({("instance", superclass)}) if superclass else frozenset()
@@ -294,7 +363,7 @@ class Calls(ast.NodeVisitor):
         return bases[0] if len(bases) == 1 and bases[0] in self.restrictions.ownership.stable else None
 
     def value(self, node: ast.expr) -> Binding | None:
-        if isinstance(node, ast.Name) and node.id in {"super", "getattr"} and all(
+        if isinstance(node, ast.Name) and node.id in {"super", "getattr", "setattr", "delattr"} and all(
                 node.id not in scope for scope in self.resolver.scopes):
             return ("builtin", node.id)
         if isinstance(node, ast.Name):
@@ -346,8 +415,34 @@ class Calls(ast.NodeVisitor):
                             self.restrictions.ownership.instance_fields[declaring])
         return False
 
+    def property_access(self, receiver: ast.expr, name: str, node: ast.expr,
+                        operation: str) -> None:
+        for owner in sorted(self.owners(receiver)):
+            target = self.restrictions.property_target(owner, name)
+            if target and (not self.allowed(receiver) or any(
+                    kind == "class" for kind, _ in self.origins(receiver))):
+                self.diagnostics.append({
+                    "rule": "ENCAPSULATED_ONLY_PROPERTY", "path": self.resolver.path,
+                    "line": node.lineno, "column": node.col_offset + 1, "symbol": target,
+                    "message": f"{operation.capitalize()} of restricted property {target} requires "
+                               + "the current instance, one direct stored instance field, "
+                               + "or proven current-instance super."})
+
+    @override
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        self.property_access(node.value, node.attr, node,
+                             "delete" if isinstance(node.ctx, ast.Del) else
+                             "write" if isinstance(node.ctx, ast.Store) else "read")
+        self.generic_visit(node)
+
     @override
     def visit_Call(self, node: ast.Call) -> None:
+        for operation, count in (("getattr", 2), ("setattr", 3), ("delattr", 2)):
+            if (self.resolver.builtin_call(node, operation) and len(node.args) == count
+                    and not node.keywords and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)):
+                self.property_access(node.args[0], node.args[1].value, node,
+                                     {"getattr": "read", "setattr": "write", "delattr": "delete"}[operation])
         direct = isinstance(node.func, ast.Attribute) or (
             isinstance(node.func, ast.Call) and self.resolver.builtin_call(node.func, "getattr")
             and len(node.func.args) == 2 and not node.func.keywords
@@ -427,7 +522,8 @@ class Calls(ast.NodeVisitor):
             self.restrictions.ownership.markers.is_identity(dec)
             or self.restrictions.ownership.markers.symbol(dec) in {
                 "abc.abstractmethod", "typing.override", "typing_extensions.override",
-                "builtins.property", "functools.cached_property"}
+                "builtins.property", "builtins.property.setter", "builtins.property.deleter",
+                "builtins.property.getter", "functools.cached_property"}
             for dec in node.decorator_list)
         self.receiver = args[0].arg if instance else None
         self.receiver_valid = instance

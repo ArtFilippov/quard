@@ -31,6 +31,7 @@ def parse_encapsulated_only(text: str,
         raise ValueError("Unknown encapsulated-only execution error")
     marked: set[str] = set()
     members: set[str] = set()
+    properties: set[str] = set()
     for raw in array(obj.get("declarations")):
         declaration = object_dict(raw)
         if (type(declaration.get("marked")) is not bool
@@ -40,6 +41,11 @@ def parse_encapsulated_only(text: str,
                        for key in ("line", "column"))):
             raise ValueError("Malformed encapsulated-only declaration evidence")
         symbol = f"{declaration['owner']}.{declaration['member']}"
+        if "kind" in declaration or "accessor" in declaration:
+            if declaration.get("kind") not in {"builtins.property", "functools.cached_property"} \
+                    or declaration.get("accessor") not in {"getter", "setter", "deleter", "constructor"}:
+                raise ValueError("Malformed encapsulated-only property evidence")
+            properties.add(symbol)
         members.add(symbol)
         if declaration["marked"]:
             marked.add(symbol)
@@ -62,7 +68,7 @@ def parse_encapsulated_only(text: str,
     for raw in array(obj.get("diagnostics")):
         entry = object_dict(raw)
         if (not isinstance(entry.get("rule"), str)
-                or entry["rule"] not in errors | {"ENCAPSULATED_ONLY_CALL"}
+                 or entry["rule"] not in errors | {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"}
                 or not isinstance(entry.get("message"), str)):
             raise ValueError("Malformed encapsulated-only diagnostic")
         rule = entry["rule"]
@@ -70,13 +76,15 @@ def parse_encapsulated_only(text: str,
                 or any(entry.get(key) is not None and
                        (type(entry[key]) is not int or entry[key] < 1) for key in ("line", "column"))):
             raise ValueError("Malformed encapsulated-only diagnostic position")
-        if rule == "ENCAPSULATED_ONLY_CALL" and (
+        if rule in {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"} and (
                 not isinstance(entry.get("path"), str) or not entry["path"]
                 or not isinstance(entry.get("symbol"), str) or not entry["symbol"]
                 or any(type(entry.get(key)) is not int for key in ("line", "column"))):
             raise ValueError("Missing encapsulated-only call location")
-        if rule == "ENCAPSULATED_ONLY_CALL" and entry["symbol"] not in targets:
-            raise ValueError("Restricted call has no marked declaration evidence")
+        if rule in {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"} and (
+                entry["symbol"] not in targets or (entry["symbol"] in properties)
+                != (rule == "ENCAPSULATED_ONLY_PROPERTY")):
+            raise ValueError("Restricted access has no matching marked declaration evidence")
         items.append(diagnostic("encapsulated-only", rule, entry["message"],
                                 path=entry.get("path"), line=entry.get("line"),
                                 column=entry.get("column"), symbol=entry.get("symbol"),
