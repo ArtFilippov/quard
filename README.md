@@ -108,8 +108,10 @@ The independent encapsulated-only job checks explicit calls to methods restricte
 by a consumer-supplied identity decorator on the method or its class, including
 resolvable inherited methods, imported aliases and stub declarations. It permits
 the current instance, one direct stored instance field, and proven current-instance
-`super` access; proven calls on peers, new instances,
-property results, class values and deeper chains fail with `ENCAPSULATED_ONLY_CALL`.
+`super` access; proven calls on peers, new instances, property results, class
+values and deeper chains fail with `ENCAPSULATED_ONLY_CALL`. It also checks
+extracted callable invocation, class-qualified unbound calls, literal-name
+builtin `getattr` calls, and proven receiver aliases in nested functions.
 It keeps full discovered scope when LCOM4 is selected or skipped. See
 [PROFILE.md](PROFILE.md#encapsulated-only-explicit-calls) for the marker convention
 and implemented inference boundaries.

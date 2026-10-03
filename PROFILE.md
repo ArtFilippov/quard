@@ -207,14 +207,20 @@ or attribute spelling alone is insufficient. Recognized markers preserve method
 receiver checks, field/method classification and decorated class identity in the
 existing Eryx workers; they grant no exemption from native or other Eryx diagnostics.
 
-An explicit `receiver.method(...)` call to a restricted method qualifies only
-through the proven current method's first positional instance receiver (regardless
-of its spelling), one direct stored instance field of that receiver, or proven
-builtin `super()` / `super(CurrentClass, receiver)`. Ordinary fields, literal slots
-and standard dataclass instance fields qualify. Properties, cached properties and
-class values do not confer stored-field permission. Established calls through peer
-parameters, constructor results, property results, class values and deeper field
-chains are violations. Class marking restricts declared and inherited methods,
+An explicit restricted invocation qualifies only through the proven current
+method's first positional instance receiver (regardless of its spelling), an
+unreassigned alias of that instance, one direct stored field of such a receiver,
+or proven builtin `super()` / `super(CurrentClass, receiver)`. Ordinary fields,
+literal slots and standard dataclass instance fields qualify. Aliases of stored
+fields, properties, cached properties and class values do not confer permission.
+Taking a method reference is permitted, but calling an extracted restricted
+callable or a class-qualified unbound method is prohibited. Literal-name builtin
+`getattr` invocation (including proven aliases and explicit imports) follows the
+direct-call boundary; lexical shadowing and reassignment remove builtin evidence.
+Nested functions retain proven enclosing-instance aliases, whereas nested classes
+do not inherit that permission. Established calls through peers, constructor
+results, property results, class values and deeper field chains are violations.
+Class marking restricts declared and inherited methods,
 including those introduced by an unmarked ancestor. Names beginning and ending in
 `__` are excluded from class-wide marking unless explicitly marked on the method.
 An unmarked descendant keeps inherited restrictions without restricting new methods.
@@ -235,12 +241,16 @@ annotated constructor parameters. Property/method return annotations can establi
 the type of a produced receiver without granting it permission. Builtin super
 identity respects imports, aliases and shadowing; proven `super()` calls resolve one
 direct customer base, without guessing multiple-inheritance super dispatch.
-Unknown, conflicting or dynamic evidence alone is not a violation.
+Unknown, conflicting or dynamic evidence alone is not a violation. Conditional
+object and callable bindings retain established restricted alternatives; a possible
+restricted target is sufficient even alongside unknown or unrestricted alternatives.
+Straightforward assignments, if/else branches, loops and exception handlers
+conservatively invalidate receiver proof on reassignment. This is syntactic
+provenance, not general interprocedural alias or dynamically computed-name analysis.
 
 This slice restricts directly marked and class/inheritance-restricted explicit method
-calls. Extracted callables, reflective attribute calls, receiver-alias privileges,
-nested-function privileges, mixed flow alternatives,
-property access restrictions, declaration agreement and implicit protocol dispatch
+calls, including proven callable aliases and literal-name reflection. Restricted
+property access, declaration agreement and implicit protocol dispatch
 are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md). It does
 not claim universal runtime coverage. Source read/parse errors, execution failures,
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);

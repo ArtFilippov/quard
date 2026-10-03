@@ -44,6 +44,144 @@ class EncapsulatedOnlyTests(unittest.TestCase):
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text(encoding="utf-8"))
         return result, raw, job
 
+    def assert_calls(self, source, forbidden):
+        self.put("src/example.py", source)
+        result, raw, _ = self.run_worker(selected=[])
+        self.assertEqual(raw["execution_error"], None)
+        self.assertEqual(result["status"], "violations" if forbidden else "passed")
+        self.assertEqual(result["exit_code"], 1 if forbidden else 0)
+        self.assertEqual([d["line"] for d in result["diagnostics"]], forbidden)
+        self.assertTrue(all(d["rule"] == "ENCAPSULATED_ONLY_CALL" and
+                            not d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_callable_extraction_reflection_and_unbound_invocation(self):
+        self.assert_calls('''\
+import builtins as bi
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def run(self): pass
+    def use(self, peer: Service):
+        ref = self.run
+        ref()  # forbidden
+        other = peer.run
+        other()  # forbidden
+        self.run()
+        getattr(self, "run")()
+        g = getattr
+        g(peer, "run")()  # forbidden
+        bi.getattr(peer, "run")()  # forbidden
+        r = g(self, "run")
+        r()  # forbidden
+        Service.run(self)  # forbidden
+        bi.getattr(Service, "run")(self)  # forbidden
+        getattr(self, "unknown")()
+        getattr(self, "r" + "un")()
+    def shadow(self, peer: Service):
+        def getattr(obj, name): return lambda: None
+        getattr(peer, "run")()
+class Child(Service):
+    def use(self):
+        super().run()
+        ref = super().run
+        ref()  # forbidden
+        def nested():
+            super(Child, self).run()
+            unbound = super(Child, self).run
+            unbound()  # forbidden
+''', [8, 10, 14, 15, 17, 18, 19, 29, 33])
+
+    def test_stored_field_extraction_and_getattr_alias_reassignment(self):
+        self.assert_calls('''\
+import builtins as bi
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def run(self): pass
+class Owner:
+    def __init__(self, service: Service): self.service = service
+    def work(self):
+        direct = self.service.run
+        direct()  # forbidden
+        indirect = bi.getattr(self.service, "run")
+        indirect()  # forbidden
+        bi.getattr(self.service, "run")()
+        Service.run(self.service)  # forbidden
+        g = bi.getattr
+        g(self.service, "run")()
+        g = lambda obj, name: lambda: None
+        g(Service(), "run")()
+''', [10, 12, 14])
+
+    def test_receiver_aliases_stored_fields_mixed_targets_and_nested_scopes(self):
+        self.assert_calls('''\
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def run(self): pass
+class Plain:
+    def run(self): pass
+class Owner:
+    def __init__(this, service: Service): this.service = service
+    async def work(this, peer: Owner, choice: bool, unknown):
+        me = this
+        me.service.run()
+        dep = me.service
+        dep.run()  # forbidden
+        if choice:
+            selected = this
+        else:
+            selected = peer
+        selected.service.run()  # forbidden
+        target = Service() if choice else Plain()
+        target.run()  # forbidden
+        maybe = unknown if choice else Service()
+        maybe.run()  # forbidden
+        def nested():
+            me.service.run()
+            def deeper(): this.service.run()
+            deeper()
+        def shadow(this: Owner):
+            this.service.run()  # forbidden
+        class Inner:
+            def work(inner):
+                inner.service.run()
+                me.service.run()  # forbidden
+        me = peer
+        me.service.run()  # forbidden
+        this = peer
+        this.service.run()  # forbidden
+''', [13, 18, 20, 22, 28, 32, 34, 36])
+
+    def test_alternative_control_flow_invalidates_permission_and_retains_targets(self):
+        self.assert_calls('''\
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def run(self): pass
+    def work(self, peer: Service, choice: bool):
+        alias = self
+        try:
+            if choice: alias = peer
+        except ValueError:
+            alias = self
+        alias.run()  # forbidden
+        for item in (peer,):
+            alias = peer
+        alias.run()  # forbidden
+        with open("file") as alias:
+            alias.run()
+        match choice:
+            case True: maybe = peer
+            case False: maybe = self
+        maybe.run()  # forbidden
+        if choice:
+            fn = self.run
+        else:
+            fn = lambda: None
+        fn()  # forbidden
+''', [11, 14, 20, 25])
+
     def test_explicit_calls_use_receiver_identity_and_stored_field_shape(self):
         self.put("src/example.py", '''\
 def encapsulated_only[T](value: T) -> T:

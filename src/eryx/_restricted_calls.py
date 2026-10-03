@@ -1,4 +1,4 @@
-"""Declaration evidence and receiver-shaped explicit restricted-call analysis."""
+"""Declaration evidence and receiver/callable provenance for restricted calls."""
 from __future__ import annotations
 
 import ast
@@ -6,7 +6,7 @@ from typing import override
 
 from eryx._class_contracts_worker import Contracts
 from eryx._field_types import UNKNOWN, field_evidence
-from eryx._instance_fields_worker import Accesses, Binding, Ownership, module_name
+from eryx._instance_fields_worker import Accesses, Binding, Ownership, assigned_names, module_name
 from eryx._markers import FUNCTIONS, local_names
 
 
@@ -187,7 +187,7 @@ class Restrictions(object):
 
 
 class Calls(ast.NodeVisitor):
-    """Resolve explicit receiver expressions; privilege belongs to their shape."""
+    """Resolve explicit calls while keeping identity separate from known types."""
 
     def __init__(self, restrictions: Restrictions, path: str):
         super().__init__()
@@ -199,17 +199,92 @@ class Calls(ast.NodeVisitor):
         self.receiver: str | None = None
         self.receiver_valid = False
         self.diagnostics: list[dict[str, object]] = []
+        # Provenance is independent of the type bindings in Accesses: a peer and
+        # the current instance can have the same type but different permissions.
+        self.provenance: list[dict[str, frozenset[Binding]]] = [{}]
+        self._assigned_origin: frozenset[Binding] = frozenset()
 
     def results(self) -> list[dict[str, object]]:
         return self.diagnostics
 
     def current(self, node: ast.expr) -> bool:
-        return isinstance(node, ast.Name) and node.id == self.receiver and self.receiver_valid
+        return self.origins(node) == frozenset({("current", self.method_owner)}) if self.method_owner else False
+
+    def origins(self, node: ast.expr) -> frozenset[Binding]:
+        if isinstance(node, ast.Name):
+            for scope in reversed(self.provenance):
+                if node.id in scope:
+                    if scope[node.id]:
+                        return scope[node.id]
+                    break
+            binding = self.value(node)
+            return frozenset({binding}) if binding else frozenset()
+        if isinstance(node, ast.IfExp):
+            return self.origins(node.body) | self.origins(node.orelse)
+        if isinstance(node, ast.Attribute):
+            result: set[Binding] = set()
+            for kind, owner in self.origins(node.value):
+                if kind in {"instance", "current", "field"}:
+                    target = self.restrictions.target(owner, node.attr)
+                    if target:
+                        result.add(("method", target))
+                    field = self.restrictions.field_type(owner, node.attr)
+                    if field:
+                        result.add(("field", field[1]))
+                    result.update(self._other_origin(owner, node.attr))
+                elif kind == "class":
+                    target = self.restrictions.target(owner, node.attr)
+                    if target:
+                        result.add(("method", target))
+                    declaring = self.restrictions.ownership.class_field_owner(owner, node.attr)
+                    if declaring:
+                        field = self.restrictions.instance_type(
+                            self.restrictions.field_types.get((declaring, node.attr)))
+                        if field:
+                            result.add(field)
+            return frozenset(result)
+        if isinstance(node, ast.Call):
+            if (self.resolver.builtin_call(node, "getattr") and len(node.args) == 2
+                    and not node.keywords and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)):
+                return frozenset(("method", target) for target in self.targets(node))
+            if self.super_owner(node):
+                superclass = self.super_owner(node)
+                return frozenset({("instance", superclass)}) if superclass else frozenset()
+            target = self.value(node)
+            return frozenset({target}) if target else frozenset()
+        binding = self.value(node)
+        return frozenset({binding}) if binding else frozenset()
+
+    def _other_origin(self, owner: str, name: str) -> set[Binding]:
+        result: set[Binding] = set()
+        returned = self.restrictions.return_type(owner, name, property_only=True)
+        if returned:
+            result.add(returned)
+        return result
+
+    def owners(self, node: ast.expr) -> set[str]:
+        return {owner for kind, owner in self.origins(node)
+                if kind in {"instance", "current", "field", "class"}}
+
+    def targets(self, node: ast.expr) -> set[str]:
+        if isinstance(node, ast.Attribute):
+            return {target for owner in self.owners(node.value)
+                    if (target := self.restrictions.target(owner, node.attr))}
+        if (isinstance(node, ast.Call) and len(node.args) == 2 and not node.keywords
+                and self.resolver.builtin_call(node, "getattr")
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)):
+            return {target for owner in self.owners(node.args[0])
+                    if (target := self.restrictions.target(owner, node.args[1].value))}
+        return {target for kind, target in self.origins(node) if kind == "method"}
 
     def super_owner(self, node: ast.expr) -> str | None:
         if not isinstance(node, ast.Call) or not self.resolver.builtin_call(node, "super"):
             return None
         if node.keywords or self.method_owner is None:
+            return None
+        if not node.args and (self.receiver is None or not self.receiver_valid):
             return None
         if node.args and not (len(node.args) == 2
                               and self.value(node.args[0]) == ("class", self.method_owner)
@@ -219,9 +294,19 @@ class Calls(ast.NodeVisitor):
         return bases[0] if len(bases) == 1 and bases[0] in self.restrictions.ownership.stable else None
 
     def value(self, node: ast.expr) -> Binding | None:
-        if isinstance(node, ast.Name) and node.id == "super" and all(
-                "super" not in scope for scope in self.resolver.scopes):
-            return ("builtin", "super")
+        if isinstance(node, ast.Name) and node.id in {"super", "getattr"} and all(
+                node.id not in scope for scope in self.resolver.scopes):
+            return ("builtin", node.id)
+        if isinstance(node, ast.Name):
+            for scope in reversed(self.provenance):
+                if node.id in scope:
+                    types = {(kind if kind in {"class", "module", "builtin", "builtins"} else "instance", owner)
+                             for kind, owner in scope[node.id] if kind != "method"}
+                    if len(types) == 1:
+                        return next(iter(types))
+                    if len(types) > 1:
+                        return None
+                    break
         if isinstance(node, ast.Attribute):
             owner = self.value(node.value)
             if owner and owner[0] == "instance":
@@ -252,7 +337,7 @@ class Calls(ast.NodeVisitor):
         if self.current(node):
             return True
         if isinstance(node, ast.Call) and self.super_owner(node):
-            return self.receiver_valid and (not node.args or self.current(node.args[1]))
+            return self.current(node.args[1]) if node.args else self.receiver_valid
         if isinstance(node, ast.Attribute) and self.current(node.value):
             owner = self.value(node.value)
             if owner:
@@ -263,11 +348,17 @@ class Calls(ast.NodeVisitor):
 
     @override
     def visit_Call(self, node: ast.Call) -> None:
-        if isinstance(node.func, ast.Attribute):
-            receiver = node.func.value
-            owner = self.value(receiver)
-            target = self.restrictions.target(owner[1], node.func.attr) if owner else None
-            if target and not self.allowed(receiver):
+        direct = isinstance(node.func, ast.Attribute) or (
+            isinstance(node.func, ast.Call) and self.resolver.builtin_call(node.func, "getattr")
+            and len(node.func.args) == 2 and not node.func.keywords
+            and isinstance(node.func.args[1], ast.Constant)
+            and isinstance(node.func.args[1].value, str))
+        receiver = (node.func.value if isinstance(node.func, ast.Attribute) else
+                    node.func.args[0] if direct and isinstance(node.func, ast.Call) else None)
+        for target in sorted(self.targets(node.func)):
+            if not direct or receiver is None or not self.allowed(receiver) or (
+                    isinstance(node.func, ast.Attribute) and any(
+                        kind == "class" for kind, _ in self.origins(receiver))):
                 self.diagnostics.append({
                     "rule": "ENCAPSULATED_ONLY_CALL", "path": self.resolver.path,
                     "line": node.lineno, "column": node.col_offset + 1, "symbol": target,
@@ -278,28 +369,42 @@ class Calls(ast.NodeVisitor):
     @override
     def visit_Import(self, node: ast.Import) -> None:
         self.resolver.visit_Import(node)
+        for alias in node.names:
+            _ = self.provenance[-1].pop(alias.asname or alias.name.split(".")[0], None)
 
     @override
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         self.resolver.visit_ImportFrom(node)
+        for alias in node.names:
+            _ = self.provenance[-1].pop(alias.asname or alias.name, None)
 
     @override
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for expression in (*node.decorator_list, *node.bases, *(item.value for item in node.keywords)):
             self.visit(expression)
         previous = (self.current_class, self.method_owner, self.prefix,
-                    self.receiver, self.receiver_valid)
+                     self.receiver, self.receiver_valid)
+        previous_provenance = self.provenance
+        # A nested class cannot borrow its enclosing method's identity.
+        self.provenance = [{name: origins for name, origins in scope.items()
+                            if all(kind != "current" for kind, _ in origins)}
+                           for scope in previous_provenance]
         qualified = f"{self.prefix}.{node.name}"
         self.current_class, self.receiver, self.receiver_valid = qualified, None, False
         self.method_owner, self.prefix = None, qualified
         self.resolver.scopes[-1][node.name] = (("class", qualified) if qualified in
                                              self.restrictions.ownership.stable else None)
         self.resolver.scopes.append({})
+        self.provenance.append({})
         for statement in node.body:
             self.visit(statement)
         _ = self.resolver.scopes.pop()
+        self.provenance = previous_provenance
         (self.current_class, self.method_owner, self.prefix,
          self.receiver, self.receiver_valid) = previous
+        self.provenance[-1][node.name] = (frozenset({("class", qualified)}) if qualified in
+                                          self.restrictions.ownership.stable else
+                                          frozenset({("unknown", "")}))
 
     @override
     def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -312,7 +417,8 @@ class Calls(ast.NodeVisitor):
                 self.visit(expression)
         owner = self.current_class
         previous = (self.current_class, self.method_owner, self.prefix,
-                    self.receiver, self.receiver_valid)
+                     self.receiver, self.receiver_valid)
+        prior_provenance = self.provenance
         locals_: dict[str, Binding | None] = dict.fromkeys(local_names(node))
         args = node.args.posonlyargs + node.args.args
         for arg in (*args, *node.args.kwonlyargs):
@@ -329,18 +435,23 @@ class Calls(ast.NodeVisitor):
             locals_[args[0].arg] = ("instance", owner)
         class_namespace = self.resolver.scopes.pop() if owner else None
         self.resolver.scopes.append(locals_)
-        # Nested functions have no independent instance privilege in this first slice.
+        self.provenance = [*prior_provenance, {name: frozenset() for name in locals_}]
+        if instance and owner is not None:
+            self.provenance[-1][args[0].arg] = frozenset({("current", owner)})
+        # Nested functions retain proven enclosing identity through lexical names.
         self.current_class = None
-        self.method_owner = owner if instance else None
+        self.method_owner = owner if instance else previous[1]
         self.prefix = f"{self.prefix}.{node.name}"
         for statement in node.body:
             self.visit(statement)
         _ = self.resolver.scopes.pop()
+        self.provenance = prior_provenance
         if class_namespace is not None:
             self.resolver.scopes.append(class_namespace)
         (self.current_class, self.method_owner, self.prefix,
          self.receiver, self.receiver_valid) = previous
         self.resolver.scopes[-1][node.name] = None
+        self.provenance[-1][node.name] = frozenset({("unknown", "")})
 
     @override
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
@@ -350,12 +461,19 @@ class Calls(ast.NodeVisitor):
         if isinstance(target, ast.Name) and target.id == self.receiver:
             self.receiver_valid = False
         self.resolver.assign(target, binding)
+        if isinstance(target, ast.Name):
+            self.provenance[-1][target.id] = self._assigned_origin
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                self.assign(item, None)
 
     @override
     def visit_Assign(self, node: ast.Assign) -> None:
         self.visit(node.value)
+        origins = self.origins(node.value)
         for target in node.targets:
             self.visit(target)
+            self._assigned_origin = origins
             self.assign(target, self.value(node.value))
 
     @override
@@ -365,45 +483,70 @@ class Calls(ast.NodeVisitor):
         self.visit(node.target)
         binding = self.resolver.annotation(node.annotation)
         inferred = self.value(node.value) if node.value is not None else None
+        self._assigned_origin = self.origins(node.value) if node.value is not None else frozenset()
         self.assign(node.target, binding if inferred is None or inferred == binding else None)
 
     @override
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self.generic_visit(node)
+        self._assigned_origin = frozenset()
         self.assign(node.target, None)
 
     @override
     def visit_Delete(self, node: ast.Delete) -> None:
         for target in node.targets:
             self.visit(target)
+            self._assigned_origin = frozenset()
             self.assign(target, None)
 
     @override
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         self.visit(node.value)
+        self._assigned_origin = self.origins(node.value)
         self.assign(node.target, self.value(node.value))
 
     @override
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
+        self.branches([node.body, node.orelse])
+
+    def branches(self, paths: list[list[ast.stmt]], invalid: set[str] | None = None) -> None:
+        """Join possible paths without turning uncertainty into current-instance proof."""
         before = [scope.copy() for scope in self.resolver.scopes]
+        origins_before = [scope.copy() for scope in self.provenance]
         valid = self.receiver_valid
-        outcomes: list[tuple[list[dict[str, Binding | None]], bool]] = []
-        for branch in (node.body, node.orelse):
+        outcomes: list[tuple[list[dict[str, Binding | None]], list[dict[str, frozenset[Binding]]], bool]] = []
+        for branch in paths:
             self.resolver.scopes = [scope.copy() for scope in before]
-            self.receiver_valid = valid
+            self.provenance = [scope.copy() for scope in origins_before]
+            if invalid and branch is not paths[0]:
+                for name in invalid:
+                    self.resolver.scopes[-1][name] = None
+                    self.provenance[-1][name] = frozenset({("unknown", "")})
+            self.receiver_valid = valid and not (invalid and self.receiver in invalid)
             for statement in branch:
                 self.visit(statement)
-            outcomes.append(([scope.copy() for scope in self.resolver.scopes], self.receiver_valid))
+            outcomes.append(([scope.copy() for scope in self.resolver.scopes],
+                             [scope.copy() for scope in self.provenance], self.receiver_valid))
         self.resolver.scopes = before
-        self.receiver_valid = all(outcome[1] for outcome in outcomes)
-        for scope, left, right in zip(before, outcomes[0][0], outcomes[1][0]):
-            for name in left.keys() | right.keys():
-                scope[name] = left.get(name) if left.get(name) == right.get(name) else None
+        self.provenance = origins_before
+        self.receiver_valid = all(outcome[2] for outcome in outcomes)
+        for index, scope in enumerate(origins_before):
+            names = {name for outcome in outcomes for name in outcome[1][index]}
+            for name in names:
+                scope[name] = frozenset().union(*(
+                    outcome[1][index].get(name, frozenset({("unknown", "")}))
+                    for outcome in outcomes))
+        for index, scope in enumerate(before):
+            names = {name for outcome in outcomes for name in outcome[0][index]}
+            for name in names:
+                bindings = [outcome[0][index].get(name) for outcome in outcomes]
+                scope[name] = bindings[0] if all(item == bindings[0] for item in bindings) else None
 
     @override
     def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
         self.visit(node.iter)
+        self._assigned_origin = frozenset()
         self.assign(node.target, None)
         self.conditional_body([*node.body, *node.orelse])
 
@@ -413,10 +556,19 @@ class Calls(ast.NodeVisitor):
 
     def conditional_body(self, statements: list[ast.stmt]) -> None:
         before = [scope.copy() for scope in self.resolver.scopes]
+        origins_before = [scope.copy() for scope in self.provenance]
+        valid = self.receiver_valid
         for statement in statements:
             self.visit(statement)
         after = self.resolver.scopes
+        origins_after = self.provenance
         self.resolver.scopes = before
+        self.provenance = origins_before
+        self.receiver_valid = valid and self.receiver_valid
+        for scope, updated in zip(origins_before, origins_after):
+            for name in scope.keys() | updated.keys():
+                scope[name] = (scope.get(name, frozenset({("unknown", "")})) |
+                               updated.get(name, frozenset({("unknown", "")})))
         for scope, updated in zip(before, after):
             for name in scope.keys() | updated.keys():
                 if scope.get(name) != updated.get(name):
@@ -426,6 +578,52 @@ class Calls(ast.NodeVisitor):
     def visit_While(self, node: ast.While) -> None:
         self.visit(node.test)
         self.conditional_body([*node.body, *node.orelse])
+
+    @override
+    def visit_With(self, node: ast.With | ast.AsyncWith) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self._assigned_origin = frozenset({("unknown", "")})
+                self.assign(item.optional_vars, None)
+        for statement in node.body:
+            self.visit(statement)
+
+    @override
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)
+
+    @override
+    def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
+        invalid = {name for statement in node.body for name in assigned_names(statement)}
+        # Handler names and changes in the try suite cannot retain pre-try proof.
+        handlers: list[list[ast.stmt]] = []
+        for handler in node.handlers:
+            if handler.type:
+                self.visit(handler.type)
+            if handler.name:
+                invalid.add(handler.name)
+            handlers.append(handler.body)
+        self.branches([node.body + node.orelse, *handlers, []], invalid)
+        for statement in node.finalbody:
+            self.visit(statement)
+
+    @override
+    def visit_Match(self, node: ast.Match) -> None:
+        self.visit(node.subject)
+        paths: list[list[ast.stmt]] = [[]]
+        for case in node.cases:
+            captured = {part.name for part in ast.walk(case.pattern)
+                        if isinstance(part, (ast.MatchAs, ast.MatchStar)) and part.name}
+            captured.update(part.rest for part in ast.walk(case.pattern)
+                            if isinstance(part, ast.MatchMapping) and part.rest)
+            for name in captured:
+                self._assigned_origin = frozenset({("unknown", "")})
+                self.assign(ast.Name(id=name, ctx=ast.Store()), None)
+            if case.guard:
+                self.visit(case.guard)
+            paths.append(case.body)
+        self.branches(paths)
 
     @override
     def visit_Lambda(self, node: ast.Lambda) -> None:

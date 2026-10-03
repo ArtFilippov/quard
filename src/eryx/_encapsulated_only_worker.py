@@ -1,4 +1,4 @@
-"""Check explicit calls to directly marked consumer methods in full discovered scope."""
+"""Check proven restricted invocations in full discovered consumer scope."""
 from __future__ import annotations
 
 import argparse
