@@ -268,8 +268,25 @@ invocation is reported once at the operation, even with multiple receiver origin
 A typed subscription result may establish a subsequent protocol target but does not
 inherit permission from the subscribed receiver. Dynamic metaclasses, descriptor
 behavior beyond recognized properties, computed attribute names and unproven types
-remain outside this syntactic inference. Other implicit protocols are later
-slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
+remain outside this syntactic inference. Synchronous and asynchronous `with` check
+proven entry and exit hooks at each manager expression, including multiple managers;
+exit uses the manager, not its `as` value. `for`/`async for`, list/set/dict
+comprehensions and generator expressions check proven `__iter__`/`__aiter__`
+acquisition and `__next__`/`__anext__` advancement at each iterable expression.
+`await` checks proven `__await__` and `__next__` on its returned iterator. These
+checks also apply inside nested functions; comprehension targets shadow only within
+their own scope. Inherited dispatch, aliases, conditional alternatives and stored-field
+permissions follow explicit calls. Return annotations (including stubs and inherited
+methods) or a single unannotated direct constructor return establish intermediate
+types. A single direct `return self` proves that an iterator is the original receiver;
+otherwise acquisition does not pass its permission to advancement. Resolved `with as`
+and loop/comprehension values keep their type but do not inherit permission. A possible
+restricted intermediate target fails even if another branch is unknown. Without a
+proven intermediate type, advancement is unresolved. Runtime-inferred return types,
+coroutine machinery around async hooks,
+awaitable objects returned by `__anext__` and `__aenter__`, and operations within
+unresolved external iterators are not inferred. Other implicit protocols remain
+later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
 `ENCAPSULATED_ONLY_DECLARATION` reports inconsistent marking on newly declared
 implementations of explicitly inherited Protocol or abstract contracts, conflicting
 inherited contract requirements, companion source/stub members and overload groups.

@@ -5,8 +5,9 @@ behavior for an instance and its directly stored dependencies. We choose a
 receiver-shaped access boundary and matching declaration restrictions over
 ordinary public-call semantics; the cost is reduced callable extraction,
 reflective convenience and implementation freedom. This accepted policy is
-implemented for explicit calls, properties, selected implicit protocols and
-declaration agreement; other implicit dispatch remains pending.
+implemented for explicit calls, properties, selected implicit protocols (including
+context managers, iteration and awaiting) and declaration agreement; other implicit
+dispatch remains pending.
 
 ## Marking and agreement
 

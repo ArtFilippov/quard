@@ -259,9 +259,9 @@ class Restrictions(object):
         return self.instance_type(qualified)
 
     def return_type(self, owner: str, name: str, property_only: bool = False) -> Binding | None:
-        if property_only:
-            order = self.mro(owner) or [owner]
-            owner = next((base for base in order if name in self.own_properties.get(base, ())), owner)
+        order = self.mro(owner) or [owner]
+        declarations = self.own_properties if property_only else self.own_methods
+        owner = next((base for base in order if name in declarations.get(base, ())), owner)
         node = self.ownership.classes.get(owner)
         if node is None:
             return None
@@ -273,15 +273,77 @@ class Restrictions(object):
                 args = [*item.value.args, *(kw.value for kw in item.value.keywords if kw.arg in {"fget", "func"})]
                 getters.update(function for function in node.body if isinstance(function, FUNCTIONS)
                                for arg in args[:1] if isinstance(arg, ast.Name) and arg.id == function.name)
-        returns = {self.ownership.type_evidence.annotation(item.returns, owner.rpartition(".")[0])
-                    for item in node.body if isinstance(item, FUNCTIONS)
-                    and item.name == name and item.returns is not None
-                    and (not property_only or item in getters)}
+        returns: set[str] = set()
+        for item in node.body:
+            if not isinstance(item, FUNCTIONS) or item.name != name or (property_only and item not in getters):
+                continue
+            if item.returns is not None:
+                returns.add(self.ownership.type_evidence.annotation(item.returns,
+                                                                    owner.rpartition(".")[0]))
+            elif (isinstance(item, ast.FunctionDef) and len(item.body) == 1
+                  and isinstance(item.body[0], ast.Return) and item.body[0].value is not None):
+                returns.add(self.ownership.type_evidence.expression(
+                    item.body[0].value, owner.rpartition(".")[0], local_names(item)))
         if property_only:
             returns.update(self.ownership.type_evidence.annotation(item.returns, owner.rpartition(".")[0])
                            for item in getters if isinstance(item, FUNCTIONS) and item.returns is not None)
         qualified = next(iter(returns)) if len(returns) == 1 else None
         return self.instance_type(qualified)
+
+    def protocol_return_type(self, owner: str, name: str) -> Binding | None:
+        """Infer a special method's result only after proving type-level lookup.
+
+        Args:
+            owner (str): Receiver class.
+            name (str): Protocol method name.
+
+        Returns:
+            Binding | None: Resolved result type, when available.
+        """
+        order = self.mro(owner)
+        if order is None:
+            return None
+        for base in order:
+            if base not in self.ownership.stable:
+                return None
+            if (name in self.own_properties.get(base, ())
+                    or self.ownership.class_field_owner(base, name) == base):
+                return None
+            if name in self.own_methods.get(base, ()):
+                return (("instance", owner) if self.protocol_returns_self(owner, name)
+                        else self.return_type(owner, name))
+        return None
+
+    def protocol_returns_self(self, owner: str, name: str) -> bool:
+        """Prove the dispatched source hook returns its unchanged first receiver.
+
+        Args:
+            owner (str): Receiver class.
+            name (str): Protocol method name.
+
+        Returns:
+            bool: Whether the hook directly returns its receiver.
+        """
+        order = self.mro(owner)
+        if order is None:
+            return False
+        for base in order:
+            if (base not in self.ownership.stable or name in self.own_properties.get(base, ())
+                    or self.ownership.class_field_owner(base, name) == base):
+                return False
+            if name in self.own_methods.get(base, ()):
+                node = self.ownership.classes.get(base)
+                if node is None:
+                    return False
+                methods = [item for item in node.body if isinstance(item, ast.FunctionDef)
+                           and item.name == name]
+                return len(methods) == 1 and len(methods[0].body) == 1 and (
+                    isinstance(methods[0].body[0], ast.Return) and
+                    isinstance(methods[0].body[0].value, ast.Name) and
+                    bool(methods[0].args.posonlyargs + methods[0].args.args) and
+                    methods[0].body[0].value.id == (
+                        methods[0].args.posonlyargs + methods[0].args.args)[0].arg)
+        return False
 
 
 @dataclass(frozen=True)
@@ -487,8 +549,9 @@ class Calls(ast.NodeVisitor):
                       for name in names if (target := self.restrictions.special_target(owner, name))}
         return DispatchSite(node, receiver, origins, tuple(sorted(candidates)))
 
-    def implicit_call(self, site: DispatchSite) -> None:
-        if self.allowed(site.receiver) and all(kind != "class" for kind, _ in site.origins):
+    def implicit_call(self, site: DispatchSite, *, intermediate: bool = False) -> None:
+        if (not intermediate and self.allowed(site.receiver)
+                and all(kind != "class" for kind, _ in site.origins)):
             return
         for target in site.candidates:
             self.diagnostics.append({
@@ -497,6 +560,94 @@ class Calls(ast.NodeVisitor):
                 "symbol": target,
                 "message": f"Implicit call to restricted method {target} requires the current instance, "
                            + "one direct stored instance field, or proven current-instance super."})
+
+    def protocol_iteration(self, node: ast.expr, receiver: ast.expr, acquire: str,
+                           advance: str) -> frozenset[Binding]:
+        """Check acquisition and advancement without conferring creator permission.
+
+        Args:
+            node (ast.expr): Source operation for both diagnostics.
+            receiver (ast.expr): Expression producing the iterator or awaitable.
+            acquire (str): Acquisition hook name.
+            advance (str): Advancement hook name.
+
+        Returns:
+            frozenset[Binding]: Proven types yielded by advancement.
+        """
+        site = self.dispatch_site(node, receiver, (acquire,))
+        self.implicit_call(site)
+        produced = {returned for kind, owner in site.origins
+                    if kind in {"instance", "current", "field"}
+                    if (returned := self.restrictions.protocol_return_type(owner, acquire))}
+        candidates = {target for _, owner in produced
+                      if (target := self.restrictions.special_target(owner, advance))}
+        same_receiver = bool(produced) and all(
+            self.restrictions.protocol_returns_self(owner, acquire)
+            for kind, owner in site.origins if kind in {"instance", "current", "field"})
+        self.implicit_call(DispatchSite(node, receiver, frozenset(produced),
+                                        tuple(sorted(candidates))), intermediate=not same_receiver)
+        return frozenset(returned for _, owner in produced
+                         if (returned := self.restrictions.protocol_return_type(owner, advance)))
+
+    def bind_protocol_result(self, target: ast.expr, results: frozenset[Binding]) -> None:
+        """Bind an intermediate's result type without passing receiver permission.
+
+        Args:
+            target (ast.expr): Assignment target.
+            results (frozenset[Binding]): Statically established possible types.
+        """
+        self._assigned_origin = results or frozenset({("unknown", "")})
+        self.assign(target, next(iter(results)) if len(results) == 1 else None)
+
+    def comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp
+                      ) -> None:
+        """Visit each iterable while containing target shadowing in the comprehension.
+
+        Args:
+            node (ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp): Comprehension.
+        """
+        self.visit(node.generators[0].iter)
+        saved_valid = self.receiver_valid
+        self.resolver.scopes.append({})
+        self.provenance.append({})
+        for index, generator in enumerate(node.generators):
+            if index:
+                self.visit(generator.iter)
+            results = self.protocol_iteration(generator.iter, generator.iter,
+                                              "__aiter__" if generator.is_async else "__iter__",
+                                              "__anext__" if generator.is_async else "__next__")
+            self.bind_protocol_result(generator.target, results)
+            for condition in generator.ifs:
+                self.visit(condition)
+        if isinstance(node, ast.DictComp):
+            self.visit(node.key)
+            self.visit(node.value)
+        else:
+            self.visit(node.elt)
+        _ = self.provenance.pop()
+        _ = self.resolver.scopes.pop()
+        self.receiver_valid = saved_valid
+
+    @override
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self.comprehension(node)
+
+    @override
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self.comprehension(node)
+
+    @override
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self.comprehension(node)
+
+    @override
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.comprehension(node)
+
+    @override
+    def visit_Await(self, node: ast.Await) -> None:
+        _ = self.protocol_iteration(node, node.value, "__await__", "__next__")
+        self.visit(node.value)
 
     def attribute_dispatch(self, receiver: ast.expr, name: str, node: ast.expr,
                            operation: str) -> None:
@@ -748,9 +899,11 @@ class Calls(ast.NodeVisitor):
 
     @override
     def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
+        results = self.protocol_iteration(
+            node.iter, node.iter, "__aiter__" if isinstance(node, ast.AsyncFor) else "__iter__",
+            "__anext__" if isinstance(node, ast.AsyncFor) else "__next__")
         self.visit(node.iter)
-        self._assigned_origin = frozenset()
-        self.assign(node.target, None)
+        self.bind_protocol_result(node.target, results)
         self.conditional_body([*node.body, *node.orelse])
 
     @override
@@ -784,11 +937,17 @@ class Calls(ast.NodeVisitor):
 
     @override
     def visit_With(self, node: ast.With | ast.AsyncWith) -> None:
+        enter, exit_ = (("__aenter__", "__aexit__") if isinstance(node, ast.AsyncWith)
+                        else ("__enter__", "__exit__"))
         for item in node.items:
+            self.implicit_call(self.dispatch_site(item.context_expr, item.context_expr,
+                                                  (enter, exit_)))
             self.visit(item.context_expr)
             if item.optional_vars is not None:
-                self._assigned_origin = frozenset({("unknown", "")})
-                self.assign(item.optional_vars, None)
+                results = frozenset(returned for kind, owner in self.origins(item.context_expr)
+                                    if kind in {"instance", "current", "field"}
+                                    if (returned := self.restrictions.protocol_return_type(owner, enter)))
+                self.bind_protocol_result(item.optional_vars, results)
         for statement in node.body:
             self.visit(statement)
 

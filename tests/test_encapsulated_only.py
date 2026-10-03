@@ -614,6 +614,206 @@ class Owner:
             (28, "example.Service.__call__"), (30, "example.Service.__getitem__"),
             (33, "example.Service.__call__")])
 
+    def test_context_protocols_use_manager_not_bound_result(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Manager:
+    @encapsulated_only
+    def __enter__(self) -> Manager: return self
+    @encapsulated_only
+    def __exit__(self, *args): pass
+    @encapsulated_only
+    async def __aenter__(self) -> Manager: return self
+    @encapsulated_only
+    async def __aexit__(self, *args): pass
+class Owner:
+    def __init__(self, manager: Manager): self.manager = manager
+    async def work(self, peer: Manager, unknown, choice):
+        with self.manager as bound: pass
+        with peer as bound: pass
+        with Manager() as bound: pass
+        async with self.manager as bound: pass
+        async with peer as bound: pass
+        with (peer if choice else unknown): pass
+        with unknown: pass
+        def nested():
+            with self.manager: pass
+            with peer: pass
+        self = peer
+        with self: pass
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual(raw["execution_error"], None)
+        self.assertEqual([(d["line"], d["column"], d["symbol"]) for d in result["diagnostics"]], [
+            (15, 14, "example.Manager.__enter__"), (15, 14, "example.Manager.__exit__"),
+            (16, 14, "example.Manager.__enter__"), (16, 14, "example.Manager.__exit__"),
+            (18, 20, "example.Manager.__aenter__"), (18, 20, "example.Manager.__aexit__"),
+            (19, 15, "example.Manager.__enter__"), (19, 15, "example.Manager.__exit__"),
+            (23, 18, "example.Manager.__enter__"), (23, 18, "example.Manager.__exit__"),
+            (25, 14, "example.Manager.__enter__"), (25, 14, "example.Manager.__exit__")])
+
+    def test_iteration_comprehensions_generated_iterators_and_await(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Cursor:
+    def __iter__(self): return self
+    def __aiter__(self): return self
+    @encapsulated_only
+    def __next__(self) -> int: return 1
+    @encapsulated_only
+    async def __anext__(self) -> int: return 1
+class Stream:
+    @encapsulated_only
+    def __iter__(self) -> Cursor: return Cursor()
+    @encapsulated_only
+    def __aiter__(self) -> Cursor: return Cursor()
+    @encapsulated_only
+    def __await__(self) -> Cursor: return Cursor()
+class Owner:
+    def __init__(self, stream: Stream): self.stream = stream
+    async def work(self, peer: Stream, unknown, choice):
+        for x in self.stream: pass
+        for x in peer: pass
+        async for x in self.stream: pass
+        async for x in peer: pass
+        [x for x in peer]
+        (x for x in peer)
+        [y for x in self.stream for y in peer]
+        [x async for x in peer]
+        await self.stream
+        await peer
+        await (peer if choice else unknown)
+        await unknown
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (19, "example.Cursor.__next__"),
+            (20, "example.Stream.__iter__"), (20, "example.Cursor.__next__"),
+            (21, "example.Cursor.__anext__"),
+            (22, "example.Stream.__aiter__"), (22, "example.Cursor.__anext__"),
+            (23, "example.Stream.__iter__"), (23, "example.Cursor.__next__"),
+            (24, "example.Stream.__iter__"), (24, "example.Cursor.__next__"),
+            (25, "example.Cursor.__next__"), (25, "example.Stream.__iter__"),
+            (25, "example.Cursor.__next__"),
+            (26, "example.Stream.__aiter__"), (26, "example.Cursor.__anext__"),
+            (27, "example.Cursor.__next__"),
+            (28, "example.Stream.__await__"), (28, "example.Cursor.__next__"),
+            (29, "example.Stream.__await__"), (29, "example.Cursor.__next__")])
+
+    def test_protocol_origins_super_shadowing_and_unannotated_intermediate(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Cursor:
+    @encapsulated_only
+    def __next__(self): return 1
+class Base:
+    @encapsulated_only
+    def __iter__(self): return Cursor()
+class Child(Base):
+    def work(self, peer: Child, unknown, choice):
+        for item in self: pass
+        for item in peer: pass
+        me = self
+        [item for item in me for me in (peer,)]
+        for item in me: pass
+        me = peer
+        for item in me: pass
+        maybe = peer if choice else unknown
+        for item in maybe: pass
+        for item in unknown: pass
+class Override(Base):
+    def __iter__(self): return Cursor()
+for item in Override(): pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (10, "example.Cursor.__next__"),
+            (11, "example.Base.__iter__"), (11, "example.Cursor.__next__"),
+            (13, "example.Cursor.__next__"),
+            (14, "example.Cursor.__next__"),
+            (16, "example.Base.__iter__"), (16, "example.Cursor.__next__"),
+            (18, "example.Base.__iter__"), (18, "example.Cursor.__next__"),
+            (22, "example.Cursor.__next__")])
+
+    def test_unmarked_acquisition_stubs_and_awaitable_results(self):
+        self.put("src/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/protocols.pyi", '''\
+from marker import encapsulated_only as mark
+class Cursor:
+    @mark
+    def __next__(self) -> int: ...
+class Stream:
+    def __iter__(self) -> Cursor: ...
+class Task:
+    @mark
+    def __await__(self) -> Cursor: ...
+class Factory:
+    def task(self) -> Task: ...
+''')
+        self.put("src/example.py", '''\
+from protocols import Stream, Task, Factory
+def work(stream: Stream, task: Task, factory: Factory, unknown):
+    for value in stream: pass
+    await task
+    await factory.task()
+    for value in unknown: pass
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual(raw["execution_error"], None)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["path"] == "src/example.py"], [
+            (3, "protocols.Cursor.__next__"),
+            (4, "protocols.Task.__await__"), (4, "protocols.Cursor.__next__"),
+            (5, "protocols.Task.__await__"), (5, "protocols.Cursor.__next__")])
+
+    def test_context_bound_and_iterated_values_retain_type_not_permission(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Manager:
+    @encapsulated_only
+    def __enter__(self) -> Manager: return self
+    @encapsulated_only
+    def __exit__(self, *args): pass
+class Cursor:
+    def __next__(self) -> Manager: return Manager()
+class Collection:
+    def __iter__(self) -> Cursor: return Cursor()
+class Owner:
+    def __init__(self, manager: Manager, items: Collection):
+        self.manager, self.items = manager, items
+    def work(self):
+        with self.manager as bound:
+            with bound: pass
+        for bound in self.items:
+            with bound: pass
+        [bound.__enter__() for bound in self.items]
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (16, "example.Manager.__enter__"), (16, "example.Manager.__exit__"),
+            (18, "example.Manager.__enter__"), (18, "example.Manager.__exit__"),
+            (19, "example.Manager.__enter__")])
+
+    def test_proven_self_iterator_keeps_receiver_boundary(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Sequence:
+    def __iter__(this): return this
+    @encapsulated_only
+    def __next__(this): return 1
+    def work(this, peer: Sequence, unknown):
+        for item in this: pass
+        for item in peer: pass
+        for item in unknown: pass
+        alias = this
+        for item in alias: pass
+        alias = peer
+        for item in alias: pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (8, "example.Sequence.__next__"), (13, "example.Sequence.__next__")])
+
     def test_attribute_hooks_default_lookup_and_literal_reflection(self):
         self.put("src/example.py", '''\
 import builtins as bi
