@@ -4,8 +4,9 @@ Consumers use an identity decorator named `encapsulated_only` to reserve selecte
 behavior for an instance and its directly stored dependencies. We choose a
 receiver-shaped access boundary and matching declaration restrictions over
 ordinary public-call semantics; the cost is reduced callable extraction,
-reflective convenience and implementation freedom. This is an accepted policy
-for a new rule; implementation remains pending.
+reflective convenience and implementation freedom. This accepted policy is
+implemented for explicit calls, properties, selected implicit protocols and
+declaration agreement; other implicit dispatch remains pending.
 
 ## Marking and agreement
 

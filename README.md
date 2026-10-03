@@ -118,6 +118,9 @@ restricted protocol methods. It keeps full discovered scope when LCOM4 is select
 skipped. See
 [PROFILE.md](PROFILE.md#encapsulated-only-explicit-calls) for the marker convention
 and implemented inference boundaries.
+`ENCAPSULATED_ONLY_DECLARATION` also checks restriction agreement across explicitly
+inherited contracts, newly declared implementations, companion stubs and overloads;
+marking one property accessor marks the whole property for this comparison.
 
 ### Greenfield per-change LCOM4 checks
 

@@ -68,7 +68,8 @@ def parse_encapsulated_only(text: str,
     for raw in array(obj.get("diagnostics")):
         entry = object_dict(raw)
         if (not isinstance(entry.get("rule"), str)
-                 or entry["rule"] not in errors | {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"}
+                 or entry["rule"] not in errors | {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY",
+                                                  "ENCAPSULATED_ONLY_DECLARATION"}
                 or not isinstance(entry.get("message"), str)):
             raise ValueError("Malformed encapsulated-only diagnostic")
         rule = entry["rule"]
@@ -76,15 +77,20 @@ def parse_encapsulated_only(text: str,
                 or any(entry.get(key) is not None and
                        (type(entry[key]) is not int or entry[key] < 1) for key in ("line", "column"))):
             raise ValueError("Malformed encapsulated-only diagnostic position")
-        if rule in {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"} and (
+        if rule in {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY",
+                    "ENCAPSULATED_ONLY_DECLARATION"} and (
                 not isinstance(entry.get("path"), str) or not entry["path"]
                 or not isinstance(entry.get("symbol"), str) or not entry["symbol"]
                 or any(type(entry.get(key)) is not int for key in ("line", "column"))):
-            raise ValueError("Missing encapsulated-only call location")
+            raise ValueError("Missing encapsulated-only diagnostic location")
         if rule in {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"} and (
                 entry["symbol"] not in targets or (entry["symbol"] in properties)
                 != (rule == "ENCAPSULATED_ONLY_PROPERTY")):
             raise ValueError("Restricted access has no matching marked declaration evidence")
+        if rule == "ENCAPSULATED_ONLY_DECLARATION" and (
+                (entry["symbol"].rpartition(".")[0], entry["path"]) not in
+                {(item["owner"], item["path"]) for item in obj["classes"]}):
+            raise ValueError("Declaration disagreement has no class evidence")
         items.append(diagnostic("encapsulated-only", rule, entry["message"],
                                 path=entry.get("path"), line=entry.get("line"),
                                 column=entry.get("column"), symbol=entry.get("symbol"),

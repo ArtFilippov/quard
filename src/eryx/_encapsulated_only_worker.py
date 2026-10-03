@@ -9,6 +9,7 @@ import sys
 from typing import cast
 
 from eryx._instance_fields_worker import Ownership
+from eryx._restricted_agreement import agreement
 from eryx._restricted_calls import Calls, Restrictions
 
 
@@ -28,6 +29,7 @@ def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], s
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc)})
     restrictions = Restrictions(Ownership(trees))
+    diagnostics.extend(agreement(restrictions))
     for path, tree in trees.items():
         visitor = Calls(restrictions, path)
         visitor.visit(tree)

@@ -54,6 +54,233 @@ class EncapsulatedOnlyTests(unittest.TestCase):
         self.assertTrue(all(d["rule"] == "ENCAPSULATED_ONLY_CALL" and
                             not d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_agreement_contracts_conflicts_and_access_survive_mismatch(self):
+        self.put("src/example.py", '''\
+from typing import Protocol
+from abc import ABC, abstractmethod
+def encapsulated_only(value): return value
+alias = encapsulated_only
+class Marked(Protocol):
+    @alias
+    def run(self): ...
+class Plain(Protocol):
+    def run(self): ...
+class Abstract(ABC):
+    @abstractmethod
+    @alias
+    def other(self): ...
+class Missing(Marked):
+    def run(self): pass
+class Extra(Plain):
+    @alias
+    def run(self): pass
+class Equivalent(Marked, Abstract):
+    @alias
+    def run(self): pass
+    @alias
+    def other(self): pass
+class Conflict(Marked, Plain):
+    @alias
+    def run(self): pass
+class Base(Marked):
+    @alias
+    def run(self): pass
+class Descendant(Base): pass
+class Resembles:
+    def run(self): pass
+Missing().run()
+Extra().run()
+''')
+        result, _, _ = self.run_worker()
+        agreements = [d for d in result["diagnostics"]
+                      if d["rule"] == "ENCAPSULATED_ONLY_DECLARATION"]
+        self.assertEqual([(d["line"], d["symbol"]) for d in agreements], [
+            (15, "example.Missing.run"), (18, "example.Extra.run"),
+            (24, "example.Conflict.run")])
+        self.assertTrue(all("example." in d["message"] and not d["is_infrastructure_error"]
+                            for d in agreements))
+        self.assertIn((33, "example.Missing.run"),
+                      [(d["line"], d["symbol"]) for d in result["diagnostics"]
+                       if d["rule"] == "ENCAPSULATED_ONLY_CALL"])
+
+    def test_agreement_source_stub_overloads_properties_and_class_equivalence(self):
+        self.put("src/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/example.py", '''\
+from marker import encapsulated_only as mark
+from typing import overload
+class Service:
+    @mark
+    def run(self): pass
+    @mark
+    @property
+    def item(self): return 1
+    @overload
+    @mark
+    def choose(self, value: int) -> int: ...
+    @overload
+    def choose(self, value: str) -> str: ...
+    def choose(self, value): return value
+@mark
+class Equivalent:
+    def run(self): pass
+    @property
+    def item(self): return 1
+Service().run()
+Service().item
+''')
+        self.put("src/example.pyi", '''\
+from marker import encapsulated_only as alias
+class Service:
+    def run(self) -> None: ...
+    @property
+    def item(self) -> int: ...
+    def choose(self, value: object) -> object: ...
+@alias
+class Equivalent:
+    @alias
+    def run(self) -> None: ...
+    @alias
+    @property
+    def item(self) -> int: ...
+''')
+        result, raw, _ = self.run_worker()
+        agreements = [d for d in result["diagnostics"]
+                      if d["rule"] == "ENCAPSULATED_ONLY_DECLARATION"]
+        self.assertEqual({(d["path"], d["line"], d["symbol"]) for d in agreements}, {
+            ("src/example.py", 13, "example.Service.choose"),
+            ("src/example.py", 14, "example.Service.choose"),
+            ("src/example.pyi", 3, "example.Service.run"),
+            ("src/example.pyi", 5, "example.Service.item"),
+            ("src/example.pyi", 6, "example.Service.choose")})
+        self.assertEqual([(d["line"], d["rule"]) for d in result["diagnostics"]
+                          if d["rule"] in {"ENCAPSULATED_ONLY_CALL", "ENCAPSULATED_ONLY_PROPERTY"}],
+                         [(20, "ENCAPSULATED_ONLY_CALL"), (21, "ENCAPSULATED_ONLY_PROPERTY")])
+        self.assertIn("example.Service.run", raw["effective_targets"])
+
+    def test_agreement_class_marker_and_whole_property_inherited(self):
+        self.put("src/example.py", '''\
+from typing import Protocol
+from functools import cached_property
+def encapsulated_only(value): return value
+class Contract(Protocol):
+    @property
+    def item(self) -> int: ...
+    @item.setter
+    @encapsulated_only
+    def item(self, value: int): ...
+    @encapsulated_only
+    @cached_property
+    def cached(self) -> int: ...
+@encapsulated_only
+class Matching(Contract):
+    @property
+    def item(self) -> int: return 1
+    @cached_property
+    def cached(self) -> int: return 1
+class Mismatch(Contract):
+    @property
+    def item(self) -> int: return 1
+    @cached_property
+    def cached(self) -> int: return 1
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (21, "example.Mismatch.item"), (23, "example.Mismatch.cached")])
+
+    def test_agreement_transitive_contracts_stubs_and_conflict_without_implementation(self):
+        self.put("src/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/example.pyi", '''\
+from typing import Protocol
+from marker import encapsulated_only as mark
+class Restricted(Protocol):
+    @mark
+    def run(self) -> None: ...
+class Unrestricted(Protocol):
+    def run(self) -> None: ...
+class Middle(Restricted): ...
+class Missing(Middle):
+    def run(self) -> None: ...
+class Conflict(Middle, Unrestricted): ...
+class StubOnly(Protocol):
+    @mark
+    def act(self) -> None: ...
+class StubImpl(StubOnly):
+    def act(self) -> None: ...
+''')
+        result, raw, _ = self.run_worker(selected=[])
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (10, "example.Missing.run"), (11, "example.Conflict.run"),
+            (16, "example.StubImpl.act")])
+        self.assertEqual(raw["execution_error"], None)
+
+    def test_agreement_companion_class_marks_on_inherited_members(self):
+        self.put("src/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/example.py", '''\
+from marker import encapsulated_only as mark
+class Base:
+    def run(self): pass
+@mark
+class Child(Base): pass
+class Peer(Base): pass
+@mark
+class Equivalent(Base): pass
+''')
+        self.put("src/example.pyi", '''\
+from marker import encapsulated_only as alias
+class Base:
+    def run(self) -> None: ...
+class Child(Base): ...
+@alias
+class Peer(Base): ...
+class Equivalent(Base):
+    @alias
+    def run(self) -> None: ...
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("src/example.pyi", 4, "example.Child.run"),
+            ("src/example.pyi", 6, "example.Peer.run")])
+
+    def test_agreement_real_runner_report_keeps_independent_diagnostics(self):
+        from eryx._common import capture
+        from eryx.check import run_checks
+        from test_infrastructure import create_repo, native_result, RunnerTests
+
+        with TemporaryDirectory(prefix="eryx-agreement-report-") as directory:
+            root = Path(directory)
+            create_repo(root)
+            (root / "src/demo/domain/api.py").write_text('''\
+from typing import Protocol
+def encapsulated_only(value): return value
+class Contract(Protocol):
+    @encapsulated_only
+    def run(self): ...
+class Implementation(Contract):
+    def run(self): pass
+Implementation().run()
+''', encoding="utf-8")
+            fake, _ = RunnerTests().fake_tools()
+
+            def mixed(argv, cwd, timeout):
+                if str(ERYX / "_encapsulated_only_worker.py") in argv:
+                    return capture(argv, cwd, timeout)
+                if "pyright" in argv:
+                    return native_result(argv, code=1, stdout=json.dumps({"generalDiagnostics": [{
+                        "file": "src/demo/domain/api.py", "message": "Independent type error",
+                        "rule": "reportArgumentType", "severity": "error",
+                        "range": {"start": {"line": 0, "character": 0}}}]}))
+                return fake(argv, cwd, timeout)
+
+            report = run_checks(root, lcom_files="", capture_fn=mixed,
+                                versions_fn=lambda _: ({}, []))
+            validate(report, json.loads((ERYX / "report.schema.json").read_text(encoding="utf-8")))
+            self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
+            self.assertEqual({d["rule"] for d in report["diagnostics"]}, {
+                "ENCAPSULATED_ONLY_DECLARATION", "ENCAPSULATED_ONLY_CALL", "reportArgumentType"})
+            job = next(tool for tool in report["tools"] if tool["name"] == "encapsulated-only")
+            self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
+            self.assertTrue((root / job["raw_output"]["stdout"]).is_file())
+
     def test_property_accessors_and_cached_values_follow_receiver_boundary(self):
         self.put("src/example.py", '''\
 from functools import cached_property as cached
@@ -194,7 +421,11 @@ class Service:
     def item(self) -> int: ...
 ''')
         result, raw, _ = self.run_worker()
-        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+        self.assertIn(("src/example.pyi", 3, "example.Service.item"),
+                      {(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]
+                       if d["rule"] == "ENCAPSULATED_ONLY_DECLARATION"})
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "ENCAPSULATED_ONLY_PROPERTY"],
                          [(10, "example.Service.item"), (11, "example.Service.result")])
         self.assertEqual([(d["path"], d["accessor"], d["marked"]) for d in raw["declarations"]
                           if d["member"] == "item" and "kind" in d],
@@ -823,7 +1054,8 @@ def calls(contract: Contract, obj: Implements, lookalike: Resembles):
 ''')
         result, raw, _ = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
-        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "ENCAPSULATED_ONLY_CALL"],
                          [(15, "example.Contract.run"), (16, "example.Implements.run"),
                           (17, "example.Implements.other")])
         self.assertEqual(raw["effective_targets"]["example.Implements.run"],
@@ -894,7 +1126,8 @@ class Concrete(Interface):
 Concrete().run()
 ''')
         result, raw, _ = self.run_worker()
-        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]
+                          if d["rule"] == "ENCAPSULATED_ONLY_CALL"],
                          [(9, "example.Concrete.run")])
         self.assertEqual(raw["effective_targets"]["example.Concrete.run"], "example.Interface.run")
 
@@ -1037,6 +1270,9 @@ Service().run()
                    json.dumps({**raw, "declarations": [{}]}),
                    json.dumps({**raw, "classes": [{}]}),
                    json.dumps({**raw, "effective_targets": {"missing.M.run": "missing.M"}}),
+                   json.dumps({**raw, "diagnostics": [{"rule": "ENCAPSULATED_ONLY_DECLARATION",
+                                "message": "bad", "path": "src/example.py", "symbol": "example.M.run",
+                                "line": 1, "column": 1}]}),
                    json.dumps({**raw, "diagnostics": [{"rule": "ENCAPSULATED_ONLY_CALL",
                                "message": "bad", "path": "src/example.py", "symbol": "example.C.run",
                                "line": 1, "column": 1}]})]

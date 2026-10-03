@@ -268,8 +268,17 @@ invocation is reported once at the operation, even with multiple receiver origin
 A typed subscription result may establish a subsequent protocol target but does not
 inherit permission from the subscribed receiver. Dynamic metaclasses, descriptor
 behavior beyond recognized properties, computed attribute names and unproven types
-remain outside this syntactic inference. Other implicit protocols and declaration
-agreement are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
+remain outside this syntactic inference. Other implicit protocols are later
+slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
+`ENCAPSULATED_ONLY_DECLARATION` reports inconsistent marking on newly declared
+implementations of explicitly inherited Protocol or abstract contracts, conflicting
+inherited contract requirements, companion source/stub members and overload groups.
+The implementation's own member or class marker must match each contract; inheriting
+a marked requirement does not count as marking a new declaration. Inherited concrete
+members need no redeclaration, and structural Protocol resemblance creates no
+obligation. Class and member markers (including resolved aliases) are equivalent;
+any marked property accessor restricts the entire property, including cached
+properties. Agreement violations do not weaken established access restrictions.
 This does not claim universal runtime coverage. Source read/parse errors, execution failures,
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
 valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain
