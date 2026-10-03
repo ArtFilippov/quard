@@ -21,3 +21,22 @@ method can replace a property. A getter/setter pair is one member per class.
 Local Protocol and abstract-interface declarations are contracts, even when a
 method has a body; they supply overridable members, not forbidden implementations.
 An external or unresolved base cannot establish a customer method override.
+
+## Restricted member
+
+A **restricted member** is a method or property whose invocation or access is
+reserved for the current instance, its directly stored dependencies, or its
+current-instance superclass behavior. Restriction concerns the access boundary,
+not whether the member name is public or private.
+
+## Declared restriction
+
+A **declared restriction** is the restriction expressed by a member's own marking
+or its declaring class's marking. A newly declared implementation has its own
+declared restriction, distinct from the requirement imposed by an inherited contract.
+
+## Effective restriction
+
+An **effective restriction** is a member's restriction after declaration, class
+marking, inherited members and inherited contract requirements are considered.
+Conflicting declarations do not erase an established restriction.
