@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 from typing import override
 
 from eryx._class_contracts_worker import Contracts
@@ -132,6 +133,35 @@ class Restrictions(object):
     def property_target(self, owner: str, name: str) -> str | None:
         return self._target(owner, name, property_access=True)
 
+    def special_target(self, owner: str, name: str) -> str | None:
+        """Resolve type-level protocol lookup, never an instance field or property."""
+        order = self.mro(owner)
+        if order is None:
+            return None
+        for base in order:
+            if base not in self.ownership.stable:
+                return None
+            if (name in self.own_properties.get(base, ())
+                    or self.ownership.class_field_owner(base, name) == base):
+                return None
+            if name in self.own_methods.get(base, ()):
+                return self.target(owner, name)
+        return None
+
+    def has_attribute(self, owner: str, name: str) -> bool:
+        """Prove ordinary default instance lookup finds a declared member."""
+        order = self.mro(owner)
+        return bool(order and any(
+            name in self.own_methods.get(base, ()) or name in self.own_properties.get(base, ())
+            or self.ownership.field_owner(owner, name) is not None
+            or self.ownership.class_field_owner(base, name) == base
+            for base in order if base in self.ownership.stable))
+
+    def custom_attribute_lookup(self, owner: str) -> bool:
+        order = self.mro(owner) or []
+        return any("__getattribute__" in self.own_methods.get(base, ())
+                   for base in order if base in self.ownership.stable)
+
     def _target(self, owner: str, name: str, property_access: bool) -> str | None:
         if owner not in self.ownership.stable:
             return None
@@ -254,6 +284,16 @@ class Restrictions(object):
         return self.instance_type(qualified)
 
 
+@dataclass(frozen=True)
+class DispatchSite:
+    """One implicit invocation with its original receiver and possible targets."""
+
+    operation: ast.expr
+    receiver: ast.expr
+    origins: frozenset[Binding]
+    candidates: tuple[str, ...]
+
+
 class Calls(ast.NodeVisitor):
     """Resolve explicit calls while keeping identity separate from known types."""
 
@@ -310,7 +350,15 @@ class Calls(ast.NodeVisitor):
                             self.restrictions.field_types.get((declaring, node.attr)))
                         if field:
                             result.add(field)
+            if not result:
+                binding = self.value(node)
+                if binding:
+                    result.add(binding)
             return frozenset(result)
+        if isinstance(node, ast.Subscript):
+            return frozenset(returned for kind, owner in self.origins(node.value)
+                             if kind in {"instance", "current", "field"}
+                             if (returned := self.restrictions.return_type(owner, "__getitem__")))
         if isinstance(node, ast.Call):
             if (self.resolver.builtin_call(node, "getattr") and len(node.args) == 2
                     and not node.keywords and isinstance(node.args[1], ast.Constant)
@@ -321,7 +369,11 @@ class Calls(ast.NodeVisitor):
                 superclass = self.super_owner(node)
                 return frozenset({("instance", superclass)}) if superclass else frozenset()
             target = self.value(node)
-            return frozenset({target}) if target else frozenset()
+            if target:
+                return frozenset({target})
+            return frozenset(returned for kind, owner in self.origins(node.func)
+                             if kind in {"instance", "current", "field"}
+                             if (returned := self.restrictions.return_type(owner, "__call__")))
         binding = self.value(node)
         return frozenset({binding}) if binding else frozenset()
 
@@ -416,7 +468,7 @@ class Calls(ast.NodeVisitor):
         return False
 
     def property_access(self, receiver: ast.expr, name: str, node: ast.expr,
-                        operation: str) -> None:
+                         operation: str) -> None:
         for owner in sorted(self.owners(receiver)):
             target = self.restrictions.property_target(owner, name)
             if target and (not self.allowed(receiver) or any(
@@ -426,13 +478,55 @@ class Calls(ast.NodeVisitor):
                     "line": node.lineno, "column": node.col_offset + 1, "symbol": target,
                     "message": f"{operation.capitalize()} of restricted property {target} requires "
                                + "the current instance, one direct stored instance field, "
-                               + "or proven current-instance super."})
+                                + "or proven current-instance super."})
+
+    def dispatch_site(self, node: ast.expr, receiver: ast.expr,
+                      names: tuple[str, ...]) -> DispatchSite:
+        origins = self.origins(receiver)
+        candidates = {target for kind, owner in origins if kind in {"instance", "current", "field"}
+                      for name in names if (target := self.restrictions.special_target(owner, name))}
+        return DispatchSite(node, receiver, origins, tuple(sorted(candidates)))
+
+    def implicit_call(self, site: DispatchSite) -> None:
+        if self.allowed(site.receiver) and all(kind != "class" for kind, _ in site.origins):
+            return
+        for target in site.candidates:
+            self.diagnostics.append({
+                "rule": "ENCAPSULATED_ONLY_CALL", "path": self.resolver.path,
+                "line": site.operation.lineno, "column": site.operation.col_offset + 1,
+                "symbol": target,
+                "message": f"Implicit call to restricted method {target} requires the current instance, "
+                           + "one direct stored instance field, or proven current-instance super."})
+
+    def attribute_dispatch(self, receiver: ast.expr, name: str, node: ast.expr,
+                           operation: str) -> None:
+        if operation == "read":
+            names = ("__getattribute__",)
+            # __getattr__ only participates when the normal lookup can miss, or a
+            # custom __getattribute__ may raise AttributeError.
+            origins = self.origins(receiver)
+            if any(kind in {"instance", "current", "field"} and (
+                    not self.restrictions.has_attribute(owner, name)
+                    or self.restrictions.custom_attribute_lookup(owner))
+                   for kind, owner in origins):
+                names += ("__getattr__",)
+        else:
+            names = ("__setattr__",) if operation == "write" else ("__delattr__",)
+        self.implicit_call(self.dispatch_site(node, receiver, names))
 
     @override
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        self.property_access(node.value, node.attr, node,
-                             "delete" if isinstance(node.ctx, ast.Del) else
-                             "write" if isinstance(node.ctx, ast.Store) else "read")
+        operation = ("delete" if isinstance(node.ctx, ast.Del) else
+                     "write" if isinstance(node.ctx, ast.Store) else "read")
+        self.property_access(node.value, node.attr, node, operation)
+        self.attribute_dispatch(node.value, node.attr, node, operation)
+        self.generic_visit(node)
+
+    @override
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        name = ("__delitem__" if isinstance(node.ctx, ast.Del) else
+                "__setitem__" if isinstance(node.ctx, ast.Store) else "__getitem__")
+        self.implicit_call(self.dispatch_site(node, node.value, (name,)))
         self.generic_visit(node)
 
     @override
@@ -442,7 +536,20 @@ class Calls(ast.NodeVisitor):
                     and not node.keywords and isinstance(node.args[1], ast.Constant)
                     and isinstance(node.args[1].value, str)):
                 self.property_access(node.args[0], node.args[1].value, node,
-                                     {"getattr": "read", "setattr": "write", "delattr": "delete"}[operation])
+                                      {"getattr": "read", "setattr": "write", "delattr": "delete"}[operation])
+                self.attribute_dispatch(node.args[0], node.args[1].value, node,
+                                        {"getattr": "read", "setattr": "write",
+                                         "delattr": "delete"}[operation])
+        for kind, owner in self.origins(node.func):
+            if kind == "class":
+                # Construction invokes hooks on a fresh object, not on the class
+                # expression's privileged receiver.
+                for name in ("__new__", "__init__"):
+                    target = self.restrictions.special_target(owner, name)
+                    if target:
+                        self.implicit_call(DispatchSite(node, node.func,
+                                                        frozenset({("fresh", owner)}), (target,)))
+        self.implicit_call(self.dispatch_site(node, node.func, ("__call__",)))
         direct = isinstance(node.func, ast.Attribute) or (
             isinstance(node.func, ast.Call) and self.resolver.builtin_call(node.func, "getattr")
             and len(node.func.args) == 2 and not node.func.keywords

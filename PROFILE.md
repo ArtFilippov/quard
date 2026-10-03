@@ -250,14 +250,27 @@ Straightforward assignments, if/else branches, loops and exception handlers
 conservatively invalidate receiver proof on reassignment. This is syntactic
 provenance, not general interprocedural alias or dynamically computed-name analysis.
 
-This slice restricts directly marked and class/inheritance-restricted explicit method
+The job restricts directly marked and class/inheritance-restricted explicit method
 calls and ordinary/cached property access, including literal-name reflection. A marker
 on any recognized getter, setter or deleter restricts all three property operations,
 even after a cached value is stored. Proven `@property`, `@functools.cached_property`,
 accessor aliases and static descriptor constructors count; shadowed lookalikes do not.
-Property results never grant stored-field permission. Declaration agreement and implicit
-protocol dispatch are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md). It does
-not claim universal runtime coverage. Source read/parse errors, execution failures,
+Property results never grant stored-field permission. Implicit dispatch checks
+statically resolved `__new__`/`__init__` on construction, `__call__` on callable
+instances, `__getitem__`/`__setitem__`/`__delitem__` on subscriptions, and
+`__getattribute__`/`__getattr__`/`__setattr__`/`__delattr__` on instance attribute
+syntax and literal-name builtin operations. The new construction receiver is never
+privileged. Protocol methods resolve through the receiver's type, not an instance
+attribute; a known class override can exclude an inherited restriction.
+`__getattr__` is checked when default lookup cannot prove the attribute exists, or
+when a custom `__getattribute__` may raise `AttributeError`. Each proven
+invocation is reported once at the operation, even with multiple receiver origins.
+A typed subscription result may establish a subsequent protocol target but does not
+inherit permission from the subscribed receiver. Dynamic metaclasses, descriptor
+behavior beyond recognized properties, computed attribute names and unproven types
+remain outside this syntactic inference. Other implicit protocols and declaration
+agreement are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
+This does not claim universal runtime coverage. Source read/parse errors, execution failures,
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
 valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain
 their diagnostics. Ordinary reports, manifests and logs stay in the chosen consumer.

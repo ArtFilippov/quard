@@ -307,6 +307,159 @@ class Child(Service):
             unbound()  # forbidden
 ''', [8, 10, 14, 15, 17, 18, 19, 29, 33])
 
+    def test_constructor_hooks_use_fresh_receiver_and_type_dispatch(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+@encapsulated_only
+class Ordinary:
+    def __new__(cls): return super().__new__(cls)
+    def __init__(self): pass
+    def __call__(self): pass
+    def __getitem__(self, key): return 1
+    def __getattribute__(self, name): return object.__getattribute__(self, name)
+    def __getattr__(self, name): return 1
+class Guarded:
+    @encapsulated_only
+    def __new__(cls): return super().__new__(cls)
+    @encapsulated_only
+    def __init__(self): pass
+Alias = Guarded
+Ordinary()
+Ordinary()()
+Ordinary()[0]
+Ordinary().anything
+Alias()
+class Owner:
+    def make(self): Guarded()
+def uncertain(factory): factory()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["column"], d["symbol"]) for d in result["diagnostics"]], [
+            (20, 1, "example.Guarded.__new__"), (20, 1, "example.Guarded.__init__"),
+            (22, 21, "example.Guarded.__new__"), (22, 21, "example.Guarded.__init__")])
+
+    def test_callable_and_subscription_protocols_keep_receiver_origin(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def __call__(self) -> Service: return self
+    @encapsulated_only
+    def __getitem__(self, key) -> Service: return self
+    @encapsulated_only
+    def __setitem__(self, key, value): pass
+    @encapsulated_only
+    def __delitem__(self, key): pass
+    @property
+    def result(self) -> Service: return self
+class Owner:
+    def __init__(self, service: Service): self.service = service
+    def run(self, peer: Service, unknown, flag: bool):
+        self.service()
+        self.service[0]
+        self.service[0] = 1
+        del self.service[0]
+        peer()
+        peer[0]
+        peer[0] = 1
+        del peer[0]
+        Service()()
+        Service()[0]
+        self.service[0]()
+        self.service()()
+        peer.result()
+        maybe = peer if flag else unknown
+        maybe[0]
+        unknown[0]
+        peer.__call__ = lambda: None
+        peer()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (20, "example.Service.__call__"), (21, "example.Service.__getitem__"),
+            (22, "example.Service.__setitem__"), (23, "example.Service.__delitem__"),
+            (24, "example.Service.__call__"), (25, "example.Service.__getitem__"),
+            (26, "example.Service.__call__"), (27, "example.Service.__call__"),
+            (28, "example.Service.__call__"), (30, "example.Service.__getitem__"),
+            (33, "example.Service.__call__")])
+
+    def test_attribute_hooks_default_lookup_and_literal_reflection(self):
+        self.put("src/example.py", '''\
+import builtins as bi
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    def __getattribute__(self, name): return object.__getattribute__(self, name)
+    @encapsulated_only
+    def __getattr__(self, name): return 1
+    @encapsulated_only
+    def __setattr__(self, name, value): pass
+    @encapsulated_only
+    def __delattr__(self, name): pass
+    def known(self): pass
+class Fallback:
+    @encapsulated_only
+    def __getattr__(self, name): return 1
+    def known(self): pass
+def use(peer: Service, fallback: Fallback, unknown):
+    peer.known()
+    peer.missing
+    peer.field = 1
+    del peer.field
+    bi.getattr(peer, "missing")
+    g = bi.getattr
+    g(peer, "known")
+    bi.setattr(peer, "field", 1)
+    bi.delattr(peer, "field")
+    fallback.known()
+    fallback.missing
+    unknown.missing
+    def getattr(obj, key): return 1
+    getattr(peer, "missing")
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (18, "example.Service.__getattr__"), (18, "example.Service.__getattribute__"),
+            (19, "example.Service.__getattr__"), (19, "example.Service.__getattribute__"),
+            (20, "example.Service.__setattr__"), (21, "example.Service.__delattr__"),
+            (22, "example.Service.__getattr__"), (22, "example.Service.__getattribute__"),
+            (24, "example.Service.__getattr__"), (24, "example.Service.__getattribute__"),
+            (25, "example.Service.__setattr__"), (26, "example.Service.__delattr__"),
+            (28, "example.Fallback.__getattr__")])
+
+    def test_protocol_lookup_uses_type_over_instance_shadow_and_class_override(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Base:
+    @encapsulated_only
+    def __call__(self): pass
+    @encapsulated_only
+    def __getitem__(self, key): return 1
+class Child(Base):
+    def __call__(self): pass
+    def __getitem__(self, key): return 2
+class Other(Base): pass
+def use(child: Child, other: Other, unknown):
+    child()
+    child[0]
+    other.__call__ = lambda: None
+    other()
+    other[0]
+    unknown()
+    unknown[0]
+class Fallback:
+    @encapsulated_only
+    def __getattr__(self, name): return 1
+    def __getattribute__(self, name): return object.__getattribute__(self, name)
+    def known(self): pass
+def lookup(obj: Fallback):
+    obj.known
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            (15, "example.Base.__call__"), (16, "example.Base.__getitem__"),
+            (25, "example.Fallback.__getattr__")])
+
     def test_stored_field_extraction_and_getattr_alias_reassignment(self):
         self.assert_calls('''\
 import builtins as bi

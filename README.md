@@ -111,9 +111,11 @@ the current instance, one direct stored instance field, and proven current-insta
 `super` access; proven calls on peers, new instances, property results, class
 values and deeper chains fail with `ENCAPSULATED_ONLY_CALL` for methods and
 `ENCAPSULATED_ONLY_PROPERTY` for property reads, writes and deletions. It also checks
-extracted callable invocation, class-qualified unbound calls, literal-name
-builtin `getattr` calls, and proven receiver aliases in nested functions.
-It keeps full discovered scope when LCOM4 is selected or skipped. See
+extracted callable invocation, class-qualified unbound calls, literal-name builtin
+`getattr` calls, and proven receiver aliases in nested functions. Statically resolved
+construction, callable objects, subscriptions and attribute hooks also check explicitly
+restricted protocol methods. It keeps full discovered scope when LCOM4 is selected or
+skipped. See
 [PROFILE.md](PROFILE.md#encapsulated-only-explicit-calls) for the marker convention
 and implemented inference boundaries.
 
