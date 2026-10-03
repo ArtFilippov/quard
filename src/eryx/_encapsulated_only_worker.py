@@ -13,7 +13,7 @@ from eryx._restricted_calls import Calls, Restrictions
 
 
 def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], str | None,
-                                                list[dict[str, object]]]:
+                                                Restrictions]:
     trees: dict[str, ast.Module] = {}
     diagnostics: list[dict[str, object]] = []
     error = None
@@ -32,7 +32,7 @@ def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], s
         visitor = Calls(restrictions, path)
         visitor.visit(tree)
         diagnostics.extend(visitor.results())
-    return diagnostics, error, restrictions.declarations
+    return diagnostics, error, restrictions
 
 
 def main() -> int:
@@ -43,12 +43,16 @@ def main() -> int:
         paths = json.loads(args.manifest.read_text(encoding="utf-8"))
         if not isinstance(paths, list):
             raise ValueError("Encapsulated-only manifest must be a list of Python paths")
-        diagnostics, error, declarations = analyze(Path.cwd(), cast(list[object], paths))
+        diagnostics, error, restrictions = analyze(Path.cwd(), cast(list[object], paths))
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         error = "ENCAPSULATED_ONLY_EXECUTION_ERROR"
-        diagnostics, declarations = [{"rule": error, "message": str(exc)}], []
+        diagnostics, restrictions = [{"rule": error, "message": str(exc)}], None
     print(json.dumps({"eryx_encapsulated_only_adapter": 1, "diagnostics": diagnostics,
-                      "execution_error": error, "declarations": declarations}, ensure_ascii=False))
+                      "execution_error": error,
+                      "declarations": restrictions.declarations if restrictions else [],
+                      "classes": restrictions.class_declarations if restrictions else [],
+                      "effective_targets": restrictions.effective_targets if restrictions else {}},
+                     ensure_ascii=False))
     return 2 if error else (1 if diagnostics else 0)
 
 

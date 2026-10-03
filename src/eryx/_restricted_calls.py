@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 from typing import override
 
+from eryx._class_contracts_worker import Contracts
 from eryx._field_types import UNKNOWN, field_evidence
 from eryx._instance_fields_worker import Accesses, Binding, Ownership, module_name
 from eryx._markers import FUNCTIONS, local_names
@@ -16,10 +17,32 @@ class Restrictions(object):
         super().__init__()
         self.ownership = ownership
         self.declarations: list[dict[str, object]] = []
+        self.class_declarations: list[dict[str, object]] = []
+        self.effective_targets: dict[str, str] = {}
         self.methods: dict[tuple[str, str], list[dict[str, object]]] = {}
+        self.own_methods: dict[str, set[str]] = {}
+        self.class_marked: set[str] = set()
+        self.contracts = Contracts(ownership.trees)
+        self.parents: dict[str, tuple[str | None, ...]] = {}
         self.field_types: dict[tuple[str, str], str] = {}
+        primary = {owner: next((path for path, _, _, _ in sources if path.endswith(".py")),
+                               sources[0][0]) for owner, sources in ownership.field_sources.items()}
+        # Resolve base expressions in their declaration-time lexical scope, after
+        # the cross-module export index reaches its fixed point.
+        for path, tree in ownership.trees.items():
+            ancestry = Ancestry(self, path)
+            ancestry.visit(tree)
+            for owner, bases in ancestry.parents.items():
+                if owner not in self.parents or path.endswith(".py"):
+                    self.parents[owner] = bases
         for owner, sources in ownership.field_sources.items():
             for path, node, _, _ in sources:
+                class_marker = any(ownership.markers.is_identity(dec) for dec in node.decorator_list)
+                self.class_declarations.append({"owner": owner, "path": path,
+                                                "line": node.lineno, "column": node.col_offset + 1,
+                                                "marked": class_marker})
+                if class_marker:
+                    self.class_marked.add(owner)
                 for member in node.body:
                     if isinstance(member, FUNCTIONS):
                         decorators = member.decorator_list
@@ -35,6 +58,8 @@ class Restrictions(object):
                                     "marked": any(ownership.markers.is_identity(dec) for dec in decorators)}
                         self.declarations.append(evidence)
                         self.methods.setdefault((owner, member.name), []).append(evidence)
+                        if path == primary[owner]:
+                            self.own_methods.setdefault(owner, set()).add(member.name)
             fields = ownership.fields[owner]
             for field in fields:
                 annotations: list[str] = []
@@ -66,8 +91,80 @@ class Restrictions(object):
     def target(self, owner: str, name: str) -> str | None:
         if owner not in self.ownership.stable:
             return None
-        evidence = self.methods.get((owner, name), [])
-        return f"{owner}.{name}" if any(item["marked"] for item in evidence) else None
+        order = self.mro(owner)
+        if order is None:
+            return None
+        declaring = next((candidate for candidate in order if name in self.own_methods.get(candidate, ())), None)
+        if declaring is None or declaring not in self.ownership.stable:
+            return None
+        # An earlier opaque base may supply the runtime method instead.
+        if any(candidate not in self.ownership.stable for candidate in order[:order.index(declaring)]):
+            return None
+        direct = any(item["marked"] for item in self.methods.get((declaring, name), ()))
+        origin = f"{declaring}.{name}" if direct else None
+        if not origin:
+            for candidate in order:
+                if candidate in self.class_marked and not (name.startswith("__") and name.endswith("__")):
+                    ancestor_order = self.mro(candidate)
+                    if ancestor_order and next((base for base in ancestor_order
+                                                if name in self.own_methods.get(base, ())), None) == declaring:
+                        origin = candidate
+                        break
+        # Explicitly inherited contracts constrain a new implementation even
+        # when it is not the method that wins dispatch on the contract itself.
+        if not origin:
+            for candidate in order[1:]:
+                if candidate in self.contracts.nodes and self.contracts.declaration(candidate):
+                    requirement = self.contract_target(candidate, name)
+                    if requirement:
+                        origin = requirement
+                        break
+        if origin:
+            symbol = f"{declaring}.{name}"
+            self.effective_targets[symbol] = origin
+            return symbol
+        return None
+
+    def contract_target(self, owner: str, name: str) -> str | None:
+        order = self.mro(owner)
+        if order is None:
+            return None
+        declaring = next((base for base in order if name in self.own_methods.get(base, ())), None)
+        for candidate in order:
+            if any(item["marked"] for item in self.methods.get((candidate, name), ())):
+                return f"{candidate}.{name}"
+            if candidate in self.class_marked and not (name.startswith("__") and name.endswith("__")):
+                lineage = self.mro(candidate)
+                if lineage and next((base for base in lineage
+                                     if name in self.own_methods.get(base, ())), None) == declaring:
+                    return candidate
+        return None
+
+    def mro(self, owner: str, visiting: frozenset[str] = frozenset()) -> list[str] | None:
+        """Compute a conservative C3 linearization, retaining opaque base slots."""
+        if owner in visiting:
+            return None
+        bases = self.parents.get(owner, ())
+        resolved = [base if base is not None else f"<opaque:{owner}:{index}>"
+                    for index, base in enumerate(bases)]
+        sequences: list[list[str]] = []
+        for base in resolved:
+            lineage = self.mro(base, visiting | {owner}) if base in self.parents else [base]
+            if lineage is None:
+                return None
+            sequences.append(list(lineage))
+        sequences.append(resolved.copy())
+        result = [owner]
+        while any(sequences):
+            candidate = next((seq[0] for seq in sequences if seq and all(
+                seq[0] not in other[1:] for other in sequences)), None)
+            if candidate is None:
+                return None
+            result.append(candidate)
+            for seq in sequences:
+                if seq and seq[0] == candidate:
+                    seq.pop(0)
+        return result
 
     def field_type(self, owner: str, name: str) -> Binding | None:
         declaring = self.ownership.field_owner(owner, name)
@@ -118,8 +215,8 @@ class Calls(ast.NodeVisitor):
                               and self.value(node.args[0]) == ("class", self.method_owner)
                               and self.value(node.args[1]) == ("instance", self.method_owner)):
             return None
-        bases = self.restrictions.ownership.bases.get(self.method_owner, ())
-        return bases[0] if len(bases) == 1 else None
+        bases = self.restrictions.parents.get(self.method_owner, ())
+        return bases[0] if len(bases) == 1 and bases[0] in self.restrictions.ownership.stable else None
 
     def value(self, node: ast.expr) -> Binding | None:
         if isinstance(node, ast.Name) and node.id == "super" and all(
@@ -334,3 +431,32 @@ class Calls(ast.NodeVisitor):
     def visit_Lambda(self, node: ast.Lambda) -> None:
         # Deferred lambda invocation and callable provenance are a later slice.
         pass
+
+
+class Ancestry(Calls):
+    """Capture class bases with declaration-time aliases and nested lexical scopes."""
+
+    def __init__(self, restrictions: Restrictions, path: str):
+        super().__init__(restrictions, path)
+        self.parents: dict[str, tuple[str | None, ...]] = {}
+
+    @override
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        owner = f"{self.prefix}.{node.name}"
+        bases: list[str | None] = []
+        for base in node.bases:
+            binding = self.value(base)
+            resolved = binding[1] if binding and binding[0] == "class" else None
+            if resolved is None:
+                fallback = self.restrictions.contracts.resolved(owner, base, self.resolver.path)
+                # A local class spelling is not proof if the binding was
+                # replaced or its decorator changed the runtime class.
+                if fallback not in self.restrictions.contracts.nodes:
+                    resolved = fallback
+            bases.append(resolved)
+        self.parents[owner] = tuple(bases)
+        super().visit_ClassDef(node)
+
+    @override
+    def visit_Call(self, node: ast.Call) -> None:
+        self.generic_visit(node)

@@ -233,6 +233,185 @@ class Service(object):
         self.assertEqual([(d["path"], d["marked"]) for d in raw["declarations"]
                           if d["member"] == "run"], [("src/example.py", True), ("src/example.pyi", True)])
 
+    def test_class_marking_inherited_methods_and_magic_exception(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Base:
+    def run(self): pass
+    def __custom__(self): pass
+@encapsulated_only
+class Marked(Base):
+    @encapsulated_only
+    def __explicit__(self): pass
+    def extra(self): pass
+class Child(Marked):
+    def fresh(self): pass
+Marked().run()
+Child().run()
+Child().extra()
+Child().fresh()
+Child().__custom__()
+Child().__explicit__()
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(12, "example.Base.run"), (13, "example.Base.run"),
+                          (14, "example.Marked.extra"), (17, "example.Marked.__explicit__")])
+        self.assertEqual(raw["effective_targets"]["example.Base.run"], "example.Marked")
+
+    def test_c3_dispatch_alias_reexports_nested_and_stub_ancestors(self):
+        self.put("src/pkg/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/pkg/__init__.py", "from .marker import encapsulated_only as mark\n"
+                 "from .base import Base as Exported\n")
+        self.put("src/pkg/base.pyi", '''\
+class Base:
+    def inherited(self) -> None: ...
+''')
+        self.put("src/pkg/use.py", '''\
+from pkg import mark, Exported as Parent
+class Other:
+    def inherited(self): pass
+@mark
+class Middle(Parent): pass
+class First(Other, Middle): pass
+class Second(Middle, Other): pass
+class Child(Second): pass
+class Container:
+    @mark
+    class Nested(Parent): pass
+First().inherited()
+Second().inherited()
+Child().inherited()
+Container.Nested().inherited()
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(13, "pkg.base.Base.inherited"), (14, "pkg.base.Base.inherited"),
+                          (15, "pkg.base.Base.inherited")])
+        self.assertIn(raw["effective_targets"]["pkg.base.Base.inherited"],
+                      {"pkg.use.Middle", "pkg.use.Container.Nested"})
+
+    def test_explicit_contracts_and_protocol_annotations_without_structural_marking(self):
+        self.put("src/example.py", '''\
+from typing import Protocol
+def encapsulated_only(value): return value
+class Contract(Protocol):
+    @encapsulated_only
+    def run(self): ...
+class AbstractContract(Protocol):
+    @encapsulated_only
+    def other(self): ...
+class Implements(Contract, AbstractContract):
+    def run(self): pass
+    def other(self): pass
+class Resembles:
+    def run(self): pass
+def calls(contract: Contract, obj: Implements, lookalike: Resembles):
+    contract.run()
+    obj.run()
+    obj.other()
+    lookalike.run()
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(15, "example.Contract.run"), (16, "example.Implements.run"),
+                          (17, "example.Implements.other")])
+        self.assertEqual(raw["effective_targets"]["example.Implements.run"],
+                         "example.Contract.run")
+
+    def test_class_marker_alias_shadowing_and_source_stub_ownership(self):
+        self.put("src/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/base.py", "class Base:\n    def run(self): pass\n")
+        self.put("src/base.pyi", "class Base:\n    def stub_only(self) -> None: ...\n")
+        self.put("src/use.py", '''\
+from marker import encapsulated_only as mark
+from base import Base as Parent
+alias = mark
+@alias
+class Marked(Parent): pass
+Marked().run()
+Marked().stub_only()
+alias = lambda value: value
+@alias
+class Unmarked(Parent): pass
+Unmarked().run()
+Parent = lambda: object()
+@mark
+class Unknown(Parent): pass
+Unknown().run()
+def local(mark):
+    @mark
+    class Shadow(Parent): pass
+    Shadow().run()
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(6, "base.Base.run")])
+        self.assertEqual(raw["effective_targets"], {"base.Base.run": "use.Marked"})
+
+    def test_inherited_permission_does_not_suppress_override_or_field_boundaries(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Base:
+    def __init__(self): self.value = 1
+    def run(self): pass
+@encapsulated_only
+class Marked(Base): pass
+class Child(Marked):
+    def run(self): pass
+    def work(self):
+        self.value
+        self.run()
+Child().run()
+''')
+        restricted, _, _ = self.run_worker()
+        self.assertEqual(restricted["diagnostics"], [])
+        contracts, _, _ = self.run_worker("class-contracts")
+        self.assertIn("CUSTOMER_METHOD_OVERRIDE", {d["rule"] for d in contracts["diagnostics"]})
+        fields, _, _ = self.run_worker("instance-fields")
+        self.assertIn("EXTERNAL_INSTANCE_FIELD", {d["rule"] for d in fields["diagnostics"]})
+
+    def test_marked_abstract_contract_constrains_implementation(self):
+        self.put("src/example.py", '''\
+from abc import ABC, abstractmethod
+def encapsulated_only(value): return value
+class Interface(ABC):
+    @encapsulated_only
+    @abstractmethod
+    def run(self): ...
+class Concrete(Interface):
+    def run(self): pass
+Concrete().run()
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(9, "example.Concrete.run")])
+        self.assertEqual(raw["effective_targets"]["example.Concrete.run"], "example.Interface.run")
+
+    def test_inherited_methods_keep_the_same_receiver_and_super_boundary(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Base:
+    def run(self): pass
+@encapsulated_only
+class Marked(Base): pass
+class Child(Marked):
+    def work(this, peer: Child):
+        this.run()
+        super().run()
+        super(Child, this).run()
+        super(Child, peer).run()
+        peer.run()
+Child().run()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(11, "example.Base.run"), (12, "example.Base.run"),
+                          (13, "example.Base.run")])
+
     def test_calls_in_class_suites_defaults_decorators_and_assignment_targets(self):
         self.put("src/example.py", '''\
 def encapsulated_only(value): return value
@@ -349,6 +528,8 @@ Service().run()
                                "line": True, "column": 0}]}),
                    json.dumps({**raw, "execution_error": "ENCAPSULATED_ONLY_PARSE_ERROR"}),
                    json.dumps({**raw, "declarations": [{}]}),
+                   json.dumps({**raw, "classes": [{}]}),
+                   json.dumps({**raw, "effective_targets": {"missing.M.run": "missing.M"}}),
                    json.dumps({**raw, "diagnostics": [{"rule": "ENCAPSULATED_ONLY_CALL",
                                "message": "bad", "path": "src/example.py", "symbol": "example.C.run",
                                "line": 1, "column": 1}]})]

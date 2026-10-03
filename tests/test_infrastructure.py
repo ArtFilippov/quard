@@ -359,7 +359,7 @@ class RunnerTests(unittest.TestCase):
                                    if name == "instance-fields" else
                                     '{"eryx_class_contracts_adapter": 1, "diagnostics": [], "execution_error": null}'
                                     if name == "class-contracts" else
-                                    '{"eryx_encapsulated_only_adapter": 1, "diagnostics": [], "execution_error": null, "declarations": []}'
+                                     '{"eryx_encapsulated_only_adapter": 1, "diagnostics": [], "execution_error": null, "declarations": [], "classes": [], "effective_targets": {}}'
                                     if name == "encapsulated-only" else ""))
         return fake, seen
 

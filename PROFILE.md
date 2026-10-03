@@ -181,10 +181,11 @@ reported.
 
 The `encapsulated-only` job scans every discovered production and test `.py` and
 `.pyi` file independently of LCOM4 selection. `ENCAPSULATED_ONLY_CALL` identifies
-the qualified directly marked method at the explicit call's one-based position.
+the qualified dispatch-owner method at the explicit call's one-based position.
 Consumer source is parsed, never imported or executed. Raw worker output retains
-separate declaration evidence for source, companion stubs and overload signatures;
-the normalized report uses the ordinary report schema and archived raw logs.
+separate method/class declaration evidence for source, companion stubs and overload
+signatures, plus effective restricted targets and marking origins. The normalized
+report uses the ordinary report schema and archived raw logs.
 
 Consumers supply the marker; Eryx has no runtime decorator API. Use a generic
 identity function so Pyright retains class identity, callable signatures and binding:
@@ -206,28 +207,39 @@ or attribute spelling alone is insufficient. Recognized markers preserve method
 receiver checks, field/method classification and decorated class identity in the
 existing Eryx workers; they grant no exemption from native or other Eryx diagnostics.
 
-An explicit `receiver.method(...)` call to a directly marked method qualifies only
+An explicit `receiver.method(...)` call to a restricted method qualifies only
 through the proven current method's first positional instance receiver (regardless
 of its spelling), one direct stored instance field of that receiver, or proven
 builtin `super()` / `super(CurrentClass, receiver)`. Ordinary fields, literal slots
 and standard dataclass instance fields qualify. Properties, cached properties and
 class values do not confer stored-field permission. Established calls through peer
 parameters, constructor results, property results, class values and deeper field
-chains are violations. Mutable objects returned by ordinary properties remain
-subject to the independent field and contract policies.
+chains are violations. Class marking restricts declared and inherited methods,
+including those introduced by an unmarked ancestor. Names beginning and ending in
+`__` are excluded from class-wide marking unless explicitly marked on the method.
+An unmarked descendant keeps inherited restrictions without restricting new methods.
+Resolvable customer bases use conservative C3 dispatch order; an opaque or unresolved
+base preceding the candidate prevents a guessed target. Source declarations establish
+ancestry and members when a companion stub exists; separate source/stub marker
+evidence remains available. Explicitly inherited marked Protocol or abstract contract
+members constrain implementations without requiring a redeclaration of inherited
+concrete methods. Structural resemblance alone does not propagate Protocol marking;
+calls through a marked Protocol-typed receiver still use the Protocol declaration.
+Mutable objects returned by ordinary properties remain subject to the independent
+field and contract policies.
 
 Targets resolve through explicit customer imports, class aliases, re-exports,
 unambiguous class annotations and straightforward constructor bindings. Stored
 field types use exact annotations or consistent initializer evidence, including
 annotated constructor parameters. Property/method return annotations can establish
 the type of a produced receiver without granting it permission. Builtin super
-identity respects imports, aliases and shadowing; this slice resolves a single
-known direct customer base, without guessing multiple-inheritance dispatch.
+identity respects imports, aliases and shadowing; proven `super()` calls resolve one
+direct customer base, without guessing multiple-inheritance super dispatch.
 Unknown, conflicting or dynamic evidence alone is not a violation.
 
-This first slice restricts directly marked explicit method calls. Class-wide and
-inherited restriction propagation, extracted callables, reflective attribute calls,
-receiver-alias privileges, nested-function privileges, mixed flow alternatives,
+This slice restricts directly marked and class/inheritance-restricted explicit method
+calls. Extracted callables, reflective attribute calls, receiver-alias privileges,
+nested-function privileges, mixed flow alternatives,
 property access restrictions, declaration agreement and implicit protocol dispatch
 are later slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md). It does
 not claim universal runtime coverage. Source read/parse errors, execution failures,

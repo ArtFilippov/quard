@@ -104,10 +104,11 @@ It also rejects redeclarations of methods and recognized properties from any
 resolvable customer-owned non-contract ancestor, while allowing declarations supplied
 only by local contracts. Each member receives one violation per class and source file.
 
-The independent encapsulated-only job checks explicit calls to methods marked by
-a consumer-supplied identity decorator, including imported aliases and stub
-declarations. It permits the current instance, one direct stored instance field,
-and proven current-instance `super` access; proven calls on peers, new instances,
+The independent encapsulated-only job checks explicit calls to methods restricted
+by a consumer-supplied identity decorator on the method or its class, including
+resolvable inherited methods, imported aliases and stub declarations. It permits
+the current instance, one direct stored instance field, and proven current-instance
+`super` access; proven calls on peers, new instances,
 property results, class values and deeper chains fail with `ENCAPSULATED_ONLY_CALL`.
 It keeps full discovered scope when LCOM4 is selected or skipped. See
 [PROFILE.md](PROFILE.md#encapsulated-only-explicit-calls) for the marker convention

@@ -30,6 +30,7 @@ def parse_encapsulated_only(text: str,
     if error is not None and (not isinstance(error, str) or error not in errors):
         raise ValueError("Unknown encapsulated-only execution error")
     marked: set[str] = set()
+    members: set[str] = set()
     for raw in array(obj.get("declarations")):
         declaration = object_dict(raw)
         if (type(declaration.get("marked")) is not bool
@@ -38,8 +39,25 @@ def parse_encapsulated_only(text: str,
                 or any(type(declaration.get(key)) is not int or declaration[key] < 1
                        for key in ("line", "column"))):
             raise ValueError("Malformed encapsulated-only declaration evidence")
+        symbol = f"{declaration['owner']}.{declaration['member']}"
+        members.add(symbol)
         if declaration["marked"]:
-            marked.add(f"{declaration['owner']}.{declaration['member']}")
+            marked.add(symbol)
+    for raw in array(obj.get("classes")):
+        declaration = object_dict(raw)
+        if (type(declaration.get("marked")) is not bool
+                or any(not isinstance(declaration.get(key), str) or not declaration[key]
+                       for key in ("owner", "path"))
+                or any(type(declaration.get(key)) is not int or declaration[key] < 1
+                       for key in ("line", "column"))):
+            raise ValueError("Malformed encapsulated-only class evidence")
+        if declaration["marked"]:
+            marked.add(declaration["owner"])
+    targets = object_dict(obj.get("effective_targets"))
+    if any(not isinstance(symbol, str) or symbol not in members
+           or not isinstance(origin, str) or origin not in marked
+           for symbol, origin in targets.items()):
+        raise ValueError("Restricted target has no marked origin or member declaration")
     items: list[dict[str, Any]] = []
     for raw in array(obj.get("diagnostics")):
         entry = object_dict(raw)
@@ -57,7 +75,7 @@ def parse_encapsulated_only(text: str,
                 or not isinstance(entry.get("symbol"), str) or not entry["symbol"]
                 or any(type(entry.get(key)) is not int for key in ("line", "column"))):
             raise ValueError("Missing encapsulated-only call location")
-        if rule == "ENCAPSULATED_ONLY_CALL" and entry["symbol"] not in marked:
+        if rule == "ENCAPSULATED_ONLY_CALL" and entry["symbol"] not in targets:
             raise ValueError("Restricted call has no marked declaration evidence")
         items.append(diagnostic("encapsulated-only", rule, entry["message"],
                                 path=entry.get("path"), line=entry.get("line"),
