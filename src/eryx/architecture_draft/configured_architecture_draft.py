@@ -10,7 +10,7 @@ from typing import Any, override
 import tomlkit
 
 from eryx._common import (EryxError, atomic_write, capture, load_toml, read_json,
-                          tool_dir, write_json)
+                          tool_binary, tool_dir, write_json)
 from eryx._policy import ALLOWED_LAYERS, LAYER_DIRS, LAYERS, exclude_globs
 from eryx._reports import normalize
 from eryx.architecture_draft.architecture_draft import ArchitectureDraft
@@ -151,10 +151,7 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
         atomic_write(path, "# Review before accepting; module boundaries are convention-based, not inferred communities.\n" + tomlkit.dumps(config), root)
         if ready.exists():
             ready.unlink()
-        binary = Path(sys.executable).parent / "tach"
-        if not binary.is_file():
-            raise EryxError("MISSING_TOOL", "Missing tach in project environment; run uv sync --locked --group dev.")
-        result = capture([str(binary), "sync"], root)
+        result = capture([tool_binary("tach"), "sync"], root)
         atomic_write(root / ".eryx/logs/init-sync.log", result["stdout"] + "\n" + result["stderr"], root)
         if result["error"] or result["exit_code"] != 0:
             raise EryxError("TACH_SYNC_FAILED", "Draft tach.toml exists but sync failed. See .eryx/logs/init-sync.log. Do not mark it ready until corrected.")

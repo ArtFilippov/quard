@@ -22,7 +22,9 @@ sys.path.insert(0, str(ERYX / "tests"))
 
 from eryx import install as entry
 from eryx import _policy
-from eryx._common import EryxError, load_toml, read_json, write_json
+from eryx._audit import smoke_tests, tool_binary
+from eryx._common import (EryxError, load_toml, read_json, repo_lock, safe_target,
+                          write_json)
 from eryx.installation.installation import Installation
 from eryx.installation.transactional_installation import TransactionalInstallation
 from offline_fixtures import CATALOG, create_repo, managed_bytes, native_result
@@ -55,6 +57,38 @@ def run_command(argv: list[str], cwd: Path, expected: int = 0) -> str:
 
 
 class TestTransactionalInstallation(unittest.TestCase):
+    def test_real_native_installer_smoke_probes(self):
+        with TemporaryDirectory(prefix="eryx-native-probes-") as directory:
+            root = Path(directory)
+            (root / "pyproject.toml").write_bytes((ERYX / "pyproject.toml").read_bytes())
+            logs = root / ".eryx/logs/install-probes"
+            logs.mkdir(parents=True)
+            result = smoke_tests(root, logs)
+            self.assertEqual(result["pylint_config_and_fixture"], "passed")
+            self.assertEqual(result["pyright_type_error"], "detected")
+            self.assertEqual(result["pydoclint_signature_error"], "detected")
+            self.assertEqual(result["tach_undeclared_dependency"], "detected")
+
+    def test_installer_probe_resolves_native_binary_in_project_environment(self):
+        self.assertEqual(tool_binary("pydoclint"),
+                         str(Path(sys.executable).parent / "pydoclint"))
+        with self.assertRaises(EryxError) as error:
+            tool_binary("nonexistent-eryx-tool")
+        self.assertEqual(error.exception.code, "MISSING_TOOL")
+
+    def test_repo_lock_refuses_concurrent_operations(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with repo_lock(root):
+                with self.assertRaises(EryxError):
+                    with repo_lock(root):
+                        pass
+
+    def test_safe_target_rejects_path_traversal(self):
+        root = Path("/tmp/example")
+        with self.assertRaises(EryxError):
+            safe_target(root / "../escape", root)
+
     def configured_project(self) -> Path:
         root = Path(self.enterContext(TemporaryDirectory(prefix="eryx-migration-")))
         create_repo(root)

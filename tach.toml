@@ -1,6 +1,6 @@
 # Eryx is an I/O orchestration package; its analyzers, adapters and commands share internals.
 # Contract-owned analyzer modules and their compatibility workers remain within the
-# same reviewed eryx boundary; imports between them need no new cross-module edges.
+# same reviewed eryx boundary; the report-parsing Domain port is the sole exception.
 source_roots = ["src"]
 exclude = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".eryx/**", "**/.eryx/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**", "tests/**", "**/tests/**", "**/test/**"]
 exact = true
@@ -14,11 +14,21 @@ layers = ["Bootstrap", "Interface", "Infrastructure", "UseCase", "Domain"]
 [[modules]]
 path = "eryx"
 layer = "Infrastructure"
+depends_on = ["eryx.report_parsing.report_parsing"]
+cannot_depend_on = []
+
+[[modules]]
+path = "eryx.report_parsing.report_parsing"
+layer = "Domain"
 depends_on = []
 cannot_depend_on = []
 
 [[interfaces]]
 from = ["^eryx$"]
+expose = [".*"]
+
+[[interfaces]]
+from = ["^eryx.report_parsing.report_parsing$"]
 expose = [".*"]
 
 [rules]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 import unittest
 
 ERYX = Path(__file__).resolve().parents[3]
@@ -66,6 +66,16 @@ class TestCapturedCheckJob(unittest.TestCase):
             [(item["symbol"], item["line"]) for item in messages],
             [("unspecified-encoding", 3), ("bad-open-mode", 6)],
         )
+
+    def test_capture_timeout_terminates_the_real_process(self):
+        result = capture([sys.executable, "-c", "import time; time.sleep(10)"],
+                         Path(gettempdir()), timeout=1)
+        self.assertEqual(result["error"], "TOOL_TIMEOUT")
+        self.assertNotEqual(result["exit_code"], 0)
+
+    def test_capture_start_failure_is_reported(self):
+        result = capture(["/definitely/nonexistent-tool"], Path(gettempdir()))
+        self.assertEqual(result["error"], "TOOL_START_FAILED")
 
 
 if __name__ == "__main__":

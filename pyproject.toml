@@ -165,5 +165,9 @@ Interface = ["interfaces", "interface"]
 Bootstrap = ["bootstrap", "composition"]
 
 [[tool.clean-arch.layers]]
+module = "eryx.report_parsing.report_parsing"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
 module = "eryx"
 name = "Infrastructure"

@@ -15,10 +15,11 @@ from typing import Any
 import tomlkit
 
 from eryx._common import (EryxError, atomic_write, capture, emit_event, error_exit,
-                     load_toml, read_json, require_runtime, project_dir, tool_dir, write_json)
+                      load_toml, read_json, require_runtime, project_dir, tool_binary,
+                      tool_dir, write_json)
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx._reports import normalize
-from eryx.init_architecture import sync_clean_arch, tool_binary
+from eryx.init_architecture import sync_clean_arch
 
 
 def probe(argv: list[str], cwd: Path, label: str, log_root: Path) -> dict[str, Any]:

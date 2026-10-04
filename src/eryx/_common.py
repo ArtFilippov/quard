@@ -28,6 +28,25 @@ def tool_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def tool_binary(name: str) -> str:
+    """Find a required executable beside the selected project interpreter.
+
+    Args:
+        name (str): Executable filename.
+
+    Returns:
+        str: Absolute path to the executable.
+
+    Raises:
+        EryxError: The executable is absent from the interpreter environment.
+    """
+    path = Path(sys.executable).parent / name
+    if not path.is_file():
+        raise EryxError("MISSING_TOOL", f"Missing {name} in project environment; "
+                        "run uv sync --locked --group dev.")
+    return str(path)
+
+
 def project_dir(value: str | Path) -> Path:
     root = Path(value).resolve()
     if not root.is_dir() or not (root / "pyproject.toml").is_file():

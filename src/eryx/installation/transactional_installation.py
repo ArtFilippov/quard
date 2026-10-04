@@ -17,6 +17,7 @@ class TransactionalInstallation(Installation):
     """Install pinned tools and leave a failure log after restoring managed files."""
 
     def __init__(self, entry: ModuleType) -> None:
+        super().__init__()
         self._entry: ModuleType = entry
 
     @override

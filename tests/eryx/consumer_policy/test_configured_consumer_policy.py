@@ -11,12 +11,18 @@ sys.path.insert(0, str(ERYX / "src"))
 sys.path.insert(0, str(ERYX / "tests"))
 
 from eryx._common import EryxError, load_toml
+from eryx import _policy
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx.consumer_policy.consumer_policy import ConsumerPolicy
 from offline_fixtures import create_repo, managed_bytes
 
 
 class TestConfiguredConsumerPolicy(unittest.TestCase):
+    def test_clean_arch_mapping_preserves_domain_direction(self):
+        mapping = _policy.clean_config()["layer_map"]
+        self.assertIn("Domain", mapping)
+        self.assertIn("domain", mapping["Domain"])
+
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
         directory = TemporaryDirectory(prefix="eryx-test with spaces-")

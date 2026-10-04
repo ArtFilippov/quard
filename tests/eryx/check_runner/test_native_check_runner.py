@@ -15,7 +15,7 @@ ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 sys.path.insert(0, str(ERYX / "tests"))
 
-from eryx._common import capture, read_json
+from eryx._common import capture, project_dir, read_json
 from eryx.check import display
 from eryx.check_runner.check_runner import CheckRunner
 from eryx.check_runner.native_check_runner import NativeCheckRunner
@@ -23,6 +23,9 @@ from offline_fixtures import create_repo, fake_tools
 
 
 class TestNativeCheckRunner(unittest.TestCase):
+    def test_tool_checkout_is_a_valid_consumer(self):
+        self.assertEqual(project_dir(ERYX), ERYX)
+
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-runner with spaces-")
         self.root = Path(self.temp.name)
