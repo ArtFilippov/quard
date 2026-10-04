@@ -12,13 +12,7 @@ import tomlkit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from eryx import _common, _policy, install
-from test_infrastructure import CATALOG, ERYX, create_repo, native_result
-
-
-def managed_bytes(root):
-    return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*")
-            if path.is_file() and not any(part in {"logs", "cache", "reports", ".venv", ".git"}
-                                          for part in path.relative_to(root).parts)}
+from offline_fixtures import CATALOG, ERYX, create_repo, managed_bytes, native_result
 
 
 class MigrationTests(unittest.TestCase):

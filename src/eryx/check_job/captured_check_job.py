@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, override
 
 from eryx._common import atomic_write
-from eryx._reports import normalize
+from eryx.report_parsing.native_report_parser import NativeReportParser
 from eryx.check_job.check_job import CheckJob
 
 
@@ -27,7 +27,7 @@ class CapturedCheckJob(CheckJob):
             path = run_dir / "raw" / f"{job['name']}.{stream}.log"
             atomic_write(path, str(result.get(stream, "")), root)
             logs[stream] = path.relative_to(root).as_posix()
-        normalized = normalize(job["tool"], result, root, job.get("json_file"))
+        normalized = NativeReportParser(root).normalize(job["tool"], result, job.get("json_file"))
         for entry in normalized["diagnostics"]:
             entry["job"] = job["name"]
             if "profile" in job:

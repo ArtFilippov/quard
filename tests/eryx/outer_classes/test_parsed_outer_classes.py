@@ -18,8 +18,7 @@ from eryx._common import capture
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs, run_checks
 from eryx.outer_classes.parsed_outer_classes import ParsedOuterClasses
-from test_infrastructure import create_repo, native_result
-import test_infrastructure
+from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestParsedOuterClasses(unittest.TestCase):
@@ -108,7 +107,7 @@ if True:
         self.put("src/demo/domain/api.py", "class First: pass\nclass Second: pass\n")
         self.put("src/demo/domain/api.pyi", "class Stub: ...\n")
         self.put("tests/test_value.py", "class TestOne: pass\nclass TestTwo: pass\n")
-        fake, _ = test_infrastructure.RunnerTests().fake_tools({"pydoclint": {
+        fake, _ = fake_tools({"pydoclint": {
             "stderr": "tests/test_value.py:1: DOC101: Native issue\n", "code": 1}})
 
         def mixed(argv, cwd, timeout):

@@ -456,7 +456,7 @@ class Equivalent(Base):
     def test_agreement_real_runner_report_keeps_independent_diagnostics(self):
         from eryx._common import capture
         from eryx.check import run_checks
-        from test_infrastructure import create_repo, native_result, RunnerTests
+        from offline_fixtures import create_repo, fake_tools, native_result
 
         with TemporaryDirectory(prefix="eryx-agreement-report-") as directory:
             root = Path(directory)
@@ -471,7 +471,7 @@ class Implementation(Contract):
     def run(self): pass
 Implementation().run()
 ''', encoding="utf-8")
-            fake, _ = RunnerTests().fake_tools()
+            fake, _ = fake_tools()
 
             def mixed(argv, cwd, timeout):
                 if str(ERYX / "_encapsulated_only_worker.py") in argv:
@@ -685,7 +685,7 @@ class Owner:
     def test_property_diagnostics_share_full_report_with_independent_violations(self):
         from eryx._common import capture
         from eryx.check import run_checks
-        from test_infrastructure import create_repo, RunnerTests
+        from offline_fixtures import create_repo, fake_tools
 
         with TemporaryDirectory(prefix="eryx-property-report-") as directory:
             root = Path(directory)
@@ -698,7 +698,7 @@ class Service:
     def item(self) -> int: return 1
 Service().item
 ''', encoding="utf-8")
-            fake, _ = RunnerTests().fake_tools()
+            fake, _ = fake_tools()
 
             def mixed(argv, cwd, timeout):
                 if any(str(ERYX / name) in argv for name in ("_encapsulated_only_worker.py",
@@ -1973,7 +1973,7 @@ Service().run()
     def test_full_runner_retains_other_diagnostics_and_validates_report_schema(self):
         from eryx._common import capture
         from eryx.check import run_checks
-        from test_infrastructure import create_repo, native_result, RunnerTests
+        from offline_fixtures import create_repo, fake_tools, native_result
 
         with TemporaryDirectory(prefix="eryx-restricted-runner-") as directory:
             root = Path(directory)
@@ -1985,7 +1985,7 @@ class Service(object):
     def run(this): pass
 Service().run()
 ''', encoding="utf-8")
-            fake, _ = RunnerTests().fake_tools()
+            fake, _ = fake_tools()
 
             def mixed(argv, cwd, timeout):
                 if str(ERYX / "_encapsulated_only_worker.py") in argv:

@@ -16,7 +16,7 @@ sys.path.insert(0, str(ERYX / "tests"))
 from eryx._common import capture
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs, run_checks
-from test_infrastructure import create_repo, native_result
+from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestConstructorChecker(unittest.TestCase):
@@ -542,14 +542,12 @@ class Model:
                          "CONSTRUCTOR_PURITY_EXECUTION_ERROR")
 
     def test_old_install_defaults_off_and_invalid_opt_in_keeps_other_diagnostics(self):
-        from test_infrastructure import RunnerTests
-
         with TemporaryDirectory(prefix="eryx-constructor-config-") as directory:
             root = Path(directory)
             create_repo(root)
             setting = root / ".eryx/checks.toml"
             setting.unlink()
-            fake, seen = RunnerTests().fake_tools({"pydoclint": {
+            fake, seen = fake_tools({"pydoclint": {
                 "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
             report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
             self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
@@ -578,8 +576,6 @@ class Model:
                     self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
 
     def test_project_report_keeps_full_scope_and_native_diagnostics(self):
-        from test_infrastructure import RunnerTests
-
         with TemporaryDirectory(prefix="eryx-constructor-runner-") as directory:
             root = Path(directory)
             create_repo(root)
@@ -594,7 +590,7 @@ class Model:
                 encoding="utf-8")
             (root / "tests/test_value.py").write_text(
                 'class B:\n    def __init__(self):\n        unknown()\n', encoding="utf-8")
-            fake, _ = RunnerTests().fake_tools()
+            fake, _ = fake_tools()
 
             def mixed(argv, cwd, timeout):
                 if str(ERYX / "_constructor_purity_worker.py") in argv:

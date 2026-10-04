@@ -18,32 +18,8 @@ from unittest.mock import patch
 
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX / "src"))
-from eryx import _common, _policy, _reports, check, init_architecture, install as installer
-
-CATALOG = {"message_ids": ["R0915", "R1260", "W9001", "W9003", "W9101", "W9102", "W9201", "W9301", "W9501"],
-           "plugins": ["pylint.extensions.mccabe", "pylint.extensions.broad_try_clause", "clean_architecture_linter"]}
-
-
-def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None:
-    shutil.copytree(ERYX / "defaults", root / ".eryx")
-    (root / "src/demo/domain").mkdir(parents=True)
-    (root / "src/demo/__init__.py").write_text("", encoding="utf-8")
-    (root / "src/demo/domain/api.py").write_text("def value() -> int:\n    return 1\n", encoding="utf-8")
-    (root / "tests").mkdir()
-    (root / "tests/test_value.py").write_text("def test_value() -> None:\n    assert 1 == 1\n", encoding="utf-8")
-    (root / "pyproject.toml").write_text('[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=3.12,<3.15"\ndependencies = []\n\n[tool.unrelated]\nvalue = "retain"\n', encoding="utf-8")
-    _common.write_json(root / ".eryx/pylint-catalog.json", CATALOG)
-    if configured:
-        _policy.configure(root, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
-    if ready:
-        draft, _ = init_architecture.draft_configuration(root)
-        import tomlkit
-        _common.atomic_write(root / "tach.toml", tomlkit.dumps(draft))
-        _common.write_json(root / ".eryx/architecture.ready.json", {"accepted": True})
-
-
-def native_result(argv, *, stdout="", stderr="", code=0, error=None):
-    return {"argv": argv, "stdout": stdout, "stderr": stderr, "exit_code": code, "error": error, "duration_seconds": 0.01}
+from eryx import _common, _policy, check, init_architecture, install as installer
+from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
 
 
 class RepositoryTest(unittest.TestCase):
@@ -246,136 +222,17 @@ class RepositoryTest(unittest.TestCase):
 
 
 
-class ParserTests(unittest.TestCase):
-    def setUp(self):
-        self.root = Path("/tmp/demo-repo")
-
-    def test_pylint_json2(self):
-        text = json.dumps({"messages": [{"messageId": "C0301", "message": "Line too long", "path": "/tmp/demo-repo/src/demo/a.py", "line": 4, "column": 0, "type": "convention", "symbol": "line-too-long"}]})
-        items, err = _reports.parse_pylint(text, self.root)
-        self.assertIsNone(err)
-        self.assertEqual(items[0]["column"], 1)
-        self.assertEqual(items[0]["path"], "src/demo/a.py")
-
-    def test_pylint_bad_plugin_is_infra(self):
-        text = json.dumps({"messages": [{"messageId": "E0013", "message": "Bad plugin", "path": "config", "line": 1, "column": 0}]})
-        result = _reports.normalize("pylint", native_result([], stdout=text, code=2), self.root)
-        self.assertEqual(result["status"], "error")
-
-    def test_pyright_one_based_and_banner(self):
-        text = "optional banner\n" + json.dumps({"generalDiagnostics": [{"file": "/tmp/demo-repo/src/a.py", "message": "Invalid type", "severity": "error", "rule": "reportReturnType", "range": {"start": {"line": 0, "character": 3}}}]})
-        result = _reports.parse_pyright(text, self.root)[0]
-        self.assertEqual((result["line"], result["column"]), (1, 4))
-
-    def test_pydoclint_stderr(self):
-        text = "\x1b[31msrc/demo/a.py:8: DOC101: Missing args\x1b[0m\n"
-        result = _reports.normalize("pydoclint", native_result([], stderr=text, code=1), self.root)
-        self.assertEqual(result["status"], "violations")
-        self.assertEqual(result["diagnostics"][0]["rule"], "DOC101")
-
-    def test_tach_positioned(self):
-        result = _reports.normalize("tach", native_result([], stdout="❌ src/demo/a.py[L8]: Cannot import 'demo.b'\n", code=1), self.root)
-        self.assertEqual(result["status"], "violations")
-        item = result["diagnostics"][0]
-        self.assertEqual(item["path"], "src/demo/a.py")
-        self.assertEqual(item["line"], 8)
-        self.assertTrue(item["rule_is_adapter_category"])
-
-    def test_unparsed_failure_never_passes(self):
-        result = _reports.normalize("tach", native_result([], stdout="new unknown error format", code=1), self.root)
-        self.assertEqual(result["status"], "error")
-        self.assertTrue(result["diagnostics"][-1]["is_infrastructure_error"])
-
-    def test_timeout_is_error(self):
-        result = _reports.normalize("pyright", native_result([], error="TOOL_TIMEOUT", code=-15), self.root)
-        self.assertEqual(result["error"], "TOOL_TIMEOUT")
-
-    def test_duplicate_same_native_only(self):
-        first = _reports.diagnostic("pylint", "W0611", "Unused", path="a.py", line=3)
-        second = _reports.diagnostic("pyright", "reportUnusedImport", "Unused", path="a.py", line=3)
-        result = _reports.sorted_diagnostics([second, first, dict(first)])
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["tool"], "pylint")
-
-    def test_config_warning_zero_exit_is_error(self):
-        result = _reports.normalize("pyright", native_result([], stdout='{"generalDiagnostics": []}', stderr='Config contains unrecognized setting "bad".'), self.root)
-        self.assertEqual(result["status"], "error")
-
-    def test_tach_native_adapter_exact_unused(self):
-        payload = {"eryx_tach_adapter": 1, "execution_error": None, "diagnostics": [{"rule": "unused-dependency", "message": "Unused declaration", "path": "tach.toml", "line": None, "severity": "error", "rule_is_adapter_category": True}]}
-        result = _reports.normalize("tach", native_result([], stdout=json.dumps(payload), code=1), self.root)
-        self.assertEqual(result["status"], "violations")
-        self.assertEqual(result["diagnostics"][0]["rule"], "unused-dependency")
-
-    def test_pyright_message_about_config_not_execution_error(self):
-        payload = {"generalDiagnostics": [{"file": "src/a.py", "message": "Function config returns error incorrectly", "severity": "error", "rule": "reportReturnType", "range": {"start": {"line": 1, "character": 0}}}]}
-        result = _reports.normalize("pyright", native_result([], stdout=json.dumps(payload), code=1), self.root)
-        self.assertEqual(result["status"], "violations")
-
-
-
 class RunnerTests(unittest.TestCase):
     def setUp(self):
-        RepositoryTest.setUp(self)
+        self.tmp = tempfile.TemporaryDirectory(prefix="eryx-test with spaces-")
+        self.root = Path(self.tmp.name)
+        create_repo(self.root)
 
     def tearDown(self):
-        RepositoryTest.tearDown(self)
+        self.tmp.cleanup()
 
     def fake_tools(self, failures=None):
-        failures = failures or {}
-        seen = []
-        def fake(argv, cwd, timeout):
-            if str(ERYX / "_lcom4_worker.py") in argv:
-                name = "lcom4"
-            elif str(ERYX / "_method_decorators_worker.py") in argv:
-                name = "method-decorators"
-            elif str(ERYX / "_instance_fields_worker.py") in argv:
-                name = "instance-fields"
-            elif str(ERYX / "_class_contracts_worker.py") in argv:
-                name = "class-contracts"
-            elif str(ERYX / "_contract_folders_worker.py") in argv:
-                name = "contract-folders"
-            elif str(ERYX / "_test_placement_worker.py") in argv:
-                name = "test-placement"
-            elif str(ERYX / "_outer_classes_worker.py") in argv:
-                name = "outer-classes"
-            elif str(ERYX / "_encapsulated_only_worker.py") in argv:
-                name = "encapsulated-only"
-            elif str(ERYX / "_constructor_purity_worker.py") in argv:
-                name = "constructor-purity"
-            elif "--manifest" in argv:
-                name = "pylint-tests" if "tests" in argv[argv.index("--manifest") + 1] else "pylint-production"
-                output = Path(argv[argv.index("--output") + 1])
-                _common.write_json(output, {"messages": []})
-            elif "pyright" in argv:
-                name = "pyright"
-            elif Path(argv[0]).name == "pydoclint":
-                name = "pydoclint"
-            else:
-                name = "tach-external" if "check-external" in argv else "tach"
-            seen.append(name)
-            if name in failures:
-                return native_result(argv, **failures[name])
-            return native_result(argv, stdout=('{"generalDiagnostics": []}' if name == "pyright" else
-                                  '{"eryx_lcom4_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                  if name == "lcom4" else
-                                   '{"eryx_method_decorators_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                   if name == "method-decorators" else
-                                   '{"eryx_instance_fields_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                   if name == "instance-fields" else
-                                    '{"eryx_class_contracts_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                    if name == "class-contracts" else
-                                    '{"eryx_contract_folders_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                    if name == "contract-folders" else
-                                     '{"eryx_test_placement_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                     if name == "test-placement" else
-                                     '{"eryx_outer_classes_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                     if name == "outer-classes" else
-                                     '{"eryx_encapsulated_only_adapter": 1, "diagnostics": [], "execution_error": null, "declarations": [], "classes": [], "effective_targets": {}}'
-                                     if name == "encapsulated-only" else
-                                     '{"eryx_constructor_purity_adapter": 1, "diagnostics": [], "execution_error": null}'
-                                     if name == "constructor-purity" else ""))
-        return fake, seen
+        return fake_tools(failures)
 
     def test_all_tools_pass_mocked(self):
         fake, seen = self.fake_tools()
