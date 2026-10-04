@@ -21,7 +21,7 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
     for group in ("contract_analysis", "method_analysis", "cohesion_analysis",
                   "field_ownership", "constructor_analysis", "restricted_calls",
                   "check_job", "clean_architecture_layers", "installation", "outer_classes",
-                  "architecture_compatibility"):
+                  "architecture_compatibility", "afk_issue_runner"):
         directory = root / group
         suite.addTests(loader.discover(str(directory), pattern="test*.py",
                                        top_level_dir=str(directory)))

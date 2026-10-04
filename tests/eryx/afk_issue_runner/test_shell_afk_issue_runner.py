@@ -5,12 +5,18 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from typing import Any, cast
 import unittest
 
+ERYX = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ERYX / "src"))
 
-SCRIPT = Path(__file__).resolve().parents[1] / "ralph.sh"
+from eryx.afk_issue_runner.shell_afk_issue_runner import ShellAFKIssueRunner
+
+
+SCRIPT = ERYX / "ralph.sh"
 
 GIT = '''#!/usr/bin/env python3
 import json, os, sys
@@ -95,7 +101,8 @@ s.setdefault("model_flags", []).append({"model": a[a.index("--model") + 1] if "-
     "variant": a[a.index("--variant") + 1] if "--variant" in a else None})
 s["prompts"].append(prompt)
 if prompt == "Close the issue, commit all changes and push":
-    next(issue for issue in s["issues"] if issue["number"] == 2)["state"] = "closed"
+    if not s.get("close_fails"):
+        next(issue for issue in s["issues"] if issue["number"] == 2)["state"] = "closed"
     if s.get("push_fails"):
         path.write_text(json.dumps(s))
         raise SystemExit(1)
@@ -127,7 +134,7 @@ def issue(number: int, *, state: str = "open", assignees: list[dict[str, str]] |
             "body": body, "issue_dependencies_summary": {"blocked_by": blocked}}
 
 
-class RalphTests(unittest.TestCase):
+class TestShellAFKIssueRunner(unittest.TestCase):
     def run_runner(
         self, args: list[str] | None = None, **overrides: bool
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
@@ -152,8 +159,7 @@ class RalphTests(unittest.TestCase):
             if args is None:
                 args = ["HTTP_PROXY=http://proxy.example:8080",
                         "HTTPS_PROXY=http://secure.example:8443"]
-            result = subprocess.run(["bash", str(SCRIPT), *args], cwd=root, env=env,
-                                    text=True, capture_output=True, timeout=30, check=False)
+            result = ShellAFKIssueRunner(SCRIPT).run(args, cwd=root, env=env)
             return result, cast(dict[str, Any], json.loads(state_file.read_text()))
 
     def test_deterministic_issue_selection_session_and_completion(self):
@@ -217,6 +223,15 @@ class RalphTests(unittest.TestCase):
         self.assertEqual(len(state["prompts"]), 2)
         self.assertIn("ses_2", result.stderr)
         self.assertEqual(state["head"], "old-commit")
+
+    def test_unclosed_issue_is_rejected_after_push(self):
+        result, state = self.run_runner(close_fails=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(state["prompts"]), 2)
+        self.assertEqual(state["head"], "new-commit")
+        self.assertEqual(next(item for item in state["issues"] if item["number"] == 2)["state"],
+                         "open")
+        self.assertIn("issue #2 не закрыт", result.stderr)
 
     def test_dirty_checkout_is_rejected_before_agent_runs(self):
         result, state = self.run_runner(dirty=True)
