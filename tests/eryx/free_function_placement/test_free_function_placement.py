@@ -23,6 +23,31 @@ from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestFreeFunctionPlacement(unittest.TestCase):
+    def test_shared_runtime_and_policy_compatibility_and_placement(self):
+        paths = [f"src/eryx/{name}.py" for name in
+                 ("_common", "runtime_error", "runtime_utils", "_policy", "policy_utils",
+                  "consumer_policy/consumer_policy", "consumer_policy/configured_consumer_policy")]
+        self.assertEqual(placement(ERYX, paths), ([], None))
+        manifest = self.root / "shared-functions.json"
+        manifest.write_text(json.dumps(paths), encoding="utf-8")
+        result = capture([sys.executable, str(ERYX / "_free_function_placement_worker.py"),
+                          "--manifest", str(manifest)], ERYX, timeout=30)
+        self.assertEqual((result["exit_code"], result["error"]), (0, None))
+        self.assertEqual(json.loads(result["stdout"])["diagnostics"], [])
+
+        from eryx import _common, _policy, policy_utils, runtime_utils
+        from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
+        self.assertIs(_common.capture, runtime_utils.capture)
+        self.assertIs(_common.EryxError, runtime_utils.EryxError)
+        self.assertIs(_policy.configure, policy_utils.configure)
+        self.assertIs(_policy.discover_files, policy_utils.discover_files)
+        self.assertIs(_policy.write_json, _common.write_json)
+        self.assertEqual(_common.tool_dir(), ERYX)
+        self.assertEqual(_common.project_dir(self.root), self.root)
+        self.assertEqual(ConfiguredConsumerPolicy(self.root).scope(),
+                         _policy.read_scope(self.root))
+        self.assertEqual(ConfiguredConsumerPolicy(self.root).limit_drift(), [])
+
     def test_command_and_worker_entry_points_have_class_free_utilities(self):
         entry_points = ("check", "apply", "install", "init_architecture", "_audit",
                         "_pylint_worker", "_tach_worker", "_instance_fields_worker",
