@@ -12,9 +12,48 @@ sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs
+from eryx._class_contracts_worker import Contracts as LegacyContracts
+from eryx._contract_folders_worker import FolderOwnership as LegacyFolderOwnership
+from eryx._lcom4_worker import Classes as LegacyClasses
+from eryx._lcom4_worker import Declarations as LegacyCohesionDeclarations
+from eryx._lcom4_worker import MethodReferences as LegacyMethodReferences
+from eryx._method_decorators_worker import Declarations as LegacyMethodDeclarations
+from eryx._test_placement_worker import TestPlacement as LegacyTestPlacement
+from eryx.contract_analysis.contracts import Contracts
+from eryx.contract_analysis.folder_ownership import FolderOwnership
+from eryx.contract_analysis.test_placement import TestPlacement
+from eryx.cohesion_analysis.classes import Classes
+from eryx.cohesion_analysis.declarations import Declarations as CohesionDeclarations
+from eryx.cohesion_references.method_references import MethodReferences
+from eryx.method_analysis.declarations import Declarations
 
 
 class ContractFolderTests(unittest.TestCase):
+    def test_migrated_production_classes_and_compatibility_imports(self):
+        self.assertEqual(self.run_worker("class-contracts")[0]["exit_code"], 0)
+        self.assertIs(LegacyContracts, Contracts)
+        self.assertIs(LegacyFolderOwnership, FolderOwnership)
+        self.assertIs(LegacyTestPlacement, TestPlacement)
+        self.assertIs(LegacyClasses, Classes)
+        self.assertIs(LegacyCohesionDeclarations, CohesionDeclarations)
+        self.assertIs(LegacyMethodReferences, MethodReferences)
+        self.assertIs(LegacyMethodDeclarations, Declarations)
+
+        from eryx._class_contracts_worker import analyze as contracts_analyze
+        from eryx._contract_folders_worker import analyze as folders_analyze
+        from eryx._outer_classes_worker import analyze as outer_analyze
+
+        paths = sorted(str(path.relative_to(ERYX)) for folder in (
+            "contract_analysis", "method_analysis", "cohesion_analysis", "cohesion_references")
+            for path in (ERYX / "src/eryx" / folder).glob("*.py"))
+        paths.extend(f"src/eryx/{worker}.py" for worker in (
+            "_class_contracts_worker", "_contract_folders_worker", "_lcom4_worker",
+            "_method_decorators_worker", "_test_placement_worker"))
+        for analyze in (contracts_analyze, folders_analyze, outer_analyze):
+            diagnostics, error = analyze(ERYX, paths)
+            self.assertIsNone(error)
+            self.assertEqual([], diagnostics)
+
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-folders-")
         self.root = Path(self.temp.name)
