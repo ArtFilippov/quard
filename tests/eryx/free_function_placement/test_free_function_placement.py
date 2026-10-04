@@ -18,10 +18,47 @@ sys.path.insert(0, str(ERYX / "tests"))
 from eryx._common import capture
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs, run_checks
+from eryx.free_function_placement_utils import analyze as placement
 from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestFreeFunctionPlacement(unittest.TestCase):
+    def test_command_and_worker_entry_points_have_class_free_utilities(self):
+        entry_points = ("check", "apply", "install", "init_architecture", "_audit",
+                        "_pylint_worker", "_tach_worker", "_instance_fields_worker",
+                        "_outer_classes_worker", "_encapsulated_only_worker")
+        utilities = ("check_utils", "apply_utils", "install_utils",
+                     "init_architecture_utils", "audit_utils", "pylint_worker_utils",
+                     "tach_worker_utils", "instance_fields_worker_utils",
+                     "outer_classes_worker_utils", "encapsulated_only_worker_utils")
+        paths = [f"src/eryx/{name}.py" for name in (*entry_points, *utilities)]
+        self.assertEqual(placement(ERYX, paths), ([], None))
+        manifest = self.root / "entry-points.json"
+        manifest.write_text(json.dumps(paths), encoding="utf-8")
+        placement_result = capture(
+            [sys.executable, str(ERYX / "_free_function_placement_worker.py"),
+             "--manifest", str(manifest)], ERYX, timeout=30)
+        self.assertEqual((placement_result["exit_code"], placement_result["error"]),
+                         (0, None))
+        self.assertEqual(json.loads(placement_result["stdout"])["diagnostics"], [])
+
+        from eryx import check, check_utils, install, install_utils
+        from eryx import _outer_classes_worker, outer_classes_worker_utils
+        self.assertIs(check.main, check_utils.main)
+        self.assertIs(install.install, install_utils.install)
+        self.assertIs(_outer_classes_worker.analyze, outer_classes_worker_utils.analyze)
+
+        self.put("src/demo/two.py", "class First: pass\nclass Second: pass\n")
+        worker_manifest = self.root / "paths.json"
+        worker_manifest.write_text('["src/demo/two.py"]', encoding="utf-8")
+        result = capture([sys.executable, str(ERYX / "_outer_classes_worker.py"),
+                          "--manifest", str(worker_manifest)], self.root, timeout=30)
+        self.assertEqual((result["exit_code"], result["error"]), (1, None))
+        report = json.loads(result["stdout"])
+        self.assertEqual(report["execution_error"], None)
+        self.assertEqual({item["rule"] for item in report["diagnostics"]},
+                         {"MULTIPLE_OUTER_CLASSES"})
+
     @override
     def setUp(self) -> None:
         self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-free-functions-")
