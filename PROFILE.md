@@ -382,13 +382,19 @@ Standalone calls are allowed only for `super().__init__(...)`,
 `Base.__init__(receiver, ...)`. Shadowed `super` and incorrectly bound receivers
 do not qualify.
 
-Calls inside permitted expressions must directly name a uniquely declared
-module-level project class, an unshadowed builtin type, or one of the unshadowed
-validation builtins `isinstance`, `issubclass`, `hasattr` and `callable`.
-Their eager arguments are checked recursively. Other calls, including project
-helpers, unknown names and bare `super()`, are rejected. This initial syntactic
-slice does not prove aliases, external call provenance or decorator application;
-it makes no claim about arbitrary runtime side effects of permitted operations.
+Calls inside permitted expressions may target a statically established project
+class, builtin type, or validation builtin (`isinstance`, `issubclass`, `hasattr`,
+`callable`). Simple aliases, explicit imports, customer re-exports and if/match
+branch joins preserve origins; **every** possible target must qualify. A project
+helper/factory or unknown alternative disqualifies the call. Shadowed builtin
+names, including `super`, have no inherited privilege. Explicit external imports
+and receivers with exact external-type annotations establish an opaque call
+boundary; unknown imports and untyped receivers do not. Calls through external
+modules and imported symbols are opaque regardless of their unknown callable kind.
+Eager arguments still follow the same whitelist. Ordinary non-exempt builtin
+functions remain denied. No external source, stub or runtime code is consulted;
+these syntactic origins do not prove runtime purity or decorator behavior. See
+[ADR 0004](docs/adr/0004-constructor-external-provenance.md).
 Each forbidden node has its own one-based location and `CONSTRUCTOR_PURITY`
 diagnostic. Parse/read/worker failures are infrastructure errors (exit 2),
 while violations exit 1; raw output is archived and other jobs remain independent.

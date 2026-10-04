@@ -170,6 +170,164 @@ class Another:
         result, _, _ = self.run_worker()
         self.assertEqual([d["line"] for d in result["diagnostics"]], [4, 5, 5, 6, 7, 8, 13, 17])
 
+    def test_imports_aliases_annotations_and_branch_joins(self):
+        self.put("src/demo/model.py", '''\
+class Model:
+    def __init__(self):
+        self.value = 1
+
+class Outer:
+    class Nested:
+        def __init__(self):
+            self.value = 1
+
+def factory():
+    return Model()
+''')
+        self.put("src/demo/public.py", '''\
+from .model import Model as Exported
+from .model import factory
+''')
+        self.put("src/demo/usage.py", '''\
+import builtins as b
+import pathlib as external_module
+from external_library import Client as External, service
+from .public import Exported, factory
+from .model import Outer
+from . import model
+
+Alias = Exported
+Scalar = b.int
+Unknown = model.factory
+
+class Owner:
+    def __init__(self, client: External, other):
+        self.a = Alias()
+        self.nested = Outer.Nested()
+        self.b = model.Model()
+        self.c = Scalar(1)
+        self.d = external_module.Path("x")
+        self.e = service("x")
+        self.f = client.request(1)
+        self.client: External = client
+        self.g = self.client.request(2)
+        service_alias = service
+        self.h = service_alias(3)
+        local = Alias
+        self.i = local()
+        if other:
+            choice = Alias
+        else:
+            choice = service
+        self.j = choice()
+        if other:
+            mixed = Alias
+        else:
+            mixed = factory
+        self.k = mixed()
+        if other:
+            maybe = External
+        self.l = maybe()
+        self.m = factory()
+        self.n = Unknown()
+        self.o = other.request()
+        self.p = external_module()
+        self.q = b.print("no")
+        self.r = missing.request()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([d["line"] for d in result["diagnostics"]],
+                         [36, 39, 40, 41, 42, 43, 44, 45])
+
+    def test_shadowed_aliases_and_external_receiver_proof(self):
+        self.put("src/checks.py", '''\
+from external_library import Client
+from builtins import int as integer, super as parent
+class Base:
+    def __init__(self):
+        self.x = 1
+class Child(Base):
+    def __init__(self, client: Client, unknown):
+        parent().__init__()
+        self.ok = integer(1)
+        peer: Client = client
+        self.ok = peer.run()
+        if unknown:
+            peer = unknown
+        self.no = peer.run()
+        integer = unknown
+        self.no = integer(2)
+        parent = unknown
+        parent().__init__()
+        self.no = open("x")
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([d["line"] for d in result["diagnostics"]],
+                         [8, 8, 9, 14, 16, 18, 18, 19])
+
+    def test_external_calls_check_arguments_and_unresolved_imports_stay_unknown(self):
+        self.put("src/app/known.py", 'def helper():\n    return 1\n')
+        self.put("src/app/public.py", 'from .known import helper as exported\n')
+        self.put("src/app/usage.py", '''\
+import outside
+from outside import operation, Base
+from .public import exported
+from .unknown import mystery
+class Child(Base):
+    def __init__(self, dependency: outside.Client, uncertain):
+        Base.__init__(self)
+        self.valid = dependency.method()
+        self.a = operation(exported())
+        self.b = operation(uncertain())
+        self.c = mystery()
+        self.d = uncertain.method()
+        self.e = outside.Client().method()
+''')
+        result, _, _ = self.run_worker()
+        # External callable kind is opaque; nested eager expressions are not.
+        self.assertEqual([d["line"] for d in result["diagnostics"]],
+                         [9, 10, 11, 12, 13])
+
+    def test_rebound_class_name_cannot_prove_explicit_super(self):
+        self.put("src/rebound.py", '''\
+class Parent:
+    def __init__(self):
+        self.x = 1
+class Child(Parent):
+    def __init__(self):
+        super(Child, self).__init__()
+Child = None
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([d["line"] for d in result["diagnostics"]], [6, 6])
+
+    def test_exhaustive_match_joins_all_constructor_targets(self):
+        self.put("src/matching.py", '''\
+from external_lib import make
+class Value:
+    def __init__(self):
+        self.x = 1
+def helper():
+    return Value()
+class User:
+    def __init__(self, option):
+        match option:
+            case 1:
+                target = Value
+            case _:
+                target = make
+        self.good = target()
+        match option:
+            case 1:
+                target = helper
+            case _:
+                target = Value
+        self.bad = target()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([d["line"] for d in result["diagnostics"]], [20])
+
     def test_nested_class_constructor_is_checked_even_when_declaration_fails(self):
         self.put("src/local.py", '''\
 class Outer:
