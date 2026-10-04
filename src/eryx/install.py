@@ -13,9 +13,11 @@ import tomlkit
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 
 from eryx._common import (EryxError, atomic_write, capture, emit_event, error_exit,
-                      load_toml, read_json, repo_lock, require_runtime, project_dir,
-                      safe_target, tool_dir, write_json)
+                       load_toml, read_json, repo_lock, require_runtime, project_dir,
+                       safe_target, tool_dir, write_json)
 from eryx.installation.transactional_installation import TransactionalInstallation
+
+__all__ = ["capture", "require_runtime", "write_json"]
 
 STATE_FILES = ["readability.toml", "scope.toml", "checks.toml", "architecture.ready.json",
                "pylint-catalog.json", "pylint-tests.toml", "policy-notes.json", "installation.json"]

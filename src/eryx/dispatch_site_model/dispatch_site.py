@@ -33,7 +33,7 @@ class DispatchSite(DispatchSiteModel):
 
         Args:
             permitted (Callable[[ast.expr], bool]): Whether the receiver is privileged.
-            intermediate (bool): Whether this is a produced intermediate receiver.
+            intermediate (bool, default=False): Whether this is a produced intermediate receiver.
 
         Returns:
             tuple[tuple[str, int, int], ...]: Targets and one-based positions.

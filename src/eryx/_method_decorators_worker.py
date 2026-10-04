@@ -1,7 +1,10 @@
 """Compatibility entry point for method-binding analysis."""
 from eryx.method_analysis.declarations import (BUILTINS, FUNCTIONS, IMPLICIT_CLASS_HOOKS,
-                                               METHODS, Declarations, analyze, assigned,
-                                               function_locals, main, needs_receiver)
+                                                METHODS, Declarations, analyze, assigned,
+                                                function_locals, main, needs_receiver)
+
+__all__ = ["BUILTINS", "FUNCTIONS", "IMPLICIT_CLASS_HOOKS", "METHODS", "Declarations",
+           "analyze", "assigned", "function_locals", "main", "needs_receiver"]
 
 
 if __name__ == "__main__":
