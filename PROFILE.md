@@ -125,8 +125,9 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
 * **Free-function placement**: `FREE_FUNCTION_PLACEMENT` requires each free sync or
   async function in a discovered production or test `.py` or `.pyi` file to live in
   a class-free module named `<group_name>_utils.py` (or its `.pyi` companion), with
-  a nonempty group name. Related functions can share a module. Declarations in
-  module-scope conditional suites count; methods and functions nested inside another
+  a nonempty group name describing their shared purpose. Related functions can
+  share a module; source and stub companions are each checked on their own.
+  Declarations in module-scope conditional suites count; methods and functions nested inside another
   function do not. `UTILITIES_MODULE_CLASS` reports each class declared anywhere in
   a utilities module, including nested classes. If a utilities module declares a
   class, its free functions also fail placement. This job retains full discovered

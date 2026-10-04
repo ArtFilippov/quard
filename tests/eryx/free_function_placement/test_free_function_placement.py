@@ -21,6 +21,7 @@ from eryx._policy import discover_files, read_scope
 from eryx import (_markers, _method_decorators_worker, _restricted_agreement,
                   marker_utils, method_declaration_utils, restriction_agreement_utils)
 from eryx.check import execute_job, make_jobs, run_checks
+from eryx.check_runner import native_check_runner, runner_utils
 from eryx.free_function_placement_utils import analyze as placement
 from eryx.marker_analysis import marker_index
 from eryx.method_analysis import declarations
@@ -44,6 +45,21 @@ class TestFreeFunctionPlacement(unittest.TestCase):
                           "--manifest", str(manifest)], ERYX, timeout=30)
         self.assertEqual((result["exit_code"], result["error"]), (0, None))
         self.assertEqual(json.loads(result["stdout"])["diagnostics"], [])
+
+    def test_checkout_placement_worker_passes_entire_discovered_scope(self):
+        files = discover_files(ERYX, read_scope(ERYX))
+        paths = sorted(files["production"] + files["tests"])
+        self.assertIn("src/eryx/check_runner/native_check_runner.py", paths)
+        self.assertIn("src/eryx/check_runner/runner_utils.py", paths)
+        self.assertEqual(placement(ERYX, paths), ([], None))
+        manifest = self.root / "checkout-scope.json"
+        manifest.write_text(json.dumps(paths), encoding="utf-8")
+        result = capture([sys.executable, str(ERYX / "_free_function_placement_worker.py"),
+                          "--manifest", str(manifest)], ERYX, timeout=30)
+        self.assertEqual((result["exit_code"], result["error"]), (0, None))
+        self.assertEqual(json.loads(result["stdout"])["diagnostics"], [])
+        self.assertIs(native_check_runner.make_jobs, runner_utils.make_jobs)
+        self.assertIs(native_check_runner.execute_job, runner_utils.execute_job)
 
     def test_discovery_hook_and_fixture_imports_survive_migration(self):
         import discovery_utils
@@ -254,8 +270,36 @@ class TestFreeFunctionPlacement(unittest.TestCase):
         self.assertEqual((result["status"], result["exit_code"], result["error"]),
                          ("error", 2, "FREE_FUNCTION_PLACEMENT_EXECUTION_ERROR"))
 
+    def test_full_report_passes_with_real_placement_worker_and_discovered_scope(self):
+        self.put("src/demo/example_utils.py", "def helper(): pass\n")
+        self.put("src/demo/example_utils.pyi", "def helper() -> None: ...\n")
+        self.put("tests/test_example_utils.py", "async def helper(): pass\n")
+        self.put("src/demo/generated/ignored.py", "def misplaced(): pass\n")
+        fake, _ = fake_tools()
+
+        def mixed(argv, cwd, timeout):
+            if str(ERYX / "_free_function_placement_worker.py") in argv:
+                return capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        report = run_checks(self.root, lcom_files="", capture_fn=mixed,
+                            versions_fn=lambda _: ({}, []))
+        validate(report, json.loads((ERYX / "report.schema.json").read_text(encoding="utf-8")))
+        self.assertEqual((report["status"], report["exit_code"], report["diagnostics"]),
+                         ("passed", 0, []))
+        job = next(t for t in report["tools"] if t["name"] == "free-function-placement")
+        self.assertEqual((job["status"], job["exit_code"]), ("passed", 0))
+        self.assertEqual(json.loads((self.root / job["raw_output"]["stdout"]).read_text(
+            encoding="utf-8"))["diagnostics"], [])
+        manifest = (self.root / report["report_path"]).parent / "free-function-placement-files.json"
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8")),
+                         sorted(report["coverage"]["production"] + report["coverage"]["tests"]))
+        self.assertNotIn("src/demo/generated/ignored.py", manifest.read_text(encoding="utf-8"))
+
     def test_full_check_retains_independent_job_and_rejects_bad_worker_output(self):
         self.put("src/demo/bad.py", "def misplaced(): pass\n")
+        self.put("src/demo/bad.pyi", "def stub() -> None: ...\n")
+        self.put("tests/test_bad.py", "async def helper(): pass\n")
         fake, _ = fake_tools({"pydoclint": {
             "stderr": "src/demo/bad.py:1: DOC101: Native issue\n", "code": 1}})
 
@@ -269,12 +313,19 @@ class TestFreeFunctionPlacement(unittest.TestCase):
                 report = run_checks(self.root, lcom_files=selection, capture_fn=mixed,
                                     versions_fn=lambda _: ({}, []))
                 validate(report, json.loads((ERYX / "report.schema.json").read_text(encoding="utf-8")))
-                self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
+                self.assertEqual((report["status"], report["exit_code"]),
+                                 ("violations", 1))
                 self.assertIn("DOC101", {d["rule"] for d in report["diagnostics"]})
                 self.assertIn("FREE_FUNCTION_PLACEMENT", {d["rule"] for d in report["diagnostics"]})
+                self.assertEqual({d["path"] for d in report["diagnostics"]
+                                  if d["tool"] == "free-function-placement"},
+                                 {"src/demo/bad.py", "src/demo/bad.pyi", "tests/test_bad.py"})
                 job = next(t for t in report["tools"] if t["name"] == "free-function-placement")
                 self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
                 self.assertTrue((self.root / job["raw_output"]["stdout"]).is_file())
+                self.assertTrue((self.root / job["raw_output"]["stderr"]).is_file())
+                self.assertEqual(json.loads((self.root / report["report_path"]).read_text(
+                    encoding="utf-8"))["diagnostics"], report["diagnostics"])
 
         def malformed(argv, cwd, timeout):
             if str(ERYX / "_free_function_placement_worker.py") in argv:
@@ -286,6 +337,9 @@ class TestFreeFunctionPlacement(unittest.TestCase):
         self.assertEqual((report["status"], report["exit_code"]), ("error", 2))
         self.assertEqual({d["rule"] for d in report["diagnostics"]},
                          {"UNREADABLE_TOOL_OUTPUT", "DOC101"})
+        job = next(t for t in report["tools"] if t["name"] == "free-function-placement")
+        self.assertEqual((job["status"], job["exit_code"]), ("error", 0))
+        self.assertTrue(any(d["is_infrastructure_error"] for d in report["diagnostics"]))
 
     def test_malformed_diagnostics_and_exit_mismatch_fail_closed(self):
         _, _, job = self.worker()

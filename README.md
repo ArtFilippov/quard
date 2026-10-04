@@ -135,8 +135,11 @@ and envelopes; top-level `test_*` functions are violations.
 The independent free-function-placement job checks discovered production and test
 `.py` and `.pyi` files. Free synchronous and asynchronous functions belong in
 class-free `<group_name>_utils.py` modules (or companion stubs); related functions
-may share a module. Module-scope conditional declarations count, but methods and
+may share a module named for their shared purpose. Source and stub modules are
+checked separately. Module-scope conditional declarations count, but methods and
 functions inside functions do not. Every class in a utilities module is reported.
+Read, parse, malformed-report and worker failures are infrastructure errors (exit 2);
+raw stdout and stderr remain archived alongside the standard positioned diagnostics.
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including
