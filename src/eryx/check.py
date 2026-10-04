@@ -17,11 +17,12 @@ import time
 import uuid
 from typing import Any, Callable
 
-from eryx._common import (SCHEMA, EryxError, atomic_write, capture, read_json,
+from eryx._common import (SCHEMA, EryxError, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
 from eryx._policy import discover_files, limit_drift, read_checks, read_scope
-from eryx._reports import diagnostic, normalize, sorted_diagnostics
+from eryx._reports import diagnostic, sorted_diagnostics
 from eryx.init_architecture import validate_architecture_config
+from eryx.check_job.captured_check_job import CapturedCheckJob
 
 
 def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str, Any]]]:
@@ -145,28 +146,8 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
 
 
 def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
-                capture_fn: Callable[..., dict[str, Any]] = capture) -> dict[str, Any]:
-    try:
-        result = capture_fn(job["argv"], root, timeout)
-    except Exception as exc:
-        result = {"argv": job["argv"], "exit_code": None, "stdout": "", "stderr": str(exc),
-                  "duration_seconds": 0, "error": "RUNNER_SUBPROCESS_ERROR"}
-    logs = {}
-    for stream in ("stdout", "stderr"):
-        path = run_dir / "raw" / f"{job['name']}.{stream}.log"
-        atomic_write(path, result.get(stream, ""), root)
-        logs[stream] = path.relative_to(root).as_posix()
-    normalized = normalize(job["tool"], result, root, job.get("json_file"))
-    for entry in normalized["diagnostics"]:
-        entry["job"] = job["name"]
-        if "profile" in job:
-            entry["profile"] = job["profile"]
-    if job.get("json_file") and job["json_file"].exists():
-        logs["native_json"] = job["json_file"].relative_to(root).as_posix()
-    return {"name": job["name"], "tool": job["tool"], "status": normalized["status"],
-            "exit_code": result["exit_code"], "duration_seconds": result["duration_seconds"],
-            "argv": job["argv"], "raw_output": logs, "diagnostics": normalized["diagnostics"],
-            "error": normalized["error"]}
+                 capture_fn: Callable[..., dict[str, Any]] = capture) -> dict[str, Any]:
+    return CapturedCheckJob().execute(job, root, run_dir, timeout, capture_fn=capture_fn)
 
 
 def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,

@@ -15,6 +15,7 @@ from eryx._common import (EryxError, atomic_write, capture, emit_event, error_ex
 from eryx._policy import (ALLOWED_LAYERS, LAYER_DIRS, LAYERS, configure, discover_files,
                      exclude_globs, read_scope)
 from eryx._reports import normalize
+from eryx.clean_architecture_layers.configured_clean_architecture_layers import ConfiguredCleanArchitectureLayers
 
 
 def tool_binary(name: str) -> str:
@@ -85,21 +86,7 @@ def draft_configuration(root: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def sync_clean_arch(root: Path, tach: dict[str, Any]) -> None:
-    path = root / "pyproject.toml"
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    config = doc.setdefault("tool", {}).setdefault("clean-arch", {})
-    definitions = []
-    infra = []
-    for module in tach.get("modules", []):
-        name, layer = module.get("path"), module.get("layer")
-        if not name or layer not in LAYERS:
-            continue
-        definitions.append({"module": name, "name": layer})
-        if layer == "Infrastructure":
-            infra.append(name)
-    config["layers"] = sorted(definitions, key=lambda item: (-len(item["module"]), item["module"]))
-    config["infrastructure_modules"] = sorted(infra)
-    atomic_write(path, tomlkit.dumps(doc), root)
+    ConfiguredCleanArchitectureLayers().sync(root, tach)
 
 
 def validate_architecture_config(root: Path) -> dict[str, Any]:

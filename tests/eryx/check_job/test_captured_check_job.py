@@ -8,13 +8,15 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
-from eryx.check import execute_job, make_jobs
+from eryx.check import make_jobs
+from eryx.check_job.captured_check_job import CapturedCheckJob
+from eryx._common import capture
 
 
-class PylintOutputTest(unittest.TestCase):
+class TestCapturedCheckJob(unittest.TestCase):
     def run_pylint(self, code, enabled):
         with TemporaryDirectory(prefix="eryx-pylint-") as directory:
             root = Path(directory)
@@ -33,7 +35,7 @@ class PylintOutputTest(unittest.TestCase):
             job = make_jobs(root, run_dir, files, architecture_ready=False)[0]
             # Run the real installed Pylint adapter against the temporary project.
             self.assertEqual(job["argv"][1], str(ERYX / "_pylint_worker.py"))
-            result = execute_job(job, root, run_dir, timeout=30)
+            result = CapturedCheckJob().execute(job, root, run_dir, timeout=30, capture_fn=capture)
 
             self.assertIsNone(result["error"])
             native_path = root / result["raw_output"]["native_json"]

@@ -46,7 +46,7 @@ Infrastructure → UseCase для всех соответствующих фай
 Выделенный нативный адаптер `attacks.fitd.probe` остаётся в Infrastructure.
 `init_architecture.py` сохраняет Bootstrap при передаче карты clean-architecture-
 плагину: прежняя подмена на Interface теряла разрешённые связи сборки с адаптерами.
-`tests/test_architecture_layers.py` закрепляет сохранение всех пяти слоёв,
+`tests/eryx/clean_architecture_layers/test_configured_clean_architecture_layers.py` закрепляет сохранение всех пяти слоёв,
 приоритет точных модулей и сохранение посторонних настроек/комментариев при повторной
 генерации карты.
 Назначение структуры описано в корневом `README.md`. `architecture.ready.json`
@@ -202,14 +202,14 @@ W9201 продолжает проверять публичный фасад. Nat
   только названные `*Protocol`, по-прежнему проверяются на E1111/E1128. Патч
   ограничен версией 4.0.8 и устанавливается тем же `install_pylint_protocol_compat()`.
 
-`tests/test_architecture_compat.py` запускает настоящий Pylint в отдельных процессах
+`tests/eryx/architecture_compatibility/test_pinned_architecture_compatibility.py` запускает настоящий Pylint в отдельных процессах
 на временных пакетах: сравнивает проблемные примеры с непатченным плагином и
 проверяет отрицательные случаи. Это изолирует singleton-конфигурацию плагина и
 проверяет установку патча до загрузки plugins, включая повторный вызов installer.
 
 ```bash
-uv run --locked --group dev python -B -m unittest discover -s eryx/tests -p test_architecture_compat.py -v
-uv run --locked --group dev python -B -m unittest discover -s eryx/tests
+uv run --locked --group dev python -B -m unittest discover -s tests/eryx/architecture_compatibility -v
+uv run --locked --group dev python -B -m unittest discover -s tests -v
 ```
 
 ### Диагностики, требующие ревью исходников

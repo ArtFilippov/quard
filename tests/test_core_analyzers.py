@@ -1,4 +1,4 @@
-"""Include mirrored analyzer suites in Python 3.12 unittest discovery."""
+"""Include mirrored suites in Python 3.12 unittest discovery."""
 
 from pathlib import Path
 import unittest
@@ -14,12 +14,14 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
         pattern (str | None): The caller's pattern, which selects this entry point only.
 
     Returns:
-        unittest.TestSuite: The suite with all mirrored analyzer tests included.
+        unittest.TestSuite: The suite with all mirrored tests included.
     """
     del pattern
     root = Path(__file__).resolve().parent / "eryx"
     for group in ("contract_analysis", "method_analysis", "cohesion_analysis",
-                  "field_ownership", "constructor_analysis", "restricted_calls"):
+                  "field_ownership", "constructor_analysis", "restricted_calls",
+                  "check_job", "clean_architecture_layers", "installation", "outer_classes",
+                  "architecture_compatibility"):
         directory = root / group
         suite.addTests(loader.discover(str(directory), pattern="test*.py",
                                        top_level_dir=str(directory)))

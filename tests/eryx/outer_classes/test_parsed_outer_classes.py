@@ -1,6 +1,7 @@
 """Autonomous scope, worker and full-report regressions for outer classes."""
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import sys
@@ -9,17 +10,19 @@ import unittest
 
 from jsonschema import validate
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
+sys.path.insert(0, str(ERYX / "tests"))
 
 from eryx._common import capture
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs, run_checks
+from eryx.outer_classes.parsed_outer_classes import ParsedOuterClasses
 from test_infrastructure import create_repo, native_result
 import test_infrastructure
 
 
-class OuterClassTests(unittest.TestCase):
+class TestParsedOuterClasses(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-outer-classes-")
         self.root = Path(self.temp.name)
@@ -44,6 +47,8 @@ class OuterClassTests(unittest.TestCase):
         return result, raw, job
 
     def test_each_file_counts_only_classes_without_enclosing_class(self):
+        self.assertEqual(ParsedOuterClasses().collect(ast.parse("class One: pass\n"))[0].name,
+                         "One")
         self.put("src/demo/one.py", """\
 class Outer:
     class Inner: pass

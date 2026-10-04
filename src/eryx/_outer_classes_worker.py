@@ -8,46 +8,15 @@ from pathlib import Path
 import sys
 from typing import cast
 
+from eryx.outer_classes.parsed_outer_classes import ParsedOuterClasses
 
 def outer_classes(tree: ast.Module) -> list[ast.ClassDef]:
     """Count classes unless an enclosing class contains the declaration."""
-    classes: list[ast.ClassDef] = []
-
-    def collect(node: ast.AST, enclosed: bool) -> None:
-        if isinstance(node, ast.ClassDef):
-            if not enclosed:
-                classes.append(node)
-            enclosed = True
-        for child in ast.iter_child_nodes(node):
-            collect(child, enclosed)
-
-    collect(tree, False)
-    return classes
+    return ParsedOuterClasses().collect(tree)
 
 
 def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
-    diagnostics: list[dict[str, object]] = []
-    error = None
-    for path in paths:
-        if (Path(path).is_absolute() or ".." in Path(path).parts
-                or Path(path).suffix not in {".py", ".pyi"}):
-            raise ValueError(f"Invalid outer-class source path: {path!r}")
-        try:
-            tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=path)
-        except (OSError, ValueError, SyntaxError) as exc:
-            error = "OUTER_CLASSES_PARSE_ERROR"
-            diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
-                                "column": getattr(exc, "offset", None), "message": str(exc),
-                                "is_infrastructure_error": True})
-            continue
-        classes = outer_classes(tree)
-        if len(classes) > 1:
-            for node in classes:
-                message = f"{node.name}: {path} has {len(classes)} outer classes (max one per file)."
-                diagnostics.append({"rule": "MULTIPLE_OUTER_CLASSES", "path": path,
-                                    "line": node.lineno, "column": node.col_offset + 1,
-                                    "symbol": node.name, "message": message})
-    return diagnostics, error
+    return ParsedOuterClasses().analyze(root, paths)
 
 
 def main() -> int:

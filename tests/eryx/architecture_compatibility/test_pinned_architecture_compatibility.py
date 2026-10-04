@@ -11,11 +11,11 @@ import textwrap
 import unittest
 
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 RULES = ["W9001", "W9003", "W9004", "W9006", "W9007", "W9009", "W9201", "W9202"]
 
 
-class ArchitectureCompatTest(unittest.TestCase):
+class TestPinnedArchitectureCompatibility(unittest.TestCase):
     def lint(self, files, layers, *, rules=RULES, patched=True, extra="", pylint_extra=""):
         with TemporaryDirectory(prefix="architecture-compat-") as directory:
             root = Path(directory)

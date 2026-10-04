@@ -9,13 +9,14 @@ import tomllib
 import unittest
 
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
+from eryx.clean_architecture_layers.configured_clean_architecture_layers import ConfiguredCleanArchitectureLayers
 from eryx.init_architecture import sync_clean_arch
 
 
-class ArchitectureLayersTest(unittest.TestCase):
+class TestConfiguredCleanArchitectureLayers(unittest.TestCase):
     def setUp(self):
         directory = TemporaryDirectory(prefix="architecture-layers-")
         self.addCleanup(directory.cleanup)
@@ -52,7 +53,7 @@ class ArchitectureLayersTest(unittest.TestCase):
         }
 
     def test_preserves_bootstrap_and_orders_specific_layers_before_the_package(self):
-        sync_clean_arch(self.root, self.tach)
+        ConfiguredCleanArchitectureLayers().sync(self.root, self.tach)
         config = tomllib.loads(self.path.read_text(encoding="utf-8"))["tool"]["clean-arch"]
         definitions = config["layers"]
         self.assertEqual(

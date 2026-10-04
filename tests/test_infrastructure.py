@@ -4,7 +4,6 @@ Native analyzers are explicitly mocked; these tests do not prove their integrati
 """
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import os
@@ -19,10 +18,7 @@ from unittest.mock import patch
 
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX / "src"))
-from eryx import _common, _policy, _reports, check, init_architecture
-spec = importlib.util.spec_from_file_location("eryx_install", ERYX / "src/eryx/install.py")
-installer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(installer)
+from eryx import _common, _policy, _reports, check, init_architecture, install as installer
 
 CATALOG = {"message_ids": ["R0915", "R1260", "W9001", "W9003", "W9101", "W9102", "W9201", "W9301", "W9501"],
            "plugins": ["pylint.extensions.mccabe", "pylint.extensions.broad_try_clause", "clean_architecture_linter"]}
