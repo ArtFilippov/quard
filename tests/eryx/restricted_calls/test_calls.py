@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import override
 import unittest
 
 from jsonschema import validate
@@ -19,19 +20,22 @@ from eryx.check import execute_job, make_jobs
 
 
 class TestCalls(unittest.TestCase):
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-restricted-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
+        self.run_dir: Path = self.root / ".eryx/reports/run"
+
+    @override
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-restricted-")
-        self.root = Path(self.temp.name)
         (self.root / "src").mkdir()
         (self.root / ".eryx").mkdir()
         (self.root / ".eryx/scope.toml").write_text(
             'exclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
-        self.run_dir = self.root / ".eryx/reports/run"
         self.run_dir.mkdir(parents=True)
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def put(self, path, text):
         target = self.root / path
@@ -458,7 +462,7 @@ class Equivalent(Base):
         from eryx.check import run_checks
         from offline_fixtures import create_repo, fake_tools, native_result
 
-        with TemporaryDirectory(prefix="eryx-agreement-report-") as directory:
+        with TemporaryDirectory(prefix="eryx-agreement-report-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
             (root / "src/demo/domain/api.py").write_text('''\
@@ -687,7 +691,7 @@ class Owner:
         from eryx.check import run_checks
         from offline_fixtures import create_repo, fake_tools
 
-        with TemporaryDirectory(prefix="eryx-property-report-") as directory:
+        with TemporaryDirectory(prefix="eryx-property-report-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
             (root / "src/demo/domain/api.py").write_text('''\
@@ -1975,7 +1979,7 @@ Service().run()
         from eryx.check import run_checks
         from offline_fixtures import create_repo, fake_tools, native_result
 
-        with TemporaryDirectory(prefix="eryx-restricted-runner-") as directory:
+        with TemporaryDirectory(prefix="eryx-restricted-runner-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
             (root / "src/demo/domain/api.py").write_text('''\

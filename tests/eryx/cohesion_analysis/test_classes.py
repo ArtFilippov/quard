@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import override
 import unittest
 
 ERYX = Path(__file__).resolve().parents[3]
@@ -15,20 +16,23 @@ from eryx.check import execute_job, make_jobs, select_lcom_files
 
 
 class TestClasses(unittest.TestCase):
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-lcom4-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
+        self.run_dir: Path = self.root / ".eryx" / "reports" / "run"
+
+    @override
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-lcom4-")
-        self.root = Path(self.temp.name)
         (self.root / "src" / "demo" / "tests").mkdir(parents=True)
         (self.root / "tests").mkdir()
         (self.root / ".eryx").mkdir()
         (self.root / ".eryx" / "scope.toml").write_text(
             'exclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
-        self.run_dir = self.root / ".eryx" / "reports" / "run"
         self.run_dir.mkdir(parents=True)
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def put(self, path, code):
         file = self.root / path

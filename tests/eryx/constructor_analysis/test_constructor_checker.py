@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import override
 import unittest
 
 from jsonschema import validate
@@ -20,20 +21,23 @@ from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestConstructorChecker(unittest.TestCase):
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-constructor-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
+        self.run_dir: Path = self.root / ".eryx/reports/run"
+
+    @override
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-constructor-")
-        self.root = Path(self.temp.name)
         (self.root / "src").mkdir()
         (self.root / "tests").mkdir()
         (self.root / ".eryx").mkdir()
         (self.root / ".eryx/scope.toml").write_text(
             'exclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
-        self.run_dir = self.root / ".eryx/reports/run"
         self.run_dir.mkdir(parents=True)
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def put(self, path, source):
         target = self.root / path
@@ -542,7 +546,7 @@ class Model:
                          "CONSTRUCTOR_PURITY_EXECUTION_ERROR")
 
     def test_old_install_defaults_off_and_invalid_opt_in_keeps_other_diagnostics(self):
-        with TemporaryDirectory(prefix="eryx-constructor-config-") as directory:
+        with TemporaryDirectory(prefix="eryx-constructor-config-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
             setting = root / ".eryx/checks.toml"
@@ -576,7 +580,7 @@ class Model:
                     self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
 
     def test_project_report_keeps_full_scope_and_native_diagnostics(self):
-        with TemporaryDirectory(prefix="eryx-constructor-runner-") as directory:
+        with TemporaryDirectory(prefix="eryx-constructor-runner-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
             (root / ".eryx/checks.toml").write_text("constructor_purity = true\n", encoding="utf-8")

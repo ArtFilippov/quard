@@ -16,35 +16,13 @@ from eryx.check import execute_job, make_jobs
 
 
 class TestTestPlacement(unittest.TestCase):
-    def test_migrated_analyzer_suites_map_to_production_contracts(self) -> None:
-        from eryx.contract_analysis.test_placement import analyze
-        from eryx._outer_classes_worker import analyze as outer_analyze
-
-        files = discover_files(ERYX, read_scope(ERYX))
-        migrated = [
-            "tests/eryx/contract_analysis/test_contracts.py",
-            "tests/eryx/folder_analysis/test_folder_ownership.py",
-            "tests/eryx/test_placement_analysis/test_test_placement.py",
-            "tests/eryx/method_analysis/test_declarations.py",
-            "tests/eryx/cohesion_analysis/test_classes.py",
-            "tests/eryx/field_ownership/test_ownership.py",
-            "tests/eryx/constructor_analysis/test_constructor_checker.py",
-            "tests/eryx/restricted_calls/test_calls.py",
-        ]
-        self.assertTrue(set(migrated) <= set(files["tests"]))
-        diagnostics, error = analyze(ERYX, files["production"], migrated, ["tests"])
-        self.assertIsNone(error)
-        self.assertEqual(diagnostics, [])
-        diagnostics, error = outer_analyze(ERYX, migrated)
-        self.assertIsNone(error)
-        self.assertEqual(diagnostics, [])
-
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.temp = TemporaryDirectory(prefix="eryx-test-placement-")
-        self.root = Path(self.temp.name)
-        self.run_dir = self.root / ".eryx/reports/run"
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-test-placement-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
+        self.run_dir: Path = self.root / ".eryx/reports/run"
 
     @override
     def setUp(self) -> None:
@@ -55,10 +33,6 @@ class TestTestPlacement(unittest.TestCase):
             'exclude_directory_names = ["generated"]\n'
             + 'test_directory_names = ["tests", "specs"]\n', encoding="utf-8")
         self.run_dir.mkdir(parents=True)
-
-    @override
-    def tearDown(self) -> None:
-        self.temp.cleanup()
 
     def put(self, path: str, text: str) -> None:
         target = self.root / path

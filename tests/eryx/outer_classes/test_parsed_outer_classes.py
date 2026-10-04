@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import override
 import unittest
 
 from jsonschema import validate
@@ -22,15 +23,18 @@ from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestParsedOuterClasses(unittest.TestCase):
-    def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-outer-classes-")
-        self.root = Path(self.temp.name)
-        create_repo(self.root)
-        self.run_dir = self.root / ".eryx/reports/run"
-        self.run_dir.mkdir(parents=True)
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-outer-classes-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
+        self.run_dir: Path = self.root / ".eryx/reports/run"
 
-    def tearDown(self):
-        self.temp.cleanup()
+    @override
+    def setUp(self):
+        create_repo(self.root)
+        self.run_dir.mkdir(parents=True)
 
     def put(self, path: str, code: str) -> None:
         target = self.root / path

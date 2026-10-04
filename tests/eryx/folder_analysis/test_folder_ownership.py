@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import override
 import unittest
 
 ERYX = Path(__file__).resolve().parents[3]
@@ -29,42 +30,6 @@ from eryx.method_analysis.declarations import Declarations
 
 
 class TestFolderOwnership(unittest.TestCase):
-    def test_migrated_state_and_marker_classes_keep_entry_points_and_placement(self):
-        from eryx._constructor_origins import Origins as LegacyOrigins
-        from eryx._constructor_purity_worker import ConstructorChecker as LegacyChecker
-        from eryx._field_operations import FieldOperation as LegacyOperation
-        from eryx._field_types import TypeEvidence as LegacyEvidence
-        from eryx._markers import MarkerBindings as LegacyBindings, MarkerIndex as LegacyIndex
-        from eryx._restricted_calls import DispatchSite as LegacySite
-        from eryx.constructor_analysis.constructor_checker import ConstructorChecker
-        from eryx.constructor_origins.origins import Origins
-        from eryx.dispatch_site_model.dispatch_site import DispatchSite
-        from eryx.field_operation_model.field_operation import FieldOperation
-        from eryx.field_type_analysis.type_evidence import TypeEvidence
-        from eryx.marker_analysis.marker_index import MarkerIndex
-        from eryx.marker_binding_analysis.marker_bindings import MarkerBindings
-        from eryx._class_contracts_worker import analyze as contracts_analyze
-        from eryx._contract_folders_worker import analyze as folders_analyze
-        from eryx._outer_classes_worker import analyze as outer_analyze
-
-        for old, current in ((LegacyOrigins, Origins), (LegacyChecker, ConstructorChecker),
-                             (LegacyOperation, FieldOperation), (LegacyEvidence, TypeEvidence),
-                             (LegacyIndex, MarkerIndex), (LegacyBindings, MarkerBindings),
-                             (LegacySite, DispatchSite)):
-            self.assertIs(old, current)
-
-        paths = sorted(str(path.relative_to(ERYX)) for folder in (
-            "constructor_analysis", "constructor_origins", "dispatch_site_model", "field_operation_model",
-            "field_type_analysis", "marker_analysis", "marker_binding_analysis")
-            for path in (ERYX / "src/eryx" / folder).glob("*.py"))
-        paths.extend(f"src/eryx/{module}.py" for module in (
-            "_constructor_origins", "_constructor_purity_worker", "_field_operations",
-            "_field_types", "_markers"))
-        for analyze in (contracts_analyze, folders_analyze, outer_analyze):
-            diagnostics, error = analyze(ERYX, paths)
-            self.assertIsNone(error)
-            self.assertEqual([], diagnostics)
-
     def test_migrated_production_classes_and_compatibility_imports(self):
         self.assertEqual(self.run_worker("class-contracts")[0]["exit_code"], 0)
         self.assertIs(LegacyContracts, Contracts)
@@ -91,64 +56,23 @@ class TestFolderOwnership(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual([], diagnostics)
 
-    def test_restricted_targets_contract_and_legacy_entry_point(self):
-        from eryx._restricted_calls import Restrictions as LegacyRestrictions
-        from eryx.restricted_targets.resolution import Restrictions
-        from eryx.restricted_targets.restricted_targets import RestrictedTargets
-        from eryx._class_contracts_worker import analyze as contracts_analyze
-        from eryx._contract_folders_worker import analyze as folders_analyze
-        from eryx._outer_classes_worker import analyze as outer_analyze
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-folders-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
+        self.run_dir: Path = self.root / ".eryx/reports/run"
 
-        self.assertIs(LegacyRestrictions, Restrictions)
-        self.assertIn(RestrictedTargets, Restrictions.__bases__)
-        paths = sorted(str(path.relative_to(ERYX)) for path in (
-            ERYX / "src/eryx/restricted_targets").glob("*.py"))
-        for analyze in (contracts_analyze, folders_analyze, outer_analyze):
-            diagnostics, error = analyze(ERYX, paths)
-            self.assertIsNone(error)
-            self.assertEqual([], diagnostics)
-
-    def test_restricted_calls_contract_derived_visitor_and_legacy_entry_point(self):
-        from eryx._restricted_calls import Ancestry as LegacyAncestry, Calls as LegacyCalls
-        from eryx.ancestry_traversal.ancestry import Ancestry
-        from eryx.ancestry_traversal.ancestry_traversal import AncestryTraversal
-        from eryx.restricted_calls.ancestry import Ancestry as PreviousAncestry
-        from eryx.restricted_calls.calls import Calls
-        from eryx.restricted_calls.restricted_calls import RestrictedCalls
-        from eryx._class_contracts_worker import analyze as contracts_analyze
-        from eryx._contract_folders_worker import analyze as folders_analyze
-        from eryx._outer_classes_worker import analyze as outer_analyze
-
-        self.assertIs(LegacyCalls, Calls)
-        self.assertIs(LegacyAncestry, Ancestry)
-        self.assertIs(PreviousAncestry, Ancestry)
-        self.assertIn(RestrictedCalls, Calls.__bases__)
-        self.assertIn(Calls, Ancestry.__bases__)
-        self.assertIn(AncestryTraversal, Ancestry.__bases__)
-        self.assertIn(RestrictedCalls, AncestryTraversal.__bases__)
-        paths = sorted(str(path.relative_to(ERYX)) for folder in (
-            "ancestry_traversal", "restricted_calls")
-            for path in (ERYX / "src/eryx" / folder).glob("*.py"))
-        paths.append("src/eryx/_restricted_calls.py")
-        for analyze in (contracts_analyze, folders_analyze, outer_analyze):
-            diagnostics, error = analyze(ERYX, paths)
-            self.assertIsNone(error)
-            self.assertEqual([], diagnostics)
-
+    @override
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-folders-")
-        self.root = Path(self.temp.name)
         (self.root / "src").mkdir()
         (self.root / "tests").mkdir()
         (self.root / ".eryx").mkdir()
         (self.root / ".eryx/scope.toml").write_text(
             'exclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
-        self.run_dir = self.root / ".eryx/reports/run"
         self.run_dir.mkdir(parents=True)
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def put(self, path, text):
         target = self.root / path

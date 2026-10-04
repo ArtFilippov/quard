@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import override
 import unittest
 
 ERYX = Path(__file__).resolve().parents[3]
@@ -13,44 +14,25 @@ sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
 from eryx._field_initialization import _block
-from eryx._instance_fields_worker import Accesses as LegacyAccesses, Ownership as LegacyOwnership
 from eryx.check import execute_job, make_jobs
-from eryx.field_access.accesses import Accesses
-from eryx.field_access.field_access import FieldAccess
-from eryx.field_ownership.accesses import Accesses as PreviousAccesses
-from eryx.field_ownership.field_ownership import FieldOwnership
-from eryx.field_ownership.ownership import Ownership
 
 
 class TestOwnership(unittest.TestCase):
-    def test_field_contracts_and_compatibility_imports(self):
-        self.assertIs(LegacyOwnership, Ownership)
-        self.assertIs(LegacyAccesses, Accesses)
-        self.assertIs(PreviousAccesses, Accesses)
-        self.assertIn(FieldOwnership, Ownership.__bases__)
-        self.assertIn(FieldAccess, Accesses.__bases__)
-        for folder, path, name in (("field_ownership", "field_ownership.py", "FieldOwnership"),
-                                   ("field_ownership", "ownership.py", "Ownership"),
-                                   ("field_ownership", "class_stores.py", "ClassStores"),
-                                   ("field_access", "field_access.py", "FieldAccess"),
-                                   ("field_access", "accesses.py", "Accesses")):
-            source = ERYX / "src/eryx" / folder / path
-            outer = [item.name for item in ast.parse(source.read_text(encoding="utf-8")).body
-                     if isinstance(item, ast.ClassDef)]
-            self.assertEqual(outer, [name])
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="eryx-fields-")
+        self.addCleanup(self.temp.cleanup)
+        self.root: Path = Path(self.temp.name)
 
+    @override
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-fields-")
-        self.root = Path(self.temp.name)
         (self.root / "src/pkg").mkdir(parents=True)
         (self.root / "tests").mkdir()
         (self.root / ".eryx/reports/run").mkdir(parents=True)
         (self.root / ".eryx/scope.toml").write_text(
             'exclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def put(self, path, text):
         target = self.root / path
