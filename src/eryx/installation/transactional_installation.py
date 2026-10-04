@@ -50,9 +50,10 @@ class TransactionalInstallation(Installation):
             if progress:
                 print("Installing Eryx configuration and exact dev dependencies...", file=sys.stderr)
             entry.initialize_state(root, tool)
-            from eryx._policy import discover_files, read_checks, read_scope
-            read_checks(root)
-            if not discover_files(root, read_scope(root))["production"]:
+            from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
+            policy = ConfiguredConsumerPolicy(root)
+            policy.constructor_purity()
+            if not policy.files()["production"]:
                 raise EryxError("EMPTY_SOURCE_SCOPE", "No Python files under src/.")
             entry.prepare_project(root)
             commands = [

@@ -6,7 +6,7 @@ import sys
 sys.dont_write_bytecode = True
 from pathlib import Path
 from eryx._common import error_exit, emit_event, repo_lock, require_runtime, project_dir
-from eryx._policy import configure
+from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 
 
 def main() -> int:
@@ -18,7 +18,7 @@ def main() -> int:
         require_runtime()
         root = project_dir(args.project)
         with repo_lock(root):
-            changed = configure(root)
+            changed = ConfiguredConsumerPolicy(root).apply()
         emit_event("applied", json_output=args.json, modified_files=changed,
                    next_command="uv run --locked --group dev python eryx/check.py", exit_code=0)
         return 0

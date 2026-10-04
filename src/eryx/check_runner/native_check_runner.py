@@ -17,8 +17,8 @@ from typing import Any, override
 
 from eryx._common import (SCHEMA, EryxError, capture, read_json,
                           require_runtime, tool_dir, tool_revision, safe_target, write_json)
-from eryx._policy import discover_files, limit_drift, read_checks, read_scope
 from eryx._reports import diagnostic, sorted_diagnostics
+from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx.init_architecture import validate_architecture_config
 from eryx.check_job.captured_check_job import CapturedCheckJob
 from eryx.check_runner.check_runner import CheckRunner
@@ -175,11 +175,12 @@ class NativeCheckRunner(CheckRunner):
             eryx_version = read_json(tool_dir() / "tools.json").get("eryx_version", "unknown")
             versions, problems = versions_fn(root)
             diagnostics.extend(problems)
-            files = discover_files(root, read_scope(root))
+            policy = ConfiguredConsumerPolicy(root)
+            files = policy.files()
             if not files["production"]:
                 raise EryxError("EMPTY_SOURCE_SCOPE", "No Python source files found under src/. Refusing an empty successful check.")
             try:
-                constructor_purity = read_checks(root)
+                constructor_purity = policy.constructor_purity()
                 if not constructor_purity:
                     results.append({"name": "constructor-purity", "tool": "constructor-purity", "status": "skipped",
                                     "exit_code": None, "duration_seconds": 0, "error": None, "raw_output": {}})
@@ -203,7 +204,7 @@ class NativeCheckRunner(CheckRunner):
                 results.append({"name": "lcom4", "tool": "lcom4", "status": "error", "exit_code": None,
                                 "duration_seconds": 0, "error": exc.code, "raw_output": {}})
             try:
-                mismatch = limit_drift(root)
+                mismatch = policy.limit_drift()
                 if mismatch:
                     raise EryxError("READABILITY_NOT_APPLIED", ", ".join(mismatch) + "; run uv run --locked --group dev python eryx/apply.py.")
             except EryxError as exc:
@@ -219,7 +220,7 @@ class NativeCheckRunner(CheckRunner):
                     str(exc) + " Run eryx/init_architecture.py, review tach.toml, then run it with --accept.", is_infrastructure_error=True))
             jobs = make_jobs(root, run_dir, files, architecture_ready,
                              None if lcom_files is None else selected, constructor_purity,
-                             read_scope(root)["test_directory_names"])
+                             policy.scope()["test_directory_names"])
             workers = 1 if serial else min(4, max(1, os.cpu_count() or 1), len(jobs))
             # Native analyzers complete independently. A failing job never cancels the others.
             with ThreadPoolExecutor(max_workers=workers) as pool:

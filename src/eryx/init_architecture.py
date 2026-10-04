@@ -12,10 +12,10 @@ import tomlkit
 
 from eryx._common import (EryxError, atomic_write, capture, emit_event, error_exit, load_toml,
                      repo_lock, require_runtime, project_dir, tool_dir, read_json, write_json)
-from eryx._policy import (ALLOWED_LAYERS, LAYER_DIRS, LAYERS, configure, discover_files,
-                     exclude_globs, read_scope)
+from eryx._policy import (ALLOWED_LAYERS, LAYER_DIRS, LAYERS, exclude_globs)
 from eryx._reports import normalize
 from eryx.clean_architecture_layers.configured_clean_architecture_layers import ConfiguredCleanArchitectureLayers
+from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 
 
 def tool_binary(name: str) -> str:
@@ -26,8 +26,7 @@ def tool_binary(name: str) -> str:
 
 
 def package_name(root: Path) -> str:
-    scope = read_scope(root)
-    files = discover_files(root, scope)["production"]
+    files = ConfiguredConsumerPolicy(root).files()["production"]
     names = {Path(path).parts[1] for path in files if len(Path(path).parts) > 2}
     direct = [path for path in files if len(Path(path).parts) == 2]
     if direct or len(names) != 1:
@@ -39,9 +38,10 @@ def package_name(root: Path) -> str:
 
 
 def draft_configuration(root: Path) -> tuple[dict[str, Any], list[str]]:
-    scope = read_scope(root)
+    policy = ConfiguredConsumerPolicy(root)
+    scope = policy.scope()
     package = package_name(root)
-    files = discover_files(root, scope)["production"]
+    files = policy.files()["production"]
     # Infer only conventional directory labels, never communities from a graph.
     modules: dict[str, str] = {package: "Domain"}
     notes = []
@@ -139,7 +139,7 @@ def main() -> int:
                 if normalized["status"] == "error":
                     raise EryxError("TACH_CONFIG_OR_EXECUTION_ERROR", f"Cannot validate Tach config. See {raw.relative_to(root)}.")
                 sync_clean_arch(root, config)
-                configure(root)
+                ConfiguredConsumerPolicy(root).apply()
                 write_json(ready, {"accepted": True, "modules": len(config["modules"]),
                                    "note": "Acceptance of architecture configuration, NOT a violations baseline."}, root)
                 installation_path = root / ".eryx/installation.json"
@@ -166,7 +166,7 @@ def main() -> int:
                 raise EryxError("TACH_SYNC_FAILED", "Draft tach.toml exists but sync failed. See .eryx/logs/init-sync.log. Do not mark it ready until corrected.")
             config = load_toml(path)
             sync_clean_arch(root, config)
-            configure(root)
+            ConfiguredConsumerPolicy(root).apply()
             emit_event("review_required", json_output=args.json, configuration="tach.toml", notes=notes,
                        next_command="uv run --locked --group dev python eryx/init_architecture.py --accept", exit_code=0)
             return 0

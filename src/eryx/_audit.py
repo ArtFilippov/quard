@@ -16,7 +16,7 @@ import tomlkit
 
 from eryx._common import (EryxError, atomic_write, capture, emit_event, error_exit,
                      load_toml, read_json, require_runtime, project_dir, tool_dir, write_json)
-from eryx._policy import configure
+from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx._reports import normalize
 from eryx.init_architecture import sync_clean_arch, tool_binary
 
@@ -152,7 +152,7 @@ def audit(root: Path) -> dict[str, Any]:
         versions[name] = actual
     plugins, catalog = discover_plugins(root, log_root)
     write_json(root / ".eryx/pylint-catalog.json", catalog, root)
-    changed = configure(root, initial=True, plugins=plugins, catalog=catalog)
+    changed = ConfiguredConsumerPolicy(root).apply(initial=True, plugins=plugins, catalog=catalog)
     if (root / ".eryx/architecture.ready.json").exists() and (root / "tach.toml").exists():
         sync_clean_arch(root, load_toml(root / "tach.toml"))
     results = smoke_tests(root, log_root)
