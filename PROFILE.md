@@ -74,6 +74,12 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   interface implementation. Overrides are normal source-positioned violations
   (exit 1); parse and report failures remain errors (exit 2) without suppressing
   other diagnostics.
+* **Outer classes**: `MULTIPLE_OUTER_CLASSES` reports each outer class when a
+  discovered `.py` or `.pyi` file contains more than one. Nested classes are allowed;
+  a class inside a function counts unless enclosed by a class. Files without classes
+  pass. Source and companion stubs are counted separately, across production and
+  tests, independently of LCOM4 selection. Parse and worker failures are
+  infrastructure errors; raw worker output and job status appear in the report.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and
@@ -122,8 +128,8 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
-reports. `.pyi` files are checked by Pyright, both method rules and class contracts;
-other tools use their native scope. `__init__.py` is included. Root scripts and
+reports. `.pyi` files are checked by Pyright, both method rules, class contracts
+and outer classes; other tools use their native scope. `__init__.py` is included. Root scripts and
 notebooks are outside the consumer's source scope. In the Eryx checkout, its own
 `src/eryx/` and `tests/` are analyzed; its autonomous test suite verifies execution.
 `check.py --lcom_files` narrows only LCOM4 to explicitly selected, existing `.py`

@@ -118,6 +118,9 @@ for the opaque-external-base exception.
 It also rejects redeclarations of methods and recognized properties from any
 resolvable customer-owned non-contract ancestor, while allowing declarations supplied
 only by local contracts. Each member receives one violation per class and source file.
+The independent outer-class rule checks every discovered production and test `.py` and
+`.pyi` file, even when LCOM4 is narrowed or skipped. A file may declare at most one
+class outside another class; function-local classes count as outer classes.
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including
