@@ -10,7 +10,8 @@ from typing import cast
 
 from eryx._instance_fields_worker import Ownership
 from eryx._restricted_agreement import agreement
-from eryx._restricted_calls import Calls, Restrictions
+from eryx._restricted_calls import Calls
+from eryx.restricted_targets.resolution import Restrictions
 
 
 def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], str | None,

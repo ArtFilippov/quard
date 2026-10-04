@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from eryx._restricted_calls import Restrictions
+    from eryx.restricted_targets.restricted_targets import RestrictedTargets
 
 
 Evidence = dict[str, object]
@@ -48,7 +48,7 @@ def _source_stub(index: Index, marks: Marks, emit: Emit) -> None:
             emit(owner, name, entries[0], f"{source}:{peer[0]['line']}")
 
 
-def _inherited_stub(restrictions: Restrictions, index: Index, marks: Marks, emit: Emit) -> None:
+def _inherited_stub(restrictions: RestrictedTargets, index: Index, marks: Marks, emit: Emit) -> None:
     for declaration in restrictions.class_declarations:
         stub = cast(str, declaration["path"])
         if not stub.endswith(".pyi"):
@@ -82,7 +82,7 @@ def _inherited_stub(restrictions: Restrictions, index: Index, marks: Marks, emit
                          f"{source} ({owner}.{name})")
 
 
-def _ancestors(restrictions: Restrictions, owner: str, node: ast.ClassDef, path: str) -> set[str]:
+def _ancestors(restrictions: RestrictedTargets, owner: str, node: ast.ClassDef, path: str) -> set[str]:
     contracts = restrictions.contracts
     visited: set[str] = set()
 
@@ -99,7 +99,7 @@ def _ancestors(restrictions: Restrictions, owner: str, node: ast.ClassDef, path:
     return {name for name in visited if contracts.declaration(name)}
 
 
-def _requirements(restrictions: Restrictions, index: Index, marks: Marks,
+def _requirements(restrictions: RestrictedTargets, index: Index, marks: Marks,
                   members: Members, *, ancestors: set[str]) -> dict[str, list[tuple[bool, str]]]:
     required: dict[str, list[tuple[bool, str]]] = defaultdict(list)
     for contract in sorted(ancestors):
@@ -116,7 +116,7 @@ def _requirements(restrictions: Restrictions, index: Index, marks: Marks,
     return required
 
 
-def _inherited(restrictions: Restrictions, index: Index, marks: Marks,
+def _inherited(restrictions: RestrictedTargets, index: Index, marks: Marks,
                members: Members, *, emit: Emit) -> None:
     contracts = restrictions.contracts
     for owner, node, path in contracts.declarations:
@@ -134,11 +134,11 @@ def _inherited(restrictions: Restrictions, index: Index, marks: Marks,
                 emit(owner, name, local[0], statuses[0][1])
 
 
-def agreement(restrictions: Restrictions) -> list[Evidence]:
+def agreement(restrictions: RestrictedTargets) -> list[Evidence]:
     """Find disagreement without changing effective access restrictions.
 
     Args:
-        restrictions (Restrictions): Parsed declaration and ancestry evidence.
+        restrictions (RestrictedTargets): Parsed declaration and ancestry evidence.
 
     Returns:
         list[Evidence]: Positioned declaration-agreement violations.

@@ -90,6 +90,23 @@ class ContractFolderTests(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual([], diagnostics)
 
+    def test_restricted_targets_contract_and_legacy_entry_point(self):
+        from eryx._restricted_calls import Restrictions as LegacyRestrictions
+        from eryx.restricted_targets.resolution import Restrictions
+        from eryx.restricted_targets.restricted_targets import RestrictedTargets
+        from eryx._class_contracts_worker import analyze as contracts_analyze
+        from eryx._contract_folders_worker import analyze as folders_analyze
+        from eryx._outer_classes_worker import analyze as outer_analyze
+
+        self.assertIs(LegacyRestrictions, Restrictions)
+        self.assertIn(RestrictedTargets, Restrictions.__bases__)
+        paths = sorted(str(path.relative_to(ERYX)) for path in (
+            ERYX / "src/eryx/restricted_targets").glob("*.py"))
+        for analyze in (contracts_analyze, folders_analyze, outer_analyze):
+            diagnostics, error = analyze(ERYX, paths)
+            self.assertIsNone(error)
+            self.assertEqual([], diagnostics)
+
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-folders-")
         self.root = Path(self.temp.name)
