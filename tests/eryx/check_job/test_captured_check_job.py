@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import TemporaryDirectory
+from typing import Any
 import unittest
 
 ERYX = Path(__file__).resolve().parents[3]
@@ -17,7 +18,13 @@ from eryx._common import capture
 
 
 class TestCapturedCheckJob(unittest.TestCase):
-    def run_pylint(self, code, enabled):
+    def run_job(self, job: dict[str, Any], root: Path, run_dir: Path,
+                timeout: int = 30) -> dict[str, Any]:
+        return CapturedCheckJob().execute(job, root, run_dir, timeout=timeout, capture_fn=capture)
+
+    def run_pylint(
+        self, code: str, enabled: list[str]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         with TemporaryDirectory(prefix="eryx-pylint-") as directory:
             root = Path(directory)
             source = root / "src" / "sample.py"
@@ -35,7 +42,7 @@ class TestCapturedCheckJob(unittest.TestCase):
             job = make_jobs(root, run_dir, files, architecture_ready=False)[0]
             # Run the real installed Pylint adapter against the temporary project.
             self.assertEqual(job["argv"][1], str(ERYX / "_pylint_worker.py"))
-            result = CapturedCheckJob().execute(job, root, run_dir, timeout=30, capture_fn=capture)
+            result = self.run_job(job, root, run_dir)
 
             self.assertIsNone(result["error"])
             native_path = root / result["raw_output"]["native_json"]
@@ -68,14 +75,26 @@ class TestCapturedCheckJob(unittest.TestCase):
         )
 
     def test_capture_timeout_terminates_the_real_process(self):
-        result = capture([sys.executable, "-c", "import time; time.sleep(10)"],
-                         Path(gettempdir()), timeout=1)
-        self.assertEqual(result["error"], "TOOL_TIMEOUT")
-        self.assertNotEqual(result["exit_code"], 0)
+        with TemporaryDirectory(prefix="eryx-timeout-") as directory:
+            root = Path(directory)
+            run_dir = root / ".eryx" / "reports" / "first-run"
+            result = self.run_job({"name": "pydoclint", "tool": "pydoclint",
+                                   "argv": [sys.executable, "-c", "import time; time.sleep(10)"]},
+                                  root, run_dir, timeout=1)
+            self.assertEqual(result["error"], "TOOL_TIMEOUT")
+            self.assertEqual(result["status"], "error")
+            self.assertNotEqual(result["exit_code"], 0)
+            self.assertTrue((root / result["raw_output"]["stderr"]).is_file())
 
     def test_capture_start_failure_is_reported(self):
-        result = capture(["/definitely/nonexistent-tool"], Path(gettempdir()))
-        self.assertEqual(result["error"], "TOOL_START_FAILED")
+        with TemporaryDirectory(prefix="eryx-start-failure-") as directory:
+            root = Path(directory)
+            run_dir = root / ".eryx" / "reports" / "first-run"
+            result = self.run_job({"name": "pydoclint", "tool": "pydoclint",
+                                   "argv": ["/definitely/nonexistent-tool"]}, root, run_dir)
+            self.assertEqual(result["error"], "TOOL_START_FAILED")
+            self.assertEqual(result["status"], "error")
+            self.assertTrue((root / result["raw_output"]["stderr"]).is_file())
 
 
 if __name__ == "__main__":

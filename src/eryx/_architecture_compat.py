@@ -735,6 +735,8 @@ def install_pinned_plugin() -> None:
 
 def install_architecture_compat() -> None:
     """Install once per worker, before ``pylint.lint.Run`` loads plugins."""
-    from eryx.architecture_compatibility.pinned_architecture_compatibility import PinnedArchitectureCompatibility
+    from eryx.architecture_compatibility.pinned_architecture_compatibility import (
+        PinnedArchitectureCompatibility,
+    )
 
     PinnedArchitectureCompatibility().install()

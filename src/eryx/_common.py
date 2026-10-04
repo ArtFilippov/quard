@@ -42,8 +42,8 @@ def tool_binary(name: str) -> str:
     """
     path = Path(sys.executable).parent / name
     if not path.is_file():
-        raise EryxError("MISSING_TOOL", f"Missing {name} in project environment; "
-                        "run uv sync --locked --group dev.")
+        message = f"Missing {name} in project environment; run uv sync --locked --group dev."
+        raise EryxError("MISSING_TOOL", message)
     return str(path)
 
 
