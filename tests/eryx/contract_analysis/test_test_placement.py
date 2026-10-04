@@ -8,14 +8,34 @@ from tempfile import TemporaryDirectory
 from typing import Any, override
 import unittest
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs
 
 
-class TestPlacementTests(unittest.TestCase):
+class TestTestPlacement(unittest.TestCase):
+    def test_migrated_analyzer_suites_map_to_production_contracts(self) -> None:
+        from eryx.contract_analysis.test_placement import analyze
+        from eryx._outer_classes_worker import analyze as outer_analyze
+
+        files = discover_files(ERYX, read_scope(ERYX))
+        migrated = [
+            "tests/eryx/contract_analysis/test_contracts.py",
+            "tests/eryx/contract_analysis/test_folder_ownership.py",
+            "tests/eryx/contract_analysis/test_test_placement.py",
+            "tests/eryx/method_analysis/test_declarations.py",
+            "tests/eryx/cohesion_analysis/test_classes.py",
+        ]
+        self.assertTrue(set(migrated) <= set(files["tests"]))
+        diagnostics, error = analyze(ERYX, files["production"], migrated, ["tests"])
+        self.assertIsNone(error)
+        self.assertEqual(diagnostics, [])
+        diagnostics, error = outer_analyze(ERYX, migrated)
+        self.assertIsNone(error)
+        self.assertEqual(diagnostics, [])
+
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)

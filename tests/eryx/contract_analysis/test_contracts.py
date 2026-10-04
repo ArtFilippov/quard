@@ -7,14 +7,14 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs
 
 
-class ClassContractTests(unittest.TestCase):
+class TestContracts(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-contracts-")
         self.root = Path(self.temp.name)

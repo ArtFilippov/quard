@@ -7,14 +7,14 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
 from eryx import _common, _policy
 from eryx.check import execute_job, make_jobs, select_lcom_files
 
 
-class Lcom4Test(unittest.TestCase):
+class TestClasses(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-lcom4-")
         self.root = Path(self.temp.name)

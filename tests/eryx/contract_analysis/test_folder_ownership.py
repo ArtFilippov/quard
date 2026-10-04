@@ -7,7 +7,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
@@ -28,7 +28,7 @@ from eryx.cohesion_references.method_references import MethodReferences
 from eryx.method_analysis.declarations import Declarations
 
 
-class ContractFolderTests(unittest.TestCase):
+class TestFolderOwnership(unittest.TestCase):
     def test_migrated_state_and_marker_classes_keep_entry_points_and_placement(self):
         from eryx._constructor_origins import Origins as LegacyOrigins
         from eryx._constructor_purity_worker import ConstructorChecker as LegacyChecker
