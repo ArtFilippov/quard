@@ -19,7 +19,7 @@ from eryx._common import (SCHEMA, EryxError, capture, read_json,
                           require_runtime, tool_dir, tool_revision, safe_target, write_json)
 from eryx._reports import diagnostic, sorted_diagnostics
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
-from eryx.init_architecture import validate_architecture_config
+from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from eryx.check_job.captured_check_job import CapturedCheckJob
 from eryx.check_runner.check_runner import CheckRunner
 
@@ -213,7 +213,7 @@ class NativeCheckRunner(CheckRunner):
                 marker = read_json(root / ".eryx/architecture.ready.json")
                 if not isinstance(marker, dict) or not marker.get("accepted"):
                     raise EryxError("ARCHITECTURE_NOT_INITIALIZED", "Architecture configuration has not been accepted.")
-                validate_architecture_config(root)
+                ConfiguredArchitectureDraft(root).validate()
                 architecture_ready = True
             except EryxError as exc:
                 diagnostics.append(diagnostic("system", "ARCHITECTURE_NOT_INITIALIZED" if not (root / ".eryx/architecture.ready.json").exists() else exc.code,
