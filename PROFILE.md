@@ -373,8 +373,21 @@ Constructors may have an initial docstring, assignments, if/elif/else, match/cas
 raise, assert and pass. Constants, names, attributes, subscriptions/slices,
 containers/unpacking, operators, comparisons, conditional expressions and f-strings
 recursively check their eager children. Lambdas and nested function definitions
-defer their bodies; their defaults, annotations and decorator expressions are
-checked at definition time. Explicit returns, loops, comprehensions, try/with,
+defer their bodies (including async bodies and lambda expressions); their defaults,
+annotations and decorator expressions are checked at definition time, even with
+`from __future__ import annotations`. A proven project decorator's application is
+also eager: its statements follow the constructor whitelist, except that it may
+declare nested deferred functions and return a function. Project decorator
+factories check both the factory call and the returned decorator's application;
+project callable instances check their `__call__` application. Applying a proven
+project class constructs it; its constructor is checked independently. A returned lambda
+used as a decorator is checked when applied, not when declared. Each eager stage
+checks its own calls and nested arguments; unresolved application fails closed.
+Proven external decorators and external decorator factories are opaque, while their
+eager expression arguments still follow the whitelist. Async decorator bodies stay
+deferred on invocation. Project decorator diagnostics point to the offending source
+node (which may be in another project module) and retain the constructor symbol.
+Explicit returns, loops, comprehensions, try/with,
 imports, deletion, global/nonlocal declarations, nested classes, assignment
 expressions, await, yield and otherwise unknown eager AST forms are rejected.
 Standalone calls are allowed only for `super().__init__(...)`,

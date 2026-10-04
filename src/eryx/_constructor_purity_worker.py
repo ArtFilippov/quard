@@ -60,20 +60,163 @@ class ConstructorChecker:
         self.bases: set[str] = set()
         self.owner: frozenset[str] = frozenset()
         self.fields: Environment = {}
+        self.dynamic_functions: dict[str, tuple[str, ast.FunctionDef | ast.AsyncFunctionDef,
+                                                 Environment]] = {}
+        self.dynamic_lambdas: dict[str, tuple[str, ast.Lambda, Environment]] = {}
+        self.active_decorators: set[str] = set()
+        self.stage_returns: list[frozenset[str]] | None = None
+        self.stage_application = False
+        self.reported_nodes: set[int] = set()
 
     def reject(self, node: ast.expr | ast.stmt | ast.pattern, reason: str) -> None:
+        if id(node) in self.reported_nodes:
+            return
+        self.reported_nodes.add(id(node))
         self.diagnostics.append({"rule": RULE, "path": self.path,
                                  "line": node.lineno, "column": node.col_offset + 1,
                                  "symbol": self.symbol,
                                  "message": f"{self.symbol}: {reason}."})
 
     def origin(self, node: ast.expr) -> frozenset[str]:
+        if isinstance(node, ast.Lambda):
+            key = f"{self.path}:{node.lineno}:{node.col_offset}"
+            return frozenset({f"function:{key}"}) if key in self.dynamic_lambdas else UNKNOWN
         if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
                 and node.value.id == self.receiver):
             return self.fields.get(node.attr, UNKNOWN)
         if isinstance(node, ast.Attribute) and self.origin(node.value) == {"typed-external"}:
             return frozenset({"external:member"})
         return self.origins.expression(node, self.env)
+
+    def definition(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Evaluate only expressions executed while defining a deferred function."""
+        decorators = [self.decorator_value(decorator) for decorator in node.decorator_list]
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if default is not None:
+                self.expr(default)
+        for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
+                    node.args.vararg, node.args.kwarg):
+            if arg is not None and arg.annotation is not None:
+                self.expr(arg.annotation)
+        if node.returns is not None:
+            self.expr(node.returns)
+        if node.decorator_list:
+            for decorator, origin in reversed(list(zip(node.decorator_list, decorators))):
+                self.apply_decorator(origin, decorator)
+            self.env[node.name] = UNKNOWN
+        else:
+            key = f"{self.path}:{node.lineno}:{node.col_offset}"
+            self.dynamic_functions[key] = (self.path, node, self.env.copy())
+            self.env[node.name] = frozenset({f"function:{key}"})
+
+    def decorator_value(self, node: ast.expr) -> frozenset[str]:
+        """Factory execution is eager, but ordinary decorator expression rules apply."""
+        if isinstance(node, ast.Call):
+            target = self.decorator_value(node.func)
+            if not self.parent(node) and not (target and all(
+                item.startswith(("function:", "class:", "type:", "external:")) or
+                item in {"builtin:isinstance", "builtin:issubclass", "builtin:hasattr",
+                         "builtin:callable"} for item in target)):
+                self.reject(node, "unproven or disallowed eager call")
+            for arg in node.args:
+                self.expr(arg)
+            for keyword in node.keywords:
+                self.expr(keyword.value)
+            results: set[str] = set()
+            for item in target:
+                if item.startswith("function:"):
+                    results.update(self.execute_decorator(item))
+                elif item.startswith("external:"):
+                    results.add("external:result")
+                elif item.startswith("class:"):
+                    results.add(f"instance:{item[6:]}")
+                else:
+                    results.add("unknown")
+            return frozenset(results) if results else UNKNOWN
+        self.expr(node)
+        return self.origin(node)
+
+    def apply_decorator(self, origins: frozenset[str], node: ast.expr) -> None:
+        if not origins or "unknown" in origins:
+            self.reject(node, "unresolved decorator application")
+        for origin in origins:
+            if origin.startswith(("external:", "class:")):
+                # A project class application is construction; its __init__ is
+                # checked independently as a constructor in discovered source.
+                continue
+            if origin.startswith("function:"):
+                if self.execute_decorator(origin, application=True) == UNKNOWN:
+                    self.reject(node, "unresolved decorator application")
+            elif origin.startswith("instance:"):
+                method = self.origins.methods.get(f"{origin[9:]}.__call__")
+                if method is None:
+                    self.reject(node, "unresolved decorator application")
+                else:
+                    if self.execute_decorator(f"callable:{origin[9:]}", method,
+                                              application=True) == UNKNOWN:
+                        self.reject(node, "unresolved decorator application")
+            elif origin != "unknown":
+                self.reject(node, "unresolved decorator application")
+
+    def execute_decorator(self, origin: str, method: tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]
+                          | None = None, *, application: bool = False) -> frozenset[str]:
+        """Check a proven project's application/factory frame, leaving returned bodies deferred."""
+        if origin in self.active_decorators:
+            return UNKNOWN
+        key = origin.removeprefix("function:")
+        if method is not None:
+            module, function = method
+            path = self.origins.module_paths[module]
+            env = self.origins.environment(module).copy()
+            receiver = function.args.args[0].arg if function.args.args else None
+        elif key in self.dynamic_functions:
+            path, function, env = self.dynamic_functions[key]
+            receiver = None
+        elif key in self.origins.functions:
+            module, function = self.origins.functions[key]
+            path = self.origins.module_paths[module]
+            env = self.origins.environment(module).copy()
+            receiver = None
+        else:
+            if key not in self.dynamic_lambdas:
+                return UNKNOWN
+            path, function, env = self.dynamic_lambdas[key]
+            receiver = None
+        if isinstance(function, ast.AsyncFunctionDef):
+            # Calling an async function creates a coroutine; its body stays deferred.
+            return frozenset({"function:coroutine"}) if application else UNKNOWN
+        saved = (self.path, self.env, self.receiver, self.fields,
+                 self.stage_returns, self.stage_application)
+        self.active_decorators.add(origin)
+        try:
+            self.path, self.env, self.receiver = path, env.copy(), receiver
+            self.fields = {}
+            self.stage_returns = []
+            self.stage_application = application
+            for arg in (*function.args.posonlyargs, *function.args.args,
+                        *function.args.kwonlyargs, function.args.vararg, function.args.kwarg):
+                if arg is not None:
+                    self.env[arg.arg] = UNKNOWN
+            if application:
+                positionals = function.args.posonlyargs + function.args.args
+                index = 1 if method is not None else 0
+                if len(positionals) > index:
+                    self.env[positionals[index].arg] = frozenset({"function:decorated"})
+            if not isinstance(function, ast.Lambda):
+                for name in bindings(function.body):
+                    self.env[name] = UNKNOWN
+            if isinstance(function, ast.Lambda):
+                self.expr(function.body)
+                result = self.origin(function.body)
+            else:
+                self.suite(function.body, docstring=True)
+                result = (frozenset[str]().union(*self.stage_returns)
+                          if self.stage_returns else UNKNOWN)
+            return result
+        finally:
+            (self.path, self.env, self.receiver, self.fields,
+             self.stage_returns, self.stage_application) = saved
+            self.active_decorators.remove(origin)
 
     def parent(self, node: ast.Call) -> bool:
         """Only direct super initialization and a declared base's direct initializer."""
@@ -130,6 +273,8 @@ class ConstructorChecker:
                 if default is not None:
                     self.expr(default)
             # Lambda body is deferred until invocation.
+            key = f"{self.path}:{node.lineno}:{node.col_offset}"
+            self.dynamic_lambdas[key] = (self.path, node, self.env.copy())
         elif isinstance(node, (ast.Constant, ast.Name)):
             return
         elif isinstance(node, (ast.Attribute, ast.Subscript, ast.Slice,
@@ -238,22 +383,22 @@ class ConstructorChecker:
                 self.expr(node.msg)
         elif isinstance(node, ast.Pass):
             return
+        elif isinstance(node, ast.Return) and self.stage_returns is not None:
+            if node.value is not None:
+                self.expr(node.value)
+                value = self.origin(node.value)
+                self.stage_returns.append(value)
+                if self.stage_application and not (value and all(
+                    item.startswith("function:") for item in value)):
+                    self.reject(node, "decorator application must return a function")
+            else:
+                self.stage_returns.append(UNKNOWN)
+                if self.stage_application:
+                    self.reject(node, "decorator application must return a function")
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             self.call(node.value, standalone=True)
         elif isinstance(node, FUNCTIONS):
-            # Definition-time expressions are eager; the body is deferred.
-            for decorator in node.decorator_list:
-                self.expr(decorator)
-            for default in (*node.args.defaults, *node.args.kw_defaults):
-                if default is not None:
-                    self.expr(default)
-            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
-                        node.args.vararg, node.args.kwarg):
-                if arg is not None and arg.annotation is not None:
-                    self.expr(arg.annotation)
-            if node.returns is not None:
-                self.expr(node.returns)
-            self.env[node.name] = UNKNOWN
+            self.definition(node)
         else:
             self.reject(node, f"forbidden {type(node).__name__} statement")
             if isinstance(node, ast.Expr):
@@ -300,6 +445,12 @@ class ConstructorChecker:
         self.bases = {item for base in cls.bases for item in self.origin(base)
                       if item.startswith(("class:", "external:"))}
         self.fields = {}
+        self.dynamic_functions = {}
+        self.dynamic_lambdas = {}
+        self.active_decorators = set()
+        self.stage_returns = None
+        self.stage_application = False
+        self.reported_nodes = set()
         positionals = method.args.posonlyargs + method.args.args
         self.receiver = (positionals[0].arg if len(positionals) > len(method.args.defaults) else None)
         self.local_bindings = bindings(method.body) | {

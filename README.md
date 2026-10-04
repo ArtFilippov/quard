@@ -81,7 +81,10 @@ The non-instance-method rule independently checks discovered `.py` and `.pyi` fi
 in both profiles, including when LCOM4 is narrowed or skipped.
 The constructor-purity rule independently checks eager constructor syntax in all
 discovered production and test `.py` files, including nested classes, even when
-LCOM4 is narrowed or skipped. See [PROFILE.md](PROFILE.md#constructor-purity).
+LCOM4 is narrowed or skipped. Deferred nested bodies are allowed; definition-time
+defaults and annotations, plus proven project decorator factories and applications,
+are checked. External decorators are opaque; unknown applications fail. See
+[PROFILE.md](PROFILE.md#constructor-purity).
 The instance-field boundary rule uses the same full scope and reports proven
 external access to consumer-defined stored fields, including first assignments
 to known consumer instances. Literal-name built-in `getattr`/`setattr`/`delattr`

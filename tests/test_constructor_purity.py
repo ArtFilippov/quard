@@ -340,6 +340,177 @@ class Outer:
         self.assertEqual([(d["symbol"], d["line"]) for d in result["diagnostics"]],
                          [("Outer.__init__", 3), ("Outer.Inner.__init__", 5)])
 
+    def test_deferred_bodies_and_proven_decorator_application_stages(self):
+        self.put("src/pkg/decorators.py", '''\
+def decorate(fn):
+    def wrapper(*args, **kwargs):
+        return forbidden_deferred(*args, **kwargs)
+    marker = int(1)
+    return wrapper
+
+def factory(value):
+    prepared = str(value)
+    def apply(fn):
+        def wrapper():
+            return forbidden_deferred()
+        return wrapper
+    return apply
+
+class CallableDecorator:
+    def __init__(self):
+        self.value = 1
+    def __call__(self, fn):
+        def wrapper():
+            return forbidden_deferred()
+        return wrapper
+
+class ClassDecorator:
+    def __init__(self, fn):
+        self.fn = fn
+
+async def async_decorator(fn):
+    forbidden_deferred()
+''')
+        self.put("src/pkg/public.py", 'from .decorators import decorate, factory, CallableDecorator, '
+                 'ClassDecorator, async_decorator\n')
+        self.put("src/pkg/model.py", '''\
+from __future__ import annotations
+from external_lib import external_decorator, external_factory
+from .public import decorate as exported, factory, CallableDecorator, ClassDecorator, async_decorator
+
+class Model:
+    def __init__(self):
+        @external_decorator
+        @external_factory(1)
+        @exported
+        @factory(2)
+        @CallableDecorator()
+        @ClassDecorator
+        @async_decorator
+        def later(value: unknown_annotation = int(1)) -> unknown_return:
+            forbidden_deferred()
+        async def asynchronous():
+            await forbidden_deferred()
+        self.value = lambda x=int(2): forbidden_deferred(x)
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["diagnostics"]),
+                         ("passed", 0, []))
+
+    def test_decorator_eager_failures_and_offending_source_locations(self):
+        self.put("src/pkg/decorators.py", '''\
+from external_lib import opaque
+def bad_factory(value):
+    nested = int(forbidden())
+    def apply(fn):
+        def wrapper():
+            return forbidden_deferred()
+        eager = opaque(forbidden())
+        return wrapper
+    return apply
+
+def bad_decorator(fn):
+    eager = forbidden()
+    return fn
+
+class BadCallable:
+    def __init__(self):
+        self.value = 1
+    def __call__(self, fn):
+        eager = forbidden()
+        return fn
+
+def no_decorator(value):
+    return value
+
+def lambda_factory():
+    return lambda fn: forbidden()
+''')
+        self.put("src/pkg/model.py", '''\
+from __future__ import annotations
+from .decorators import bad_factory, bad_decorator, BadCallable, no_decorator, lambda_factory
+class Model:
+    def __init__(self):
+        @bad_factory(1)
+        @bad_decorator
+        @BadCallable()
+        @no_decorator(1)
+        @unresolved
+        @lambda_factory()
+        def nested(x: forbidden_annotation = forbidden_default()) -> forbidden_return:
+            return forbidden_deferred()
+        lam = lambda x=forbidden_lambda(): forbidden_deferred()
+''')
+        result, raw, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        locations = {(d["path"], d["line"], d["column"]) for d in result["diagnostics"]}
+        self.assertEqual(locations, {
+            ("src/pkg/decorators.py", 3, 18),
+            ("src/pkg/decorators.py", 7, 24),
+            ("src/pkg/decorators.py", 12, 13),
+            ("src/pkg/decorators.py", 19, 17),
+            ("src/pkg/decorators.py", 26, 23),
+            ("src/pkg/model.py", 8, 10),
+            ("src/pkg/model.py", 9, 10),
+            ("src/pkg/model.py", 10, 10),
+            ("src/pkg/model.py", 11, 46),
+            ("src/pkg/model.py", 13, 24),
+        })
+        self.assertTrue(all(d["symbol"] == "Model.__init__" for d in result["diagnostics"]))
+
+    def test_postponed_annotations_and_unknown_callable_instance(self):
+        self.put("src/annotations.py", '''\
+from __future__ import annotations
+class Uncallable:
+    def __init__(self):
+        self.value = 1
+class Model:
+    def __init__(self):
+        @Uncallable()
+        def later(x: forbidden_annotation() = forbidden_default()) -> forbidden_return():
+            forbidden_deferred()
+        async def deferred(x: forbidden_async_annotation()):
+            forbidden_deferred()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["column"]) for d in result["diagnostics"]],
+                         [(8, 47), (8, 22), (8, 71), (7, 10), (10, 31)])
+
+    def test_mixed_decorator_origins_still_check_proven_project_branch(self):
+        self.put("src/choices.py", '''\
+def project(fn):
+    eager = forbidden()
+    return fn
+class Model:
+    def __init__(self, option, unknown):
+        if option:
+            choice = project
+        else:
+            choice = unknown
+        @choice
+        def later():
+            forbidden_deferred()
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["column"]) for d in result["diagnostics"]],
+                         [(10, 10), (2, 13)])
+
+    def test_project_decorator_must_return_a_function(self):
+        self.put("src/returns.py", '''\
+def invalid(fn):
+    return 1
+class Model:
+    def __init__(self):
+        @invalid
+        def later():
+            pass
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(d["line"], d["column"]) for d in result["diagnostics"]],
+                         [(2, 5), (5, 10)])
+
     def test_parse_and_report_failures(self):
         self.put("src/good.py", 'class A:\n    def __init__(self):\n        return None\n')
         self.put("src/bad.py", "class Broken(\n")
@@ -374,7 +545,13 @@ class Outer:
             root = Path(directory)
             create_repo(root)
             (root / "src/demo/domain/api.py").write_text(
-                'class A:\n    def __init__(self):\n        return None\n', encoding="utf-8")
+                'from .decorators import project_decorator\n'
+                'class A:\n    def __init__(self):\n        return None\n'
+                '        @project_decorator\n'
+                '        def later():\n            pass\n', encoding="utf-8")
+            (root / "src/demo/domain/decorators.py").write_text(
+                'def project_decorator(fn):\n    result = forbidden()\n    return fn\n',
+                encoding="utf-8")
             (root / "tests/test_value.py").write_text(
                 'class B:\n    def __init__(self):\n        unknown()\n', encoding="utf-8")
             fake, _ = RunnerTests().fake_tools()
@@ -396,8 +573,12 @@ class Outer:
                 self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
                 self.assertEqual({(d["path"], d["rule"]) for d in report["diagnostics"]}, {
                     ("src/demo/domain/api.py", "CONSTRUCTOR_PURITY"),
+                    ("src/demo/domain/decorators.py", "CONSTRUCTOR_PURITY"),
                     ("tests/test_value.py", "CONSTRUCTOR_PURITY"),
                     ("src/demo/domain/api.py", "reportArgumentType")})
+                self.assertIn(("src/demo/domain/decorators.py", 2, "A.__init__"),
+                              {(d["path"], d["line"], d["symbol"])
+                               for d in report["diagnostics"] if d["rule"] == "CONSTRUCTOR_PURITY"})
                 tool = next(item for item in report["tools"] if item["name"] == "constructor-purity")
                 self.assertEqual((tool["status"], tool["exit_code"]), ("violations", 1))
                 self.assertTrue((root / tool["raw_output"]["stdout"]).is_file())

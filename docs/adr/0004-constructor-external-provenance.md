@@ -29,7 +29,10 @@ values from external calls do not gain an inferred type.
 This boundary accepts external work in a constructor, including possible side
 effects. It is a deliberate provenance rule, **not a runtime purity claim**.
 Unknowns and mixed targets may require clearer imports or annotations. Dynamic
-rebinding, decorators, indirect inference and unresolved flow remain outside
-the static guarantee. The independent constructor rule retains positioned
+rebinding, indirect inference and unresolved flow remain outside
+the static guarantee. Proven external decorator applications are opaque as well;
+project decorators, including returned project decorators and callable instances,
+are checked at each eager application stage without inspecting external source.
+The independent constructor rule retains positioned
 violations and the normal check/report exit semantics; native diagnostics still
 apply independently.

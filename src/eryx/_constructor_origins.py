@@ -40,9 +40,12 @@ class Origins:
 
     def __init__(self, trees: dict[str, ast.Module]):
         self.trees = {module_name(path): tree for path, tree in trees.items()}
+        self.module_paths = {module_name(path): path for path in trees}
         self.packages = {module_name(path) for path in trees if Path(path).stem == "__init__"}
         self.roots = {module.split(".")[0] for module in self.trees if module}
         self.classes: set[str] = set()
+        self.functions: dict[str, tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+        self.methods: dict[str, tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
         for module, tree in self.trees.items():
             def collect(nodes: list[ast.stmt], owner: str) -> None:
                 for statement in nodes:
@@ -50,6 +53,12 @@ class Origins:
                         qualified = f"{owner}.{statement.name}"
                         self.classes.add(qualified)
                         collect(statement.body, qualified)
+                    elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        key = f"{owner}.{statement.name}"
+                        if owner == module:
+                            self.functions[key] = (module, statement)
+                        else:
+                            self.methods[key] = (module, statement)
             collect(tree.body, module)
         self.cache: dict[str, Environment] = {}
         self.active: set[str] = set()
@@ -111,6 +120,10 @@ class Origins:
             return frozenset(result)
         if isinstance(node, ast.IfExp):
             return self.expression(node.body, env) | self.expression(node.orelse, env)
+        if isinstance(node, ast.Call):
+            origins = self.expression(node.func, env)
+            if origins and all(item.startswith("class:") for item in origins):
+                return frozenset({f"instance:{item[6:]}" for item in origins})
         return UNKNOWN
 
     def annotation(self, node: ast.expr, env: Environment) -> Origin:
@@ -138,7 +151,9 @@ class Origins:
             elif isinstance(node, ast.ClassDef):
                 env[node.name] = frozenset({f"class:{module}.{node.name}"})
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                env[node.name] = UNKNOWN
+                key = f"{module}.{node.name}"
+                env[node.name] = (frozenset({f"function:{key}"})
+                                  if key in self.functions and not node.decorator_list else UNKNOWN)
             elif isinstance(node, ast.Assign):
                 value = self.expression(node.value, env)
                 for target in node.targets:
