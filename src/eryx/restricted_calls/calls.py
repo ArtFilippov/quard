@@ -67,6 +67,11 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         self._reassigned_builtins: set[str] = set()
         self._ancestry_parents = parents
 
+    def _parent_map(self) -> dict[str, tuple[str | None, ...]]:
+        """Return the ancestry map used when this visitor collects class bases."""
+        assert self._ancestry_parents is not None
+        return self._ancestry_parents
+
     @override
     def results(self) -> list[dict[str, object]]:
         return self.diagnostics

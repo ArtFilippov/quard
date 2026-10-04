@@ -109,7 +109,9 @@ class ContractFolderTests(unittest.TestCase):
 
     def test_restricted_calls_contract_derived_visitor_and_legacy_entry_point(self):
         from eryx._restricted_calls import Ancestry as LegacyAncestry, Calls as LegacyCalls
-        from eryx.restricted_calls.ancestry import Ancestry
+        from eryx.ancestry_traversal.ancestry import Ancestry
+        from eryx.ancestry_traversal.ancestry_traversal import AncestryTraversal
+        from eryx.restricted_calls.ancestry import Ancestry as PreviousAncestry
         from eryx.restricted_calls.calls import Calls
         from eryx.restricted_calls.restricted_calls import RestrictedCalls
         from eryx._class_contracts_worker import analyze as contracts_analyze
@@ -118,10 +120,14 @@ class ContractFolderTests(unittest.TestCase):
 
         self.assertIs(LegacyCalls, Calls)
         self.assertIs(LegacyAncestry, Ancestry)
+        self.assertIs(PreviousAncestry, Ancestry)
         self.assertIn(RestrictedCalls, Calls.__bases__)
         self.assertIn(Calls, Ancestry.__bases__)
-        paths = sorted(str(path.relative_to(ERYX)) for path in (
-            ERYX / "src/eryx/restricted_calls").glob("*.py"))
+        self.assertIn(AncestryTraversal, Ancestry.__bases__)
+        self.assertIn(RestrictedCalls, AncestryTraversal.__bases__)
+        paths = sorted(str(path.relative_to(ERYX)) for folder in (
+            "ancestry_traversal", "restricted_calls")
+            for path in (ERYX / "src/eryx" / folder).glob("*.py"))
         paths.append("src/eryx/_restricted_calls.py")
         for analyze in (contracts_analyze, folders_analyze, outer_analyze):
             diagnostics, error = analyze(ERYX, paths)

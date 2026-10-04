@@ -12,6 +12,7 @@ from jsonschema import validate
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX / "src"))
 
+from eryx._encapsulated_only_worker import analyze
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs
 
@@ -88,6 +89,37 @@ class Client:
             "example.Base.run": "example.Base",
             "example.Base.secret": "example.Base",
             "example.Base.__len__": "example.Base.__len__"})
+
+    def test_migrated_ancestry_retains_alias_dispatch_and_field_diagnostics(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+class Base:
+    def __init__(self): self.data = 1
+    @encapsulated_only
+    def run(self): pass
+Alias = Base
+class Child(Alias): pass
+class Client:
+    def check(self, peer: Child):
+        peer.run()
+        peer.data
+''')
+        calls, raw, _ = self.run_worker(selected=[])
+        self.assertEqual((calls["status"], calls["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["rule"], d["line"], d["column"], d["symbol"])
+                          for d in calls["diagnostics"]],
+                         [("ENCAPSULATED_ONLY_CALL", 10, 9, "example.Base.run")])
+        self.assertEqual(raw["effective_targets"], {"example.Base.run": "example.Base.run"})
+        fields, field_raw, _ = self.run_worker(name="instance-fields", selected=[])
+        self.assertEqual((fields["status"], fields["exit_code"], field_raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["rule"], d["line"], d["column"], d["symbol"])
+                          for d in fields["diagnostics"]],
+                         [("EXTERNAL_INSTANCE_FIELD", 11, 9, "example.Base.data")])
+        _, error, restrictions = analyze(self.root, ["src/example.py"])
+        self.assertIsNone(error)
+        self.assertEqual(restrictions.parents["example.Child"], ("example.Base",))
 
     def test_builtin_protocol_helpers_match_direct_receivers_and_shadowing(self):
         self.put("src/example.py", '''\
