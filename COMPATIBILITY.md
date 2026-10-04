@@ -70,8 +70,9 @@ W9201 продолжает проверять публичный фасад. Nat
 
 ## Совместимость с clean-architecture-linter-plugin 1.2.2
 
-`_architecture_compat.py` исправляет воспроизводимые ошибки семантики закреплённой
-версии. Точка интеграции в worker — вызов `install_architecture_compat()` **до**
+`architecture_compat_utils.py` исправляет воспроизводимые ошибки семантики закреплённой
+версии; `_architecture_compat.py` сохраняет прежний путь импорта. Точка интеграции
+в worker — вызов `install_architecture_compat()` **до**
 `pylint.lint.Run(...)`, создающего и конфигурирующего checkers. Повторный вызов
 безопасен; другая версия плагина требует пересмотра патча и вызывает ошибку.
 Этот же installer вызывает `install_pylint_protocol_compat()` для описанного ниже

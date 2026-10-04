@@ -11,12 +11,28 @@ sys.path.insert(0, str(ERYX / "src"))
 sys.path.insert(0, str(ERYX / "tests"))
 
 from offline_fixtures import native_result
+from eryx import _architecture_compat, _reports, _restricted_reports
+from eryx import architecture_compat_utils, report_utils, restricted_report_utils
 from eryx._reports import diagnostic, sorted_diagnostics
+from eryx.free_function_placement_utils import analyze
 from eryx.report_parsing.native_report_parser import NativeReportParser
 from eryx.report_parsing.report_parsing import ReportParsing
 
 
 class TestNativeReportParser(unittest.TestCase):
+    def test_reporting_and_compatibility_utilities_keep_their_entry_points(self):
+        paths = [f"src/eryx/{name}.py" for name in (
+            "_reports", "report_utils", "_restricted_reports", "restricted_report_utils",
+            "_architecture_compat", "architecture_compat_utils",
+        )]
+        diagnostics, error = analyze(ERYX, paths)
+        self.assertEqual((diagnostics, error), ([], None))
+        self.assertIs(_reports.normalize, report_utils.normalize)
+        self.assertIs(_restricted_reports.parse_encapsulated_only,
+                      restricted_report_utils.parse_encapsulated_only)
+        self.assertIs(_architecture_compat.install_architecture_compat,
+                      architecture_compat_utils.install_architecture_compat)
+
     def parser(self) -> ReportParsing:
         return NativeReportParser(Path("/tmp/demo-repo"))
 
