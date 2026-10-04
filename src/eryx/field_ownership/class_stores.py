@@ -74,9 +74,4 @@ class ClassStores(ast.NodeVisitor):
         pass
 
 
-def class_stores(node: ast.ClassDef) -> list[tuple[str, ast.expr, bool, ast.expr | None]]:
-    """Find stores in the class suite without visiting nested class/function bodies."""
-    visitor = ClassStores()
-    for statement in node.body:
-        visitor.visit(statement)
-    return visitor.stores
+from eryx.field_ownership.class_stores_utils import class_stores

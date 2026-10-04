@@ -11,6 +11,7 @@ from eryx.field_access.field_access import FieldAccess
 from eryx.field_ownership.accesses import Accesses as PreviousAccesses
 from eryx.field_ownership.field_ownership import FieldOwnership
 from eryx.field_ownership.ownership import Ownership
+from eryx.free_function_placement_utils import analyze as placement
 
 ERYX = Path(__file__).resolve().parents[3]
 
@@ -30,3 +31,12 @@ class TestFieldOwnership(unittest.TestCase):
             outer = [item.name for item in ast.parse(source.read_text(encoding="utf-8")).body
                      if isinstance(item, ast.ClassDef)]
             self.assertEqual(outer, [name])
+        paths = [str(path.relative_to(ERYX)) for folder in (
+            "field_ownership", "field_operation_model", "field_type_analysis",
+            "constructor_analysis", "constructor_origins")
+            for path in (ERYX / "src/eryx" / folder).glob("*.py")]
+        paths.extend(("src/eryx/field_initialization_utils.py",
+                      "src/eryx/_field_initialization.py"))
+        diagnostics, error = placement(ERYX, paths)
+        self.assertIsNone(error)
+        self.assertEqual(diagnostics, [])
