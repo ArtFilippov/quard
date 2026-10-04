@@ -80,6 +80,22 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   pass. Source and companion stubs are counted separately, across production and
   tests, independently of LCOM4 selection. Parse and worker failures are
   infrastructure errors; raw worker output and job status appear in the report.
+* **Contract folders**: `CONTRACT_FOLDER` requires each discovered local Protocol or
+  abstract-interface class to reside in a folder and module whose names are the
+  class name converted to snake_case (for example, `HTTPPort` in
+  `http_port/http_port.py` or `.pyi`). `IMPLEMENTATION_FOLDER` requires classes with
+  local contract ancestry to live in that contract's folder or a nested folder.
+  Class-free helper modules may share the folder. Production and test files follow
+  the same rule within their respective roots; a test implementation of a production
+  contract mirrors the contract folder under `tests/`. A concrete local base takes
+  precedence over opaque external bases. `COMPETING_LOCAL_BASES` requires a separate
+  combined local contract and one selected concrete base when local contracts
+  compete; the combined contract must cover that base's contract. Unresolved
+  ancestry emits `UNRESOLVED_FOLDER_OWNER` rather than proving placement.
+  This job scans discovered `.py` and `.pyi` files independently of LCOM4 selection,
+  resolves aliases and imports through the class-contract index, and prefers source
+  ancestry when a companion stub exists. Parse and worker failures are infrastructure
+  errors; all structural violations retain one-based class positions.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and

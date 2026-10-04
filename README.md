@@ -121,6 +121,10 @@ only by local contracts. Each member receives one violation per class and source
 The independent outer-class rule checks every discovered production and test `.py` and
 `.pyi` file, even when LCOM4 is narrowed or skipped. A file may declare at most one
 class outside another class; function-local classes count as outer classes.
+The contract-folder job checks local Protocol and abstract-interface declarations and
+their implementations across the same scope, including companion stubs. A contract
+named `HTTPPort` belongs in `http_port/http_port.py` (or `.pyi`); implementations
+belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-and-scope).
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including
