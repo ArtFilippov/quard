@@ -15,12 +15,29 @@ from eryx.check_runner.native_check_runner import (
     NativeCheckRunner, binary, execute_job, installed_versions, make_jobs, select_lcom_files,
 )
 
+__all__ = ["argparse", "json", "Path", "sys", "Any", "Callable", "SCHEMA", "capture",
+           "project_dir", "repo_lock", "diagnostic", "NativeCheckRunner", "binary",
+           "execute_job", "installed_versions", "make_jobs", "select_lcom_files",
+           "run_checks", "display", "main"]
+
 
 def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
                lcom_files: str | None = None,
                capture_fn: Callable[..., dict[str, Any]] = capture,
                versions_fn: Callable[..., Any] = installed_versions) -> dict[str, Any]:
-    """Compatibility wrapper for callers of the check command's runner."""
+    """Run checks through the native runner for existing command callers.
+
+    Args:
+        root (Path): Consumer project root.
+        serial (bool, default=False): Run jobs one at a time.
+        timeout (int, default=600): Per-job time limit in seconds.
+        lcom_files (str | None, default=None): Optional selected LCOM4 paths.
+        capture_fn (Callable[..., dict[str, Any]], default=capture): Native subprocess capture.
+        versions_fn (Callable[..., Any], default=installed_versions): Tool version checker.
+
+    Returns:
+        dict[str, Any]: Complete archived check report.
+    """
     return NativeCheckRunner().run(root, serial=serial, timeout=timeout, lcom_files=lcom_files,
                                    capture_fn=capture_fn, versions_fn=versions_fn)
 

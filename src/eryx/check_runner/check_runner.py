@@ -9,6 +9,10 @@ from typing import Any, Protocol
 class CheckRunner(Protocol):
     """Run independent jobs and return a complete archived report."""
 
+    def run_jobs(self, jobs: list[dict[str, Any]], *, serial: bool,
+                 execute: Callable[[dict[str, Any]], dict[str, Any]]
+                 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]: ...
+
     def run(self, root: Path, *, serial: bool, timeout: int,
             lcom_files: str | None, capture_fn: Callable[..., dict[str, Any]],
             versions_fn: Callable[..., Any]) -> dict[str, Any]: ...

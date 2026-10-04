@@ -96,6 +96,24 @@ class TestCapturedCheckJob(unittest.TestCase):
             self.assertEqual(result["status"], "error")
             self.assertTrue((root / result["raw_output"]["stderr"]).is_file())
 
+    def test_capture_exception_archives_failure_and_keeps_exit_code_unknown(self):
+        with TemporaryDirectory(prefix="eryx-capture-exception-") as directory:
+            root = Path(directory)
+            run_dir = root / ".eryx" / "reports" / "first-run"
+            job = {"name": "pydoclint", "tool": "pydoclint", "argv": ["missing"]}
+
+            def broken_capture(_argv: list[str], _root: Path, _timeout: int
+                               ) -> dict[str, Any]:
+                raise OSError("subprocess failed")
+
+            result = CapturedCheckJob().execute(
+                job, root, run_dir, timeout=30, capture_fn=broken_capture)
+            self.assertEqual((result["status"], result["exit_code"]), ("error", None))
+            self.assertEqual(result["error"], "RUNNER_SUBPROCESS_ERROR")
+            self.assertEqual((root / result["raw_output"]["stderr"]).read_text(encoding="utf-8"),
+                             "subprocess failed")
+            self.assertTrue((root / result["raw_output"]["stdout"]).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

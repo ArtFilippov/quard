@@ -10,6 +10,11 @@ from typing import Any, Protocol
 class CheckJob(Protocol):
     """Execute a job without hiding tool failures or native diagnostics."""
 
+    def capture_output(self, job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
+                       *, capture_fn: Callable[..., dict[str, Any]]
+                       ) -> tuple[dict[str, Any], dict[str, str]]:
+        ...
+
     def execute(self, job: dict[str, Any], root: Path, run_dir: Path, timeout: int, *,
                 capture_fn: Callable[..., dict[str, Any]]) -> dict[str, Any]:
         ...

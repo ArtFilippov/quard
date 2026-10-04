@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import Any
 import unittest
 from unittest.mock import patch
 
@@ -115,6 +116,30 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "pyright")
                          ["status"], "error")
         self.assertTrue((self.root / report["report_path"]).is_file())
+
+    def test_unexpected_job_failure_does_not_cancel_or_hide_native_results(self):
+        fake, seen = fake_tools({"pydoclint": {
+            "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
+
+        def failing_capture(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if str(ERYX / "_lcom4_worker.py") in argv:
+                raise RuntimeError("worker crashed")
+            return fake(argv, cwd, timeout)
+
+        report = self.run_report(failing_capture, serial=True)
+        self.assertEqual((report["status"], report["exit_code"], len(seen)),
+                         ("error", 2, 13))
+        self.assertEqual({item["rule"] for item in report["diagnostics"]},
+                         {"RUNNER_SUBPROCESS_ERROR", "DOC101"})
+        jobs = {job["name"]: job for job in report["tools"]}
+        self.assertEqual((jobs["lcom4"]["status"], jobs["lcom4"]["exit_code"]),
+                         ("error", None))
+        self.assertEqual((jobs["pydoclint"]["status"], jobs["pydoclint"]["exit_code"]),
+                         ("violations", 1))
+        log = self.root / jobs["lcom4"]["raw_output"]["stderr"]
+        self.assertIn("worker crashed", log.read_text(encoding="utf-8"))
+        self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"], [])
+        validate(report, read_json(ERYX / "report.schema.json"))
 
     def test_native_violation_returns_one_and_retains_diagnostic(self):
         fake, seen = fake_tools({"pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
