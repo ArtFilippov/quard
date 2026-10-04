@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 from typing import override
 
 from eryx._class_contracts_worker import Contracts
-from eryx._field_types import UNKNOWN, field_evidence
+from eryx.dispatch_site_model.dispatch_site import DispatchSite
+from eryx.field_type_analysis.type_evidence import UNKNOWN, field_evidence
 from eryx._instance_fields_worker import (Accesses, Binding, Ownership, PROTOCOL_BUILTINS,
                                           assigned_names, module_name)
-from eryx._markers import FUNCTIONS, local_names
+from eryx.marker_analysis.marker_index import FUNCTIONS, local_names
 
 
 class Restrictions(object):
@@ -396,16 +396,6 @@ class Restrictions(object):
                     methods[0].body[0].value.id == (
                         methods[0].args.posonlyargs + methods[0].args.args)[0].arg)
         return False
-
-
-@dataclass(frozen=True)
-class DispatchSite:
-    """One implicit invocation with its original receiver and possible targets."""
-
-    operation: ast.expr
-    receiver: ast.expr
-    origins: frozenset[Binding]
-    candidates: tuple[str, ...]
 
 
 _BINARY = {

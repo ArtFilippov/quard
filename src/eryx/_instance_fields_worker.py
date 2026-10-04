@@ -9,9 +9,9 @@ import sys
 from typing import override
 
 from eryx._field_initialization import missing_fields, rebound_fields, written_fields
-from eryx._field_operations import field_operations
-from eryx._field_types import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
-from eryx._markers import MarkerIndex
+from eryx.field_operation_model.field_operation import field_operations
+from eryx.field_type_analysis.type_evidence import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
+from eryx.marker_analysis.marker_index import MarkerIndex
 
 Binding = tuple[str, str]  # (class | instance | module | builtins | builtin, name)
 PROTOCOL_BUILTINS = frozenset({"len", "str", "repr", "ascii", "format", "int", "float",

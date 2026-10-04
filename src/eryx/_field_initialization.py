@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import ast
-from eryx._field_operations import FieldOperation, field_operations
+from eryx.field_operation_model.field_operation import FieldOperation, field_operations
 
 # A count saturates at two: branches join as alternatives, whereas loop iterations
 # can produce successive writes. The latter distinction is needed for rebinding.

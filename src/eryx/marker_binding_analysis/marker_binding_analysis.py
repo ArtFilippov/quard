@@ -1,0 +1,14 @@
+"""Contract for resolving marker bindings at declaration time."""
+from __future__ import annotations
+
+import ast
+from typing import Protocol
+
+
+class MarkerBindingAnalysis(Protocol):
+    """Track lexical marker bindings and their import provenance."""
+
+    def value(self, node: ast.expr) -> str | None: ...
+    def imported(self, qualified: str) -> str | None: ...
+    def assign(self, target: ast.expr, value: str | None) -> None: ...
+    def suite(self, body: list[ast.stmt], conditional: bool = False) -> None: ...

@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from typing import override
 
-from eryx._markers import MarkerIndex
+from eryx.marker_analysis.marker_index import MarkerIndex
 from eryx.method_analysis.method_analysis import MethodAnalysis
 
 METHODS = ("staticmethod", "classmethod")
