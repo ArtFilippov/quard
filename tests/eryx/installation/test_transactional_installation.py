@@ -111,8 +111,11 @@ class TestTransactionalInstallation(unittest.TestCase):
         with TemporaryDirectory(prefix="eryx-installation-") as directory:
             root = self.project(directory)
             before = (root / "pyproject.toml").read_bytes()
-            result = self.installation().install(root, ERYX, dry_run=True)
+            installation = self.installation()
+            plan = installation.plan(root, ERYX)
+            result = installation.install(root, ERYX, dry_run=True)
             self.assertEqual((result["status"], result["exit_code"]), ("planned", 0))
+            self.assertEqual({key: result[key] for key in plan}, plan)
             self.assertEqual((root / "pyproject.toml").read_bytes(), before)
             self.assertFalse((root / ".eryx").exists())
 
@@ -270,8 +273,11 @@ class TestTransactionalInstallation(unittest.TestCase):
         doc = load_toml(path)
         doc["project"]["optional-dependencies"] = {"keep": ["six==1.17.0"]}
         path.write_text(tomlkit.dumps(doc))
+        self.assertEqual(self.installation().plan(root, ERYX, extras=["keep"])["extras"],
+                         ["keep"])
         with patch.object(entry, "capture", side_effect=fake_uv) as capture:
             self.installation().install(root, ERYX, extras=["keep"], progress=False)
+            self.assertEqual(self.installation().plan(root, ERYX)["extras"], ["keep"])
             self.installation().install(root, ERYX, progress=False)
         commands = [call.args[0] for call in capture.call_args_list]
         for command in commands:
@@ -282,6 +288,8 @@ class TestTransactionalInstallation(unittest.TestCase):
     def test_unknown_extra_is_rejected_without_writes(self):
         root = self.configured_project()
         before = managed_bytes(root)
+        with self.assertRaisesRegex(EryxError, "Unknown project extra"):
+            self.installation().plan(root, ERYX, extras=["missing"])
         with self.assertRaisesRegex(EryxError, "Unknown project extra"):
             self.installation().install(root, ERYX, extras=["missing"], progress=False)
         self.assertEqual(managed_bytes(root), before)

@@ -715,8 +715,6 @@ def install_pinned_plugin() -> None:
     installed_version = version("clean-architecture-linter-plugin")
     if installed_version != "1.2.2":
         raise RuntimeError(f"Review architecture compatibility for plugin {installed_version}")
-    install_pylint_protocol_compat()
-
     from clean_architecture_linter.config import ConfigurationLoader
     from clean_architecture_linter.checks.boundaries import ResourceChecker, VisibilityChecker
     from clean_architecture_linter.checks.contracts import ContractChecker

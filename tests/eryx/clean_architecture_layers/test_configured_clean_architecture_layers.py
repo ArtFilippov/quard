@@ -53,9 +53,14 @@ class TestConfiguredCleanArchitectureLayers(unittest.TestCase):
         }
 
     def test_preserves_bootstrap_and_orders_specific_layers_before_the_package(self):
-        ConfiguredCleanArchitectureLayers().sync(self.root, self.tach)
+        layers = ConfiguredCleanArchitectureLayers()
+        projected, infrastructure = layers.project(self.tach)
+        self.assertEqual(projected[0], {"module": "sample.contracts", "name": "Domain"})
+        self.assertEqual(infrastructure, ["sample.transport"])
+        layers.sync(self.root, self.tach)
         config = tomllib.loads(self.path.read_text(encoding="utf-8"))["tool"]["clean-arch"]
         definitions = config["layers"]
+        self.assertEqual(definitions, projected)
         self.assertEqual(
             {item["module"]: item["name"] for item in definitions}, self.layers,
         )

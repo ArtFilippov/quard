@@ -14,7 +14,9 @@ from eryx._common import (EryxError, atomic_write, capture, load_toml, read_json
 from eryx._policy import ALLOWED_LAYERS, LAYER_DIRS, LAYERS, exclude_globs
 from eryx._reports import normalize
 from eryx.architecture_draft.architecture_draft import ArchitectureDraft
-from eryx.clean_architecture_layers.configured_clean_architecture_layers import ConfiguredCleanArchitectureLayers
+from eryx.clean_architecture_layers.configured_clean_architecture_layers import (
+    ConfiguredCleanArchitectureLayers,
+)
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 
 
@@ -35,7 +37,9 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
         names = {Path(path).parts[1] for path in files if len(Path(path).parts) > 2}
         direct = [path for path in files if len(Path(path).parts) == 2]
         if direct or len(names) != 1:
-            raise EryxError("UNSUPPORTED_LAYOUT", "Draft generation expects one import package beneath src/, e.g. src/shop/. Existing reviewed multi-package configurations are supported.")
+            raise EryxError(
+                "UNSUPPORTED_LAYOUT", "Draft generation expects one import package beneath src/, "
+                + "e.g. src/shop/. Existing reviewed multi-package configurations are supported.")
         name = next(iter(names))
         if not name.isidentifier():
             raise EryxError("INVALID_PACKAGE", f"Invalid Python package name: {name}")
@@ -80,41 +84,57 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
             "ignore_type_checking_imports": False, "layers_explicit_depends_on": True,
             "root_module": "forbid", "respect_gitignore": False,
             "layers": LAYERS, "modules": module_list, "interfaces": interfaces,
-            "rules": {"unused_ignore_directives": "error", "require_ignore_directive_reasons": "error",
+            "rules": {"unused_ignore_directives": "error",
+                      "require_ignore_directive_reasons": "error",
                       "unused_external_dependencies": "error"},
         }
         if not any(layer == "UseCase" for layer in modules.values()):
-            notes.append("No application/use_cases package found. Review the default Domain assignments; initialization never moves source files.")
-        notes.append("Review public API patterns: by default each package exposes api.py only. Write actual allowed exports in tach.toml.")
-        notes.append("tach sync records current imports, including undesirable ones. cannot_depend_on and layer checks remain active.")
+            notes.append("No application/use_cases package found. Review the default Domain "
+                         + "assignments; initialization never moves source files.")
+        notes.append("Review public API patterns: by default each package exposes api.py "
+                     + "only. Write actual allowed exports in tach.toml.")
+        notes.append("tach sync records current imports, including undesirable ones. "
+                     + "cannot_depend_on and layer checks remain active.")
         return config, notes
 
     @override
     def validate(self) -> dict[str, Any]:
         path = self._root / "tach.toml"
         if not path.exists():
-            raise EryxError("ARCHITECTURE_NOT_INITIALIZED", "Run uv run --locked --group dev python eryx/init_architecture.py; review tach.toml; then use --accept.")
+            raise EryxError("ARCHITECTURE_NOT_INITIALIZED",
+                            "Run uv run --locked --group dev python eryx/init_architecture.py; "
+                            + "review tach.toml; then use --accept.")
         config = load_toml(path)
         if not config.get("modules") or not isinstance(config["modules"], list):
-            raise EryxError("ARCHITECTURE_NOT_INITIALIZED", "tach.toml needs explicit [[modules]] entries.")
+            raise EryxError("ARCHITECTURE_NOT_INITIALIZED",
+                            "tach.toml needs explicit [[modules]] entries.")
         if config.get("source_roots") != ["src"]:
-            raise EryxError("INVALID_ARCHITECTURE_CONFIG", "This profile requires source_roots = ['src'].")
+            raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                            "This profile requires source_roots = ['src'].")
         if not config.get("interfaces"):
-            raise EryxError("INVALID_ARCHITECTURE_CONFIG", "Define public [[interfaces]] in tach.toml before accepting.")
+            raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                            "Define public [[interfaces]] in tach.toml before accepting.")
         for module in config["modules"]:
             if not isinstance(module, dict) or not isinstance(module.get("path"), str):
-                raise EryxError("INVALID_ARCHITECTURE_CONFIG", "Every Tach module needs one explicit dotted path.")
+                raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                                "Every Tach module needs one explicit dotted path.")
             if module.get("layer") not in LAYERS:
-                raise EryxError("INVALID_ARCHITECTURE_CONFIG", f"Assign a layer to {module.get('path')}: {LAYERS}")
+                raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                                f"Assign a layer to {module.get('path')}: {LAYERS}")
             if "depends_on" not in module or not isinstance(module["depends_on"], list):
-                raise EryxError("INVALID_ARCHITECTURE_CONFIG", f"Explicit depends_on required for {module['path']}.")
+                raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                                f"Explicit depends_on required for {module['path']}.")
             if module.get("unchecked") or module.get("utility"):
-                raise EryxError("INVALID_ARCHITECTURE_CONFIG", "unchecked/utility modules bypass the agreed dependency restrictions.")
-        required = {"exact": True, "forbid_circular_dependencies": True, "ignore_type_checking_imports": False,
+                raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                                "unchecked/utility modules bypass the agreed "
+                                + "dependency restrictions.")
+        required = {"exact": True, "forbid_circular_dependencies": True,
+                    "ignore_type_checking_imports": False,
                     "layers_explicit_depends_on": True, "root_module": "forbid"}
         for key, value in required.items():
             if config.get(key) != value:
-                raise EryxError("INVALID_ARCHITECTURE_CONFIG", f"tach.toml must set {key} = {value!r}.")
+                raise EryxError("INVALID_ARCHITECTURE_CONFIG",
+                                f"tach.toml must set {key} = {value!r}.")
         return config
 
     @override
@@ -130,33 +150,48 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
             raw = root / ".eryx/logs/init-check.log"
             atomic_write(raw, result["stdout"] + "\n" + result["stderr"], root)
             if normalized["status"] == "error":
-                raise EryxError("TACH_CONFIG_OR_EXECUTION_ERROR", f"Cannot validate Tach config. See {raw.relative_to(root)}.")
+                raise EryxError("TACH_CONFIG_OR_EXECUTION_ERROR",
+                                f"Cannot validate Tach config. See {raw.relative_to(root)}.")
             ConfiguredCleanArchitectureLayers().sync(root, config)
             ConfiguredConsumerPolicy(root).apply()
-            write_json(ready, {"accepted": True, "modules": len(config["modules"]),
-                               "note": "Acceptance of architecture configuration, NOT a violations baseline."}, root)
+            write_json(ready, {
+                "accepted": True, "modules": len(config["modules"]),
+                "note": "Acceptance of architecture configuration, NOT a violations baseline.",
+            }, root)
             installation_path = root / ".eryx/installation.json"
             if installation_path.exists():
                 installation = read_json(installation_path)
                 installation["architecture_initialization_required"] = False
                 write_json(installation_path, installation, root)
-            return "initialized", {"module_count": len(config["modules"]),
-                                   "architecture_violations": len(normalized["diagnostics"]),
-                                   "next_command": "uv run --locked --group dev python eryx/check.py"}
+            return "initialized", {
+                "module_count": len(config["modules"]),
+                "architecture_violations": len(normalized["diagnostics"]),
+                "next_command": "uv run --locked --group dev python eryx/check.py",
+            }
         if path.exists() and not force:
-            return "review_required", {"configuration": "tach.toml",
-                                       "message": "Existing configuration retained. Review it and accept, or use --force to replace.",
-                                       "next_command": "uv run --locked --group dev python eryx/init_architecture.py --accept"}
+            return "review_required", {
+                "configuration": "tach.toml",
+                "message": "Existing configuration retained. Review it and accept, "
+                           + "or use --force to replace.",
+                "next_command": (
+                    "uv run --locked --group dev python eryx/init_architecture.py --accept"),
+            }
         config, notes = self.draft()
-        atomic_write(path, "# Review before accepting; module boundaries are convention-based, not inferred communities.\n" + tomlkit.dumps(config), root)
+        atomic_write(path, "# Review before accepting; module boundaries are "
+                     + "convention-based, not inferred communities.\n"
+                     + tomlkit.dumps(config), root)
         if ready.exists():
             ready.unlink()
         result = capture([tool_binary("tach"), "sync"], root)
-        atomic_write(root / ".eryx/logs/init-sync.log", result["stdout"] + "\n" + result["stderr"], root)
+        atomic_write(root / ".eryx/logs/init-sync.log",
+                     result["stdout"] + "\n" + result["stderr"], root)
         if result["error"] or result["exit_code"] != 0:
-            raise EryxError("TACH_SYNC_FAILED", "Draft tach.toml exists but sync failed. See .eryx/logs/init-sync.log. Do not mark it ready until corrected.")
+            raise EryxError("TACH_SYNC_FAILED", "Draft tach.toml exists but sync failed. "
+                            + "See .eryx/logs/init-sync.log. Do not mark it ready until corrected.")
         config = load_toml(path)
         ConfiguredCleanArchitectureLayers().sync(root, config)
         ConfiguredConsumerPolicy(root).apply()
-        return "review_required", {"configuration": "tach.toml", "notes": notes,
-                                   "next_command": "uv run --locked --group dev python eryx/init_architecture.py --accept"}
+        return "review_required", {
+            "configuration": "tach.toml", "notes": notes,
+            "next_command": "uv run --locked --group dev python eryx/init_architecture.py --accept",
+        }

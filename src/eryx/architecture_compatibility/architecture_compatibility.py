@@ -8,5 +8,8 @@ from typing import Protocol
 class ArchitectureCompatibility(Protocol):
     """Install the reviewed compatibility fixes before analyzer initialization."""
 
+    def prepare_pylint(self) -> None:
+        ...
+
     def install(self) -> None:
         ...

@@ -12,5 +12,10 @@ class PinnedArchitectureCompatibility(ArchitectureCompatibility):
     """Patch native checkers only once and reject unreviewed plugin versions."""
 
     @override
+    def prepare_pylint(self) -> None:
+        compat.install_pylint_protocol_compat()
+
+    @override
     def install(self) -> None:
+        self.prepare_pylint()
         compat.install_pinned_plugin()

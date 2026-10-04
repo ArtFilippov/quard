@@ -14,7 +14,14 @@ from eryx.clean_architecture_layers.configured_clean_architecture_layers import 
 
 
 def draft_configuration(root: Path) -> tuple[dict[str, Any], list[str]]:
-    """Return the convention-based, unapproved draft for offline fixtures."""
+    """Return a convention-based, unapproved draft for offline fixtures.
+
+    Args:
+        root (Path): Selected consumer project.
+
+    Returns:
+        tuple[dict[str, Any], list[str]]: Tach configuration and review notes.
+    """
     return ConfiguredArchitectureDraft(root).draft()
 
 
