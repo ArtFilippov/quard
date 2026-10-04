@@ -125,6 +125,9 @@ The contract-folder job checks local Protocol and abstract-interface declaration
 their implementations across the same scope, including companion stubs. A contract
 named `HTTPPort` belongs in `http_port/http_port.py` (or `.pyi`); implementations
 belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-and-scope).
+An optional direct `envelopes/` folder holds `HTTPPortEnvelope` in
+`http_port/envelopes/http_port_envelope.py` and named envelope subclasses in
+separate, class-named files; they inherit the parent contract through the base.
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including

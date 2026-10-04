@@ -92,6 +92,16 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   combined local contract and one selected concrete base when local contracts
   compete; the combined contract must cover that base's contract. Unresolved
   ancestry emits `UNRESOLVED_FOLDER_OWNER` rather than proving placement.
+  An optional direct `envelopes/` folder under a contract folder contains a base
+  `<Contract>Envelope` in `<contract>_envelope.py` (or `.pyi`) that directly inherits
+  the parent contract. Named `*Envelope` subclasses live in separate files named
+  after their classes in snake_case and inherit that base through local ancestry,
+  retaining the parent contract. Other classes and envelope classes outside that
+  direct folder receive positioned `ENVELOPE_CLASS`, `ENVELOPE_INHERITANCE`,
+  `ENVELOPE_FOLDER` or `ENVELOPE_FILE` diagnostics. The same layout applies under
+  `tests/`; source and stubs may each declare the same class in companion files.
+  This checks static structure and inheritance, not runtime delegation or composition.
+  The independent outer-class and class-contract jobs still check these files.
   This job scans discovered `.py` and `.pyi` files independently of LCOM4 selection,
   resolves aliases and imports through the class-contract index, and prefers source
   ancestry when a companion stub exists. Parse and worker failures are infrastructure

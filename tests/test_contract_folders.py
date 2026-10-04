@@ -146,14 +146,112 @@ class ContractFolderTests(unittest.TestCase):
             ("Unproven", "UNRESOLVED_FOLDER_OWNER"),
             ("Unrelated", "COMPETING_LOCAL_BASES")})
 
+    def test_envelopes_source_stubs_aliases_and_independent_jobs(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port as Parent\n"
+                 "class PortEnvelope(Parent):\n    def send(self): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.pyi",
+                 "from pkg.port.port import Port\n"
+                 "class PortEnvelope(Port):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/relay.py",
+                 "from .port_envelope import PortEnvelope as Base\n")
+        self.put("src/pkg/port/envelopes/logging_port_envelope.py",
+                 "from .relay import Base as Decorator\n"
+                 "class LoggingPortEnvelope(Decorator): pass\n")
+        self.put("src/pkg/port/envelopes/logging_port_envelope.pyi",
+                 "from .port_envelope import PortEnvelope\n"
+                 "class LoggingPortEnvelope(PortEnvelope): ...\n")
+        self.put("src/pkg/port/envelopes/stub_port_envelope.pyi",
+                 "from .port_envelope import PortEnvelope as Base\n"
+                 "class StubPortEnvelope(Base): ...\n")
+        self.put("tests/pkg/port/envelopes/test_port_envelope.py",
+                 "from pkg.port.envelopes.port_envelope import PortEnvelope\n"
+                 "class TestPortEnvelope(PortEnvelope): pass\n")
+        folders, _ = self.run_worker()
+        contracts, _ = self.run_worker("class-contracts")
+        outer, _ = self.run_worker("outer-classes")
+        self.assertEqual(folders["diagnostics"], [])
+        self.assertEqual(contracts["diagnostics"], [])
+        self.assertEqual(outer["diagnostics"], [])
+
+    def test_invalid_envelopes_and_misplaced_subclasses_are_positioned(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\n"
+                 "class PortEnvelope(Port):\n    def send(self): pass\n")
+        self.put("src/pkg/port/envelopes/bad.py", "from .port_envelope import PortEnvelope\n"
+                 "class WrongFileEnvelope(PortEnvelope): pass\n")
+        self.put("src/pkg/port/envelopes/random.py", "class Random(object): pass\n")
+        self.put("src/pkg/port/envelopes/pretender.py", "from pkg.port.port import Port\n"
+                 "class Pretender(Port): pass\n")
+        self.put("src/pkg/port/envelopes/fake_port_envelope.py",
+                 "from pkg.port.port import Port\nclass FakePortEnvelope(Port): pass\n")
+        self.put("src/pkg/port/envelopes/unrelated_port_envelope.py",
+                 "from pathlib import Path\nclass UnrelatedPortEnvelope(Path): pass\n")
+        self.put("src/pkg/port/other_port_envelope.py",
+                 "from .envelopes.port_envelope import PortEnvelope\n"
+                 "class OtherPortEnvelope(PortEnvelope): pass\n")
+        self.put("src/pkg/port/envelopes/deep/deep_port_envelope.py",
+                 "from pkg.port.envelopes.port_envelope import PortEnvelope\n"
+                 "class DeepPortEnvelope(PortEnvelope): pass\n")
+        folders, _ = self.run_worker()
+        self.assertEqual({(d["symbol"], d["rule"]) for d in folders["diagnostics"]}, {
+            ("WrongFileEnvelope", "ENVELOPE_FILE"),
+            ("Random", "ENVELOPE_CLASS"),
+            ("Pretender", "ENVELOPE_CLASS"),
+            ("FakePortEnvelope", "ENVELOPE_INHERITANCE"),
+            ("UnrelatedPortEnvelope", "ENVELOPE_INHERITANCE"),
+            ("OtherPortEnvelope", "ENVELOPE_FOLDER"),
+            ("DeepPortEnvelope", "ENVELOPE_FOLDER")})
+        self.assertTrue(all(d["line"] > 0 and d["column"] > 0 and
+                            not d["is_infrastructure_error"] for d in folders["diagnostics"]))
+
+    def test_envelopes_do_not_hide_contract_or_outer_class_diagnostics(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\n"
+                 "class PortEnvelope(Port):\n    def send(self): pass\n"
+                 "class ExtraEnvelope(PortEnvelope):\n    def extra(self): pass\n")
+        folders, _ = self.run_worker()
+        contracts, _ = self.run_worker("class-contracts")
+        outer, _ = self.run_worker("outer-classes")
+        self.assertEqual({d["rule"] for d in folders["diagnostics"]}, {"ENVELOPE_FILE"})
+        self.assertEqual({d["rule"] for d in contracts["diagnostics"]},
+                         {"UNCOVERED_CLASS_MEMBER"})
+        self.assertEqual([d["rule"] for d in outer["diagnostics"]],
+                         ["MULTIPLE_OUTER_CLASSES", "MULTIPLE_OUTER_CLASSES"])
+
+    def test_source_ancestry_wins_for_envelope_descendants_but_stubs_are_checked(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\nclass PortEnvelope(Port): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.pyi",
+                 "class PortEnvelope(object): ...\n")
+        self.put("src/pkg/port/envelopes/child_port_envelope.py",
+                 "from .port_envelope import PortEnvelope\n"
+                 "class ChildPortEnvelope(PortEnvelope): pass\n")
+        result, _ = self.run_worker()
+        self.assertEqual([(d["path"], d["rule"]) for d in result["diagnostics"]],
+                         [("src/pkg/port/envelopes/port_envelope.pyi", "ENVELOPE_INHERITANCE")])
+
     def test_parse_failure_retains_violations_and_malformed_report_fails(self):
         self.put("src/bad.py", "class Broken(\n")
         self.put("tests/wrong.py", "from typing import Protocol\nclass Port(Protocol): pass\n")
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/envelopes/wrong.py", "from pkg.port.port import Port\n"
+                 "class PortEnvelope(Port): pass\n")
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("error", 2, "CONTRACT_FOLDERS_PARSE_ERROR"))
         self.assertEqual({d["rule"] for d in result["diagnostics"]},
-                         {"CONTRACT_FOLDER", "CONTRACT_FOLDERS_PARSE_ERROR"})
+                         {"CONTRACT_FOLDER", "ENVELOPE_FILE",
+                          "CONTRACT_FOLDERS_PARSE_ERROR"})
         files = discover_files(self.root, read_scope(self.root))
         job = next(job for job in make_jobs(self.root, self.run_dir, files, False, [])
                    if job["name"] == "contract-folders")

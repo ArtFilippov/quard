@@ -62,6 +62,57 @@ class FolderOwnership(Contracts):
                 ancestors.update(self.contract_ancestors(parent, seen | {name}))
         return ancestors
 
+    def inherits_envelope(self, name: str, node: ast.ClassDef, path: str,
+                          owner: str, seen: frozenset[str] = frozenset()) -> bool:
+        """Find a correctly placed base envelope in the local concrete ancestry."""
+        if name in seen:
+            return False
+        base_name = owner.rpartition(".")[2] + "Envelope"
+        for base in node.bases:
+            parent = self.resolved(name, base, path)
+            if parent not in self.nodes or parent in self.contracts:
+                continue
+            parent_node = self.nodes[parent]
+            parent_path = self.paths[parent]
+            parent_file = Path(parent_path)
+            expected = self.folder(owner, parent_file.parts[0]) / "envelopes"
+            if (parent_node.name == base_name and parent_file.parent == expected
+                    and parent_file.stem == snake_case(base_name)
+                    and any(self.resolved(parent, direct) == owner
+                            for direct in parent_node.bases)):
+                return True
+            if self.inherits_envelope(parent, parent_node, parent_path, owner, seen | {name}):
+                return True
+        return False
+
+    def envelope_violation(self, name: str, node: ast.ClassDef, path: str,
+                           owner: str | None) -> tuple[str, str] | None:
+        """Check the reserved direct envelopes folder and its named classes."""
+        current = Path(path)
+        inside = "envelopes" in current.parts[1:-1]
+        if not inside and (owner is None or not node.name.endswith("Envelope")):
+            return None
+        if inside and not node.name.endswith("Envelope"):
+            return "ENVELOPE_CLASS", f"{name}: only named envelope classes belong in envelopes/."
+        if owner is None:
+            return "ENVELOPE_INHERITANCE", (f"{name}: envelope must inherit its parent "
+                                            "local contract through the base envelope.")
+        expected = self.folder(owner, current.parts[0]) / "envelopes"
+        if current.parent != expected:
+            return "ENVELOPE_FOLDER", f"{name}: place this envelope in '{expected}/'."
+        if current.stem != snake_case(node.name):
+            return "ENVELOPE_FILE", (f"{name}: declare this envelope in "
+                                     f"'{expected / (snake_case(node.name) + current.suffix)}'.")
+        base_name = owner.rpartition(".")[2] + "Envelope"
+        if node.name == base_name:
+            valid = any(self.resolved(name, base, path) == owner for base in node.bases)
+        else:
+            valid = self.inherits_envelope(name, node, path, owner)
+        if not valid:
+            return "ENVELOPE_INHERITANCE", (f"{name}: inherit {owner} directly as "
+                                            f"{base_name}, or subclass that base envelope.")
+        return None
+
     def violations(self) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for name, node, path in self.declarations:
@@ -112,8 +163,17 @@ class FolderOwnership(Contracts):
                     results.append({**location, "rule": "UNRESOLVED_FOLDER_OWNER",
                                     "message": f"{name}: resolve local ancestry before its "
                                     "implementation folder can be verified."})
+                elif violation := self.envelope_violation(name, node, path, None):
+                    rule, message = violation
+                    results.append({**location, "rule": rule, "message": message})
                 continue
             owner = next(iter(owners))
+            if violation := self.envelope_violation(name, node, path, owner):
+                rule, message = violation
+                results.append({**location, "rule": rule, "message": message})
+                continue
+            if "envelopes" in current.parts[1:-1] or node.name.endswith("Envelope"):
+                continue
             expected = self.folder(owner, current.parts[0])
             if current.parent != expected and expected not in current.parents:
                 results.append({**location, "rule": "IMPLEMENTATION_FOLDER",
