@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from eryx.field_ownership.accesses import Accesses
+from eryx.field_access.accesses import Accesses
 from eryx.field_ownership.ownership import Ownership
 from eryx.field_ownership.bindings import Binding, PROTOCOL_BUILTINS, assigned_names, module_name
 

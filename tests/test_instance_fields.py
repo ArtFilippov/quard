@@ -15,20 +15,26 @@ from eryx._policy import discover_files, read_scope
 from eryx._field_initialization import _block
 from eryx._instance_fields_worker import Accesses as LegacyAccesses, Ownership as LegacyOwnership
 from eryx.check import execute_job, make_jobs
-from eryx.field_ownership.accesses import Accesses
+from eryx.field_access.accesses import Accesses
+from eryx.field_access.field_access import FieldAccess
+from eryx.field_ownership.accesses import Accesses as PreviousAccesses
 from eryx.field_ownership.field_ownership import FieldOwnership
 from eryx.field_ownership.ownership import Ownership
 
 
 class InstanceFieldTests(unittest.TestCase):
-    def test_ownership_contract_and_compatibility_imports(self):
+    def test_field_contracts_and_compatibility_imports(self):
         self.assertIs(LegacyOwnership, Ownership)
         self.assertIs(LegacyAccesses, Accesses)
+        self.assertIs(PreviousAccesses, Accesses)
         self.assertIn(FieldOwnership, Ownership.__bases__)
-        for path, name in (("field_ownership.py", "FieldOwnership"),
-                           ("ownership.py", "Ownership"), ("accesses.py", "Accesses"),
-                           ("class_stores.py", "ClassStores")):
-            source = ERYX / "src/eryx/field_ownership" / path
+        self.assertIn(FieldAccess, Accesses.__bases__)
+        for folder, path, name in (("field_ownership", "field_ownership.py", "FieldOwnership"),
+                                   ("field_ownership", "ownership.py", "Ownership"),
+                                   ("field_ownership", "class_stores.py", "ClassStores"),
+                                   ("field_access", "field_access.py", "FieldAccess"),
+                                   ("field_access", "accesses.py", "Accesses")):
+            source = ERYX / "src/eryx" / folder / path
             outer = [item.name for item in ast.parse(source.read_text(encoding="utf-8")).body
                      if isinstance(item, ast.ClassDef)]
             self.assertEqual(outer, [name])

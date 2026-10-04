@@ -6,8 +6,9 @@ from typing import override
 
 from eryx._class_contracts_worker import Contracts
 from eryx.dispatch_site_model.dispatch_site import DispatchSite
+from eryx.field_access.accesses import Accesses
 from eryx.field_type_analysis.type_evidence import UNKNOWN, field_evidence
-from eryx._instance_fields_worker import (Accesses, Binding, Ownership, PROTOCOL_BUILTINS,
+from eryx._instance_fields_worker import (Binding, Ownership, PROTOCOL_BUILTINS,
                                           assigned_names, module_name)
 from eryx.marker_analysis.marker_index import FUNCTIONS, local_names
 

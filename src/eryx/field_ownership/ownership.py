@@ -7,7 +7,7 @@ from eryx._field_initialization import missing_fields, rebound_fields, written_f
 from eryx.field_operation_model.field_operation import field_operations
 from eryx.field_type_analysis.type_evidence import PRIMITIVES, UNKNOWN, TypeEvidence, field_evidence
 from eryx.field_ownership.bindings import Binding, PROTOCOL_BUILTINS, assigned_names, module_name
-from eryx.field_ownership.accesses import Accesses
+from eryx.field_access.accesses import Accesses
 from eryx.field_ownership.class_stores import class_stores
 from eryx.field_ownership.field_ownership import FieldOwnership
 from eryx.marker_analysis.marker_index import MarkerIndex
