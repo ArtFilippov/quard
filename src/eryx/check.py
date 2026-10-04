@@ -73,7 +73,8 @@ def select_lcom_files(files: dict[str, list[str]], requested: str | None) -> lis
 
 
 def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architecture_ready: bool,
-              lcom_files: list[str] | None = None, constructor_purity: bool = False) -> list[dict[str, Any]]:
+              lcom_files: list[str] | None = None, constructor_purity: bool = False,
+              test_directory_names: list[str] | None = None) -> list[dict[str, Any]]:
     # Pylint opens --output before the runner writes captured stdout/stderr logs.
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
@@ -112,6 +113,11 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "contract-folders", "tool": "contract-folders", "argv": [sys.executable,
                   str(tool_dir() / "_contract_folders_worker.py"), "--manifest", str(manifest)]})
+    manifest = run_dir / "test-placement-files.json"
+    write_json(manifest, {"production": files["production"], "tests": files["tests"],
+                          "test_directory_names": test_directory_names or ["tests"]}, root)
+    jobs.append({"name": "test-placement", "tool": "test-placement", "argv": [sys.executable,
+                  str(tool_dir() / "_test_placement_worker.py"), "--manifest", str(manifest)]})
     manifest = run_dir / "outer-classes-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "outer-classes", "tool": "outer-classes", "argv": [sys.executable,
@@ -228,7 +234,8 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
             diagnostics.append(diagnostic("system", "ARCHITECTURE_NOT_INITIALIZED" if not (root / ".eryx/architecture.ready.json").exists() else exc.code,
                 str(exc) + " Run eryx/init_architecture.py, review tach.toml, then run it with --accept.", is_infrastructure_error=True))
         jobs = make_jobs(root, run_dir, files, architecture_ready,
-                         None if lcom_files is None else selected, constructor_purity)
+                         None if lcom_files is None else selected, constructor_purity,
+                         read_scope(root)["test_directory_names"])
         workers = 1 if serial else min(4, max(1, os.cpu_count() or 1), len(jobs))
         # Native analyzers complete independently. A failing job never cancels the others.
         with ThreadPoolExecutor(max_workers=workers) as pool:

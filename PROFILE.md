@@ -106,6 +106,20 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   resolves aliases and imports through the class-contract index, and prefers source
   ancestry when a companion stub exists. Parse and worker failures are infrastructure
   errors; all structural violations retain one-based class positions.
+* **Test placement**: every discovered test class (including in companion stubs and
+  configured test directories inside `src/`) is named `Test<Class>` in
+  `test_<class>.py` or `.pyi`, with `<class>` converted to snake_case. It maps to
+  exactly one discovered production `<Class>` declaration in the mirrored directory
+  under `src/`; source/stub companions count as one target. Thus tests of contracts,
+  implementations and envelopes mirror their production package, contract folder,
+  and envelope folder. The target must be a local contract or inherit one resolved
+  production contract. Test classes may inherit an external framework base without
+  declaring another contract solely for that base. Missing, ambiguous, misnamed,
+  misplaced or contractless targets produce one-based class diagnostics. Top-level
+  sync and async `test_*` functions in discovered test files are violations;
+  methods and ordinary helper functions are allowed. This independent job retains
+  full `.py` and `.pyi` test scope even when LCOM4 is narrowed or skipped. Parse
+  and worker failures are infrastructure errors, not passing test results.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and

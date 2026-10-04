@@ -128,6 +128,10 @@ belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-a
 An optional direct `envelopes/` folder holds `HTTPPortEnvelope` in
 `http_port/envelopes/http_port_envelope.py` and named envelope subclasses in
 separate, class-named files; they inherit the parent contract through the base.
+The independent test-placement job maps `TestHTTPPort` in
+`tests/pkg/http_port/test_http_port.py` to the production `HTTPPort` declaration
+in `src/pkg/http_port/`. The same mirrored layout applies to implementations
+and envelopes; top-level `test_*` functions are violations.
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including
