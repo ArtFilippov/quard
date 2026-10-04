@@ -9,16 +9,17 @@ import unittest
 
 from jsonschema import validate
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
+sys.path.insert(0, str(ERYX / "tests"))
 
 from eryx._common import capture
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs, run_checks
-from test_infrastructure import RunnerTests, create_repo, native_result
+from test_infrastructure import create_repo, native_result
 
 
-class ConstructorPurityTests(unittest.TestCase):
+class TestConstructorChecker(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-constructor-")
         self.root = Path(self.temp.name)
@@ -541,6 +542,8 @@ class Model:
                          "CONSTRUCTOR_PURITY_EXECUTION_ERROR")
 
     def test_old_install_defaults_off_and_invalid_opt_in_keeps_other_diagnostics(self):
+        from test_infrastructure import RunnerTests
+
         with TemporaryDirectory(prefix="eryx-constructor-config-") as directory:
             root = Path(directory)
             create_repo(root)
@@ -575,6 +578,8 @@ class Model:
                     self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
 
     def test_project_report_keeps_full_scope_and_native_diagnostics(self):
+        from test_infrastructure import RunnerTests
+
         with TemporaryDirectory(prefix="eryx-constructor-runner-") as directory:
             root = Path(directory)
             create_repo(root)

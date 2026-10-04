@@ -8,7 +8,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
@@ -22,7 +22,7 @@ from eryx.field_ownership.field_ownership import FieldOwnership
 from eryx.field_ownership.ownership import Ownership
 
 
-class InstanceFieldTests(unittest.TestCase):
+class TestOwnership(unittest.TestCase):
     def test_field_contracts_and_compatibility_imports(self):
         self.assertIs(LegacyOwnership, Ownership)
         self.assertIs(LegacyAccesses, Accesses)

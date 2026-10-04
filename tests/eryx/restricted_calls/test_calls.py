@@ -9,15 +9,16 @@ import unittest
 
 from jsonschema import validate
 
-ERYX = Path(__file__).resolve().parents[1]
+ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
+sys.path.insert(0, str(ERYX / "tests"))
 
 from eryx._encapsulated_only_worker import analyze
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs
 
 
-class EncapsulatedOnlyTests(unittest.TestCase):
+class TestCalls(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="eryx-restricted-")
         self.root = Path(self.temp.name)

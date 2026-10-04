@@ -18,7 +18,8 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
     """
     del pattern
     root = Path(__file__).resolve().parent / "eryx"
-    for group in ("contract_analysis", "method_analysis", "cohesion_analysis"):
+    for group in ("contract_analysis", "method_analysis", "cohesion_analysis",
+                  "field_ownership", "constructor_analysis", "restricted_calls"):
         directory = root / group
         suite.addTests(loader.discover(str(directory), pattern="test*.py",
                                        top_level_dir=str(directory)))

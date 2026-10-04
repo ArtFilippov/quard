@@ -27,6 +27,9 @@ class TestTestPlacement(unittest.TestCase):
             "tests/eryx/contract_analysis/test_test_placement.py",
             "tests/eryx/method_analysis/test_declarations.py",
             "tests/eryx/cohesion_analysis/test_classes.py",
+            "tests/eryx/field_ownership/test_ownership.py",
+            "tests/eryx/constructor_analysis/test_constructor_checker.py",
+            "tests/eryx/restricted_calls/test_calls.py",
         ]
         self.assertTrue(set(migrated) <= set(files["tests"]))
         diagnostics, error = analyze(ERYX, files["production"], migrated, ["tests"])
