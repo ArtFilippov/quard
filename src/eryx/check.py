@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from eryx._common import (SCHEMA, EryxError, atomic_write, capture, read_json,
                      repo_lock, require_runtime, project_dir, tool_dir, tool_revision, safe_target, write_json)
-from eryx._policy import discover_files, limit_drift, read_scope
+from eryx._policy import discover_files, limit_drift, read_checks, read_scope
 from eryx._reports import diagnostic, normalize, sorted_diagnostics
 from eryx.init_architecture import validate_architecture_config
 
@@ -73,7 +73,7 @@ def select_lcom_files(files: dict[str, list[str]], requested: str | None) -> lis
 
 
 def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architecture_ready: bool,
-              lcom_files: list[str] | None = None) -> list[dict[str, Any]]:
+              lcom_files: list[str] | None = None, constructor_purity: bool = False) -> list[dict[str, Any]]:
     # Pylint opens --output before the runner writes captured stdout/stderr logs.
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
@@ -112,11 +112,12 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "encapsulated-only", "tool": "encapsulated-only", "argv": [sys.executable,
                   str(tool_dir() / "_encapsulated_only_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "constructor-purity-files.json"
-    write_json(manifest, sorted(path for profile in ("production", "tests")
-                                for path in files[profile] if path.endswith(".py")), root)
-    jobs.append({"name": "constructor-purity", "tool": "constructor-purity", "argv": [sys.executable,
-                 str(tool_dir() / "_constructor_purity_worker.py"), "--manifest", str(manifest)]})
+    if constructor_purity:
+        manifest = run_dir / "constructor-purity-files.json"
+        write_json(manifest, sorted(path for profile in ("production", "tests")
+                                    for path in files[profile] if path.endswith(".py")), root)
+        jobs.append({"name": "constructor-purity", "tool": "constructor-purity", "argv": [sys.executable,
+                     str(tool_dir() / "_constructor_purity_worker.py"), "--manifest", str(manifest)]})
     jobs.append({"name": "pyright", "tool": "pyright", "argv": [sys.executable, "-m", "pyright",
                  "--project", str(root / "pyrightconfig.json"), "--pythonpath", sys.executable, "--outputjson"]})
     doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])
@@ -180,6 +181,16 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
         if not files["production"]:
             raise EryxError("EMPTY_SOURCE_SCOPE", "No Python source files found under src/. Refusing an empty successful check.")
         try:
+            constructor_purity = read_checks(root)
+            if not constructor_purity:
+                results.append({"name": "constructor-purity", "tool": "constructor-purity", "status": "skipped",
+                                "exit_code": None, "duration_seconds": 0, "error": None, "raw_output": {}})
+        except EryxError as exc:
+            constructor_purity = False
+            diagnostics.append(diagnostic("constructor-purity", exc.code, str(exc), is_infrastructure_error=True))
+            results.append({"name": "constructor-purity", "tool": "constructor-purity", "status": "error",
+                            "exit_code": None, "duration_seconds": 0, "error": exc.code, "raw_output": {}})
+        try:
             selected = select_lcom_files(files, lcom_files)
             lcom_coverage["mode"] = ("full" if lcom_files is None else
                                      "skipped" if lcom_files == "" else "selected")
@@ -209,7 +220,7 @@ def run_checks(root: Path, *, serial: bool = False, timeout: int = 600,
             diagnostics.append(diagnostic("system", "ARCHITECTURE_NOT_INITIALIZED" if not (root / ".eryx/architecture.ready.json").exists() else exc.code,
                 str(exc) + " Run eryx/init_architecture.py, review tach.toml, then run it with --accept.", is_infrastructure_error=True))
         jobs = make_jobs(root, run_dir, files, architecture_ready,
-                         None if lcom_files is None else selected)
+                         None if lcom_files is None else selected, constructor_purity)
         workers = 1 if serial else min(4, max(1, os.cpu_count() or 1), len(jobs))
         # Native analyzers complete independently. A failing job never cancels the others.
         with ThreadPoolExecutor(max_workers=workers) as pool:

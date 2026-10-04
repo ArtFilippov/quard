@@ -19,8 +19,8 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
-* **Constructor purity**: the independent `CONSTRUCTOR_PURITY` rule checks eager
-  constructor syntax in discovered production and test `.py` files, including
+* **Constructor purity (opt-in)**: the independent `CONSTRUCTOR_PURITY` rule checks
+  eager constructor syntax in discovered production and test `.py` files, including
   nested classes. It is unaffected by `--lcom_files`; stubs have no checked body.
 * **Non-instance methods**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
@@ -359,6 +359,13 @@ valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and ret
 their diagnostics. Ordinary reports, manifests and logs stay in the chosen consumer.
 
 ## Constructor purity
+
+Set `constructor_purity = true` in the consumer's `.eryx/checks.toml` to enable
+this independent job on ordinary full checks. The default is `false`, including
+when an older installation has no `checks.toml`. The file accepts only this
+boolean key; malformed or unknown settings fail as configuration errors (exit 2).
+Disabled checks appear as `skipped` with a null exit code in the report; no
+manifest or worker is started. Reinstallation preserves an existing opt-in.
 
 The `constructor-purity` job examines every directly declared `__init__` body in
 discovered production and test `.py` files, including nested classes. Excluded

@@ -76,6 +76,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual((self.root / ".eryx/readability.toml").read_bytes(), before)
 
     def test_late_failure_restores_all_managed_files_and_modes(self):
+        (self.root / ".eryx/checks.toml").unlink()
         original = managed_bytes(self.root)
         path = self.root / "pyproject.toml"
         path.chmod(0o640)
@@ -91,7 +92,31 @@ class MigrationTests(unittest.TestCase):
         with patch.object(install, "capture", failing_audit), self.assertRaises(_common.EryxError):
             install.install(self.root, ERYX, progress=False)
         self.assertEqual(managed_bytes(self.root), original)
+        self.assertFalse((self.root / ".eryx/checks.toml").exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+
+    def test_constructor_opt_in_survives_reinstall_and_invalid_setting_fails(self):
+        setting = self.root / ".eryx/checks.toml"
+        setting.write_text("constructor_purity = true\n", encoding="utf-8")
+        with patch.object(install, "capture", self.fake_uv):
+            install.install(self.root, ERYX, progress=False)
+            install.install(self.root, ERYX, progress=False)
+        self.assertEqual(setting.read_text(encoding="utf-8"), "constructor_purity = true\n")
+        setting.write_text("constructor_purity = 1\n", encoding="utf-8")
+        before = managed_bytes(self.root)
+        with patch.object(install, "capture", side_effect=self.fake_uv) as captured:
+            with self.assertRaisesRegex(_common.EryxError, "checks.toml expects"):
+                install.install(self.root, ERYX, progress=False)
+        captured.assert_not_called()
+        self.assertEqual(managed_bytes(self.root), before)
+
+    def test_missing_constructor_setting_created_only_on_install(self):
+        setting = self.root / ".eryx/checks.toml"
+        setting.unlink()
+        with patch.object(install, "capture", self.fake_uv):
+            install.install(self.root, ERYX, progress=False)
+        self.assertEqual(setting.read_text(encoding="utf-8"),
+                         (ERYX / "defaults/checks.toml").read_text(encoding="utf-8"))
 
     def test_selected_extras_are_retained_on_reinstall(self):
         path = self.root / "pyproject.toml"

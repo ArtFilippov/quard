@@ -22,9 +22,10 @@ bash eryx/install.sh --project . --dry-run --json
 ```
 
 Reinstall with the same command after updating the gitlink. Project limits, scope,
-reviewed architecture, native settings (including `ignored-parents` and `stubPath`),
-uv indexes, sources and metadata are retained. Missing native sections are initialized;
-shared scope, numeric limits, plugin discovery and test profiles are regenerated.
+optional checks, reviewed architecture, native settings (including `ignored-parents`
+and `stubPath`), uv indexes, sources and metadata are retained. Missing native
+sections are initialized; shared scope, numeric limits, plugin discovery and test
+profiles are regenerated.
 `pyrightconfig.json` takes precedence over `[tool.pyright]` on installation.
 Application files and root `AGENTS.md` are never generated.
 
@@ -64,6 +65,13 @@ uv run --locked --group dev python eryx/check.py --json
 uv run --locked --group dev python eryx/apply.py --json
 ```
 
+To opt in to constructor purity, set `constructor_purity = true` in
+`.eryx/checks.toml` and run the ordinary full check. New installations contain
+`constructor_purity = false`; older installations without `checks.toml` also
+default to disabled. Reinstallation retains an explicit value. Invalid settings
+fail with exit 2. The report records the disabled job as `skipped`, with no exit
+code; no constructor manifest is created and its worker does not run.
+
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:
 
@@ -79,11 +87,12 @@ LCOM4 runs as an independent job over discovered production and test `.py` class
 see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
 The non-instance-method rule independently checks discovered `.py` and `.pyi` files
 in both profiles, including when LCOM4 is narrowed or skipped.
-The constructor-purity rule independently checks eager constructor syntax in all
-discovered production and test `.py` files, including nested classes, even when
-LCOM4 is narrowed or skipped. Deferred nested bodies are allowed; definition-time
-defaults and annotations, plus proven project decorator factories and applications,
-are checked. External decorators are opaque; unknown applications fail. See
+When enabled, the constructor-purity rule independently checks eager constructor
+syntax in all discovered production and test `.py` files, including nested classes,
+even when LCOM4 is narrowed or skipped. Deferred nested bodies are allowed;
+definition-time defaults and annotations, plus proven project decorator factories
+and applications are checked. External decorators are opaque; unknown applications
+fail. See
 [PROFILE.md](PROFILE.md#constructor-purity).
 The instance-field boundary rule uses the same full scope and reports proven
 external access to consumer-defined stored fields, including first assignments
@@ -175,6 +184,7 @@ consumer/
   .eryx/                   # versioned consumer settings and integration state
     readability.toml
     scope.toml
+    checks.toml
     architecture.ready.json
     pylint-tests.toml
     pylint-catalog.json

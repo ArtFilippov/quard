@@ -17,7 +17,7 @@ from eryx._common import (EryxError, atomic_write, capture, emit_event, error_ex
                      load_toml, read_json, repo_lock, require_runtime, project_dir,
                      safe_target, tool_dir, write_json)
 
-STATE_FILES = ["readability.toml", "scope.toml", "architecture.ready.json",
+STATE_FILES = ["readability.toml", "scope.toml", "checks.toml", "architecture.ready.json",
                "pylint-catalog.json", "pylint-tests.toml", "policy-notes.json", "installation.json"]
 
 
@@ -140,7 +140,8 @@ def install(root: Path, tool: Path, *, dry_run: bool = False, progress: bool = T
         if progress:
             print("Installing Eryx configuration and exact dev dependencies...", file=sys.stderr)
         initialize_state(root, tool)
-        from eryx._policy import discover_files, read_scope
+        from eryx._policy import discover_files, read_checks, read_scope
+        read_checks(root)
         if not discover_files(root, read_scope(root))["production"]:
             raise EryxError("EMPTY_SOURCE_SCOPE", "No Python files under src/.")
         prepare_project(root)

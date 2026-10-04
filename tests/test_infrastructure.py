@@ -216,11 +216,13 @@ class RepositoryTest(unittest.TestCase):
 
     def test_installer_rollback_on_uv_failure(self):
         before = (self.root / "pyproject.toml").read_bytes()
+        (self.root / ".eryx/checks.toml").unlink()
         fail = lambda argv, cwd, timeout: native_result(argv, stderr="intentional offline test failure", code=1)
         with patch.object(installer, "capture", fail):
             with self.assertRaises(_common.EryxError):
                 installer.install(self.root, ERYX, progress=False)
         self.assertEqual((self.root / "pyproject.toml").read_bytes(), before)
+        self.assertFalse((self.root / ".eryx/checks.toml").exists())
         error = _common.read_json(self.root / ".eryx/logs/install-error.json")
         self.assertTrue(error["managed_files_rolled_back"])
 
@@ -371,7 +373,11 @@ class RunnerTests(unittest.TestCase):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 12)
+        self.assertEqual(len(seen), 11)
+        self.assertNotIn("constructor-purity", seen)
+        constructor = next(t for t in report["tools"] if t["name"] == "constructor-purity")
+        self.assertEqual((constructor["status"], constructor["exit_code"]), ("skipped", None))
+        self.assertFalse((self.root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")
         self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"],
                          report["coverage"]["lcom4"]["selected_files"])
@@ -384,7 +390,7 @@ class RunnerTests(unittest.TestCase):
         report = check.run_checks(self.root, lcom_files="tests/test_value.py src/demo/domain/api.py tests/test_value.py",
                                   capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 12)
+        self.assertEqual(len(seen), 11)
         coverage = report["coverage"]["lcom4"]
         self.assertEqual(coverage["mode"], "selected")
         self.assertEqual(coverage["selected_files"], ["tests/test_value.py", "src/demo/domain/api.py"])
@@ -398,7 +404,7 @@ class RunnerTests(unittest.TestCase):
         report = check.run_checks(self.root, lcom_files="", capture_fn=fake,
                                   versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 0, report)
-        self.assertEqual(len(seen), 11)
+        self.assertEqual(len(seen), 10)
         self.assertNotIn("lcom4", seen)
         self.assertIn("method-decorators", seen)
         self.assertEqual(report["coverage"]["lcom4"], {"mode": "skipped", "requested": "",
@@ -572,7 +578,7 @@ class RunnerTests(unittest.TestCase):
                                     if d["tool"] == "encapsulated-only"))
                 self.assertEqual(next(t for t in report["tools"] if t["name"] == "encapsulated-only")
                                   ["status"], "error")
-                self.assertEqual(len(seen), 11)
+                self.assertEqual(len(seen), 10)
                 import jsonschema
                 jsonschema.validate(report, _common.read_json(ERYX / "report.schema.json"))
 
@@ -585,7 +591,7 @@ class RunnerTests(unittest.TestCase):
                 report = check.run_checks(self.root, lcom_files=requested, capture_fn=fake,
                                           versions_fn=lambda root: ({}, []))
                 self.assertEqual(report["exit_code"], 2, report)
-                self.assertEqual(len(seen), 11)
+                self.assertEqual(len(seen), 10)
                 self.assertNotIn("lcom4", seen)
                 self.assertEqual(next(t for t in report["tools"] if t["name"] == "lcom4")["status"], "error")
                 self.assertIn("INVALID_LCOM_FILES", {d["rule"] for d in report["diagnostics"]})
@@ -596,21 +602,21 @@ class RunnerTests(unittest.TestCase):
                                      "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 12)
+        self.assertEqual(len(seen), 11)
         self.assertTrue(any(d["rule"] == "DOC101" for d in report["diagnostics"]))
 
     def test_violation_code_one(self):
         fake, seen = self.fake_tools({"pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 1)
-        self.assertEqual(len(seen), 12)
+        self.assertEqual(len(seen), 11)
 
     def test_not_initialized_not_green(self):
         (self.root / ".eryx/architecture.ready.json").unlink()
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 10)
+        self.assertEqual(len(seen), 9)
         self.assertEqual(sum(t["status"] == "blocked" for t in report["tools"]), 2)
 
     def test_unapplied_limits_still_run_tools(self):
@@ -619,7 +625,7 @@ class RunnerTests(unittest.TestCase):
         fake, seen = self.fake_tools()
         report = check.run_checks(self.root, capture_fn=fake, versions_fn=lambda root: ({}, []))
         self.assertEqual(report["exit_code"], 2)
-        self.assertEqual(len(seen), 12)
+        self.assertEqual(len(seen), 11)
         self.assertTrue(any(d["rule"] == "READABILITY_NOT_APPLIED" for d in report["diagnostics"]))
 
     def test_short_output_does_not_truncate_json(self):

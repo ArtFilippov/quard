@@ -1,0 +1,2 @@
+# Optional independent jobs. Set to true to check constructor syntax.
+constructor_purity = false

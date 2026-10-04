@@ -119,6 +119,17 @@ def read_scope(root: Path) -> dict[str, list[str]]:
     return data
 
 
+def read_checks(root: Path) -> bool:
+    """Read the project-owned constructor opt-in; older installs default off."""
+    path = root / ".eryx/checks.toml"
+    if not path.exists():
+        return False
+    data = load_toml(path)
+    if set(data) != {"constructor_purity"} or type(data["constructor_purity"]) is not bool:
+        raise EryxError("INVALID_CHECKS", "checks.toml expects only constructor_purity = true or false.")
+    return data["constructor_purity"]
+
+
 def exclude_globs(scope: dict[str, list[str]]) -> list[str]:
     return [pattern for name in scope["exclude_directory_names"]
             for pattern in (f"{name}/**", f"**/{name}/**")]

@@ -41,7 +41,7 @@ class ConstructorPurityTests(unittest.TestCase):
 
     def run_worker(self):
         files = discover_files(self.root, read_scope(self.root))
-        job = next(job for job in make_jobs(self.root, self.run_dir, files, False, [])
+        job = next(job for job in make_jobs(self.root, self.run_dir, files, False, [], True)
                    if job["name"] == "constructor-purity")
         result = execute_job(job, self.root, self.run_dir, 30)
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text(encoding="utf-8"))
@@ -537,13 +537,48 @@ class Model:
                                            "line": True, "column": 1}], "execution_error": None}))
                          ["error"], "UNREADABLE_TOOL_OUTPUT")
         self.assertEqual(captured(json.dumps({"eryx_constructor_purity_adapter": 1,
-                          "diagnostics": [], "execution_error": None}), 1)["error"],
+                           "diagnostics": [], "execution_error": None}), 1)["error"],
                          "CONSTRUCTOR_PURITY_EXECUTION_ERROR")
+
+    def test_old_install_defaults_off_and_invalid_opt_in_keeps_other_diagnostics(self):
+        with TemporaryDirectory(prefix="eryx-constructor-config-") as directory:
+            root = Path(directory)
+            create_repo(root)
+            setting = root / ".eryx/checks.toml"
+            setting.unlink()
+            fake, seen = RunnerTests().fake_tools({"pydoclint": {
+                "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
+            report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
+            self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
+            self.assertEqual({d["rule"] for d in report["diagnostics"]}, {"DOC101"})
+            self.assertNotIn("constructor-purity", seen)
+            tool = next(t for t in report["tools"] if t["name"] == "constructor-purity")
+            self.assertEqual((tool["status"], tool["exit_code"]), ("skipped", None))
+            self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
+
+            for content in ("constructor_purity = 1\n", "constructor_purity = 'true'\n",
+                            "constructor_purity = true\nunknown = false\n", "[constructor_purity]\nenabled = true\n",
+                            "constructor_purity = [\n"):
+                with self.subTest(content=content):
+                    setting.write_text(content, encoding="utf-8")
+                    seen.clear()
+                    report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
+                    validate(report, json.loads((ERYX / "report.schema.json").read_text(encoding="utf-8")))
+                    self.assertEqual((report["status"], report["exit_code"]), ("error", 2))
+                    self.assertEqual({d["rule"] for d in report["diagnostics"]},
+                                     {"DOC101", "INVALID_CONFIG" if content.endswith("[\n") else "INVALID_CHECKS"})
+                    self.assertTrue(any(d["is_infrastructure_error"] for d in report["diagnostics"]
+                                        if d["tool"] == "constructor-purity"))
+                    tool = next(t for t in report["tools"] if t["name"] == "constructor-purity")
+                    self.assertEqual((tool["status"], tool["exit_code"]), ("error", None))
+                    self.assertNotIn("constructor-purity", seen)
+                    self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
 
     def test_project_report_keeps_full_scope_and_native_diagnostics(self):
         with TemporaryDirectory(prefix="eryx-constructor-runner-") as directory:
             root = Path(directory)
             create_repo(root)
+            (root / ".eryx/checks.toml").write_text("constructor_purity = true\n", encoding="utf-8")
             (root / "src/demo/domain/api.py").write_text(
                 'from .decorators import project_decorator\n'
                 'class A:\n    def __init__(self):\n        return None\n'
