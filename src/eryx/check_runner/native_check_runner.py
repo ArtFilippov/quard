@@ -126,6 +126,11 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "outer-classes", "tool": "outer-classes", "argv": [sys.executable,
                  str(tool_dir() / "_outer_classes_worker.py"), "--manifest", str(manifest)]})
+    manifest = run_dir / "free-function-placement-files.json"
+    write_json(manifest, sorted(files["production"] + files["tests"]), root)
+    jobs.append({"name": "free-function-placement", "tool": "free-function-placement",
+                 "argv": [sys.executable, str(tool_dir() / "_free_function_placement_worker.py"),
+                          "--manifest", str(manifest)]})
     manifest = run_dir / "encapsulated-only-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "encapsulated-only", "tool": "encapsulated-only", "argv": [sys.executable,

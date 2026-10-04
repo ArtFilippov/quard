@@ -26,6 +26,7 @@ WORKERS = {
     "_contract_folders_worker.py": "contract-folders",
     "_test_placement_worker.py": "test-placement",
     "_outer_classes_worker.py": "outer-classes",
+    "_free_function_placement_worker.py": "free-function-placement",
     "_encapsulated_only_worker.py": "encapsulated-only",
     "_constructor_purity_worker.py": "constructor-purity",
 }

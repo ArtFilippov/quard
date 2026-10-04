@@ -132,6 +132,11 @@ The independent test-placement job maps `TestHTTPPort` in
 `tests/pkg/http_port/test_http_port.py` to the production `HTTPPort` declaration
 in `src/pkg/http_port/`. The same mirrored layout applies to implementations
 and envelopes; top-level `test_*` functions are violations.
+The independent free-function-placement job checks discovered production and test
+`.py` and `.pyi` files. Free synchronous and asynchronous functions belong in
+class-free `<group_name>_utils.py` modules (or companion stubs); related functions
+may share a module. Module-scope conditional declarations count, but methods and
+functions inside functions do not. Every class in a utilities module is reported.
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including

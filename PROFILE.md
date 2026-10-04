@@ -122,6 +122,16 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   methods and ordinary helper functions are allowed. This independent job retains
   full `.py` and `.pyi` test scope even when LCOM4 is narrowed or skipped. Parse
   and worker failures are infrastructure errors, not passing test results.
+* **Free-function placement**: `FREE_FUNCTION_PLACEMENT` requires each free sync or
+  async function in a discovered production or test `.py` or `.pyi` file to live in
+  a class-free module named `<group_name>_utils.py` (or its `.pyi` companion), with
+  a nonempty group name. Related functions can share a module. Declarations in
+  module-scope conditional suites count; methods and functions nested inside another
+  function do not. `UTILITIES_MODULE_CLASS` reports each class declared anywhere in
+  a utilities module, including nested classes. If a utilities module declares a
+  class, its free functions also fail placement. This job retains full discovered
+  scope when LCOM4 is narrowed or skipped. Read, parse and worker failures are
+  infrastructure errors; unrelated file diagnostics remain visible.
 * **Instance fields**: `EXTERNAL_INSTANCE_FIELD` rejects proven direct reads,
   assignments and deletions of consumer-defined stored fields outside the declaring
   class, in production and tests, including literal-name builtin attribute calls and
