@@ -1,59 +1,24 @@
 """Require an explicit inherited contract on each discovered customer class."""
 from __future__ import annotations
 
-import argparse
 import ast
 import builtins
-import json
 from pathlib import Path
 import sys
 from typing import override
 
-from eryx._lcom4_worker import SPECIAL_METHODS
+from eryx.cohesion_analysis.scoring_utils import SPECIAL_METHODS
 from eryx.contract_analysis.contract_analysis import ContractAnalysis
+from eryx.contract_analysis.contract_utils import collect_nodes, dotted, module_name
+from eryx.contract_analysis.contract_worker_utils import analyze, main
+
+__all__ = ["CONTRACT_BASES", "METHOD", "Contracts", "analyze", "collect_nodes",
+           "dotted", "main", "module_name"]
 
 
 METHOD = (ast.FunctionDef, ast.AsyncFunctionDef)
 CONTRACT_BASES = frozenset({"typing.Protocol", "typing_extensions.Protocol",
                             "abc.ABC", "abc.ABCMeta", "builtins.object"})
-
-
-def dotted(node: ast.expr) -> str | None:
-    """Return a syntactic dotted name, unwrapping generic base arguments."""
-    if isinstance(node, ast.Subscript):
-        return dotted(node.value)
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        prefix = dotted(node.value)
-        return f"{prefix}.{node.attr}" if prefix else None
-    return None
-
-
-def module_name(path: str) -> str:
-    """Map a discovered source path to its importable module name."""
-    parts = Path(path).with_suffix("").parts
-    if parts[0] == "src":
-        parts = parts[1:]
-    if parts[-1] == "__init__":
-        parts = parts[:-1]
-    return ".".join(parts)
-
-
-def collect_nodes(module: str, tree: ast.Module) -> dict[str, ast.ClassDef]:
-    nodes: dict[str, ast.ClassDef] = {}
-
-    def visit(node: ast.AST, parents: tuple[str, ...]) -> None:
-        if isinstance(node, ast.ClassDef):
-            parents = (*parents, node.name)
-            nodes[".".join((module, *parents))] = node
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            parents = (*parents, node.name)
-        for child in ast.iter_child_nodes(node):
-            visit(child, parents)
-
-    visit(tree, ())
-    return nodes
 
 
 class Contracts(ContractAnalysis):
@@ -344,42 +309,6 @@ class Contracts(ContractAnalysis):
                                             "symbol": symbol, "message":
                                             f"{name}.{member}: no inherited local contract declares this member."})
         return results
-
-
-def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
-    trees: dict[str, ast.Module] = {}
-    diagnostics: list[dict[str, object]] = []
-    error = None
-    for path in paths:
-        if (not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts
-                or Path(path).suffix not in {".py", ".pyi"}):
-            raise ValueError(f"Invalid class contract source path: {path!r}")
-        try:
-            trees[path] = ast.parse((root / path).read_text(encoding="utf-8"), filename=path)
-        except (OSError, UnicodeError, SyntaxError) as exc:
-            error = "CLASS_CONTRACTS_PARSE_ERROR"
-            diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
-                                "column": getattr(exc, "offset", None), "message": str(exc),
-                                "is_infrastructure_error": True})
-    diagnostics.extend(Contracts(trees).diagnostics())
-    return diagnostics, error
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
-    args = parser.parse_args()
-    try:
-        paths = json.loads(args.manifest.read_text(encoding="utf-8"))
-        if not isinstance(paths, list):
-            raise ValueError("Class contract manifest must be a list of Python paths")
-        diagnostics, error = analyze(Path.cwd(), paths)
-    except (OSError, UnicodeError, ValueError, TypeError) as exc:
-        error = "CLASS_CONTRACTS_EXECUTION_ERROR"
-        diagnostics = [{"rule": error, "message": str(exc), "is_infrastructure_error": True}]
-    print(json.dumps({"eryx_class_contracts_adapter": 1, "diagnostics": diagnostics,
-                      "execution_error": error}, ensure_ascii=False))
-    return 2 if error else (1 if diagnostics else 0)
 
 
 if __name__ == "__main__":

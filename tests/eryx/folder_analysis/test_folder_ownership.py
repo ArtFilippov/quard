@@ -56,6 +56,30 @@ class TestFolderOwnership(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual([], diagnostics)
 
+    def test_migrated_helpers_keep_worker_interfaces_and_placement(self):
+        from eryx._class_contracts_worker import analyze as contracts_analyze
+        from eryx._contract_folders_worker import analyze as folders_analyze
+        from eryx._lcom4_worker import analyze as cohesion_analyze
+        from eryx._test_placement_worker import analyze as placement_analyze
+        from eryx.cohesion_analysis.cohesion_worker_utils import analyze as cohesion_helper
+        from eryx.contract_analysis.contract_worker_utils import analyze as contract_helper
+        from eryx.folder_analysis.folder_utils import analyze as folder_helper
+        from eryx.free_function_placement_utils import analyze as free_functions
+        from eryx.test_placement_analysis.placement_utils import analyze as placement_helper
+
+        self.assertIs(contracts_analyze, contract_helper)
+        self.assertIs(folders_analyze, folder_helper)
+        self.assertIs(cohesion_analyze, cohesion_helper)
+        self.assertIs(placement_analyze, placement_helper)
+
+        paths = sorted(str(path.relative_to(ERYX)) for folder in (
+            "contract_analysis", "folder_analysis", "test_placement_analysis",
+            "cohesion_analysis", "cohesion_references")
+            for path in (ERYX / "src/eryx" / folder).glob("*.py"))
+        diagnostics, error = free_functions(ERYX, paths)
+        self.assertIsNone(error)
+        self.assertEqual([], diagnostics)
+
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)

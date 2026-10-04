@@ -5,20 +5,9 @@ import ast
 from typing import override
 
 from eryx.cohesion_analysis.cohesion_analysis import CohesionAnalysis
+from eryx.cohesion_analysis.declaration_utils import ABSTRACT_DECORATORS, METHOD, dotted
 
-
-def dotted(node: ast.expr) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        prefix = dotted(node.value)
-        return f"{prefix}.{node.attr}" if prefix else None
-    return None
-
-
-METHOD = (ast.FunctionDef, ast.AsyncFunctionDef)
-ABSTRACT_DECORATORS = frozenset({"abc.abstractmethod", "abc.abstractclassmethod",
-                                 "abc.abstractstaticmethod", "abc.abstractproperty"})
+__all__ = ["ABSTRACT_DECORATORS", "METHOD", "dotted", "Declarations"]
 
 
 class Declarations(CohesionAnalysis):
