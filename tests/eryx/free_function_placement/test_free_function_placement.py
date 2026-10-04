@@ -17,8 +17,12 @@ sys.path.insert(0, str(ERYX / "tests"))
 
 from eryx._common import capture
 from eryx._policy import discover_files, read_scope
+from eryx import (_markers, _method_decorators_worker, _restricted_agreement,
+                  marker_utils, method_declaration_utils, restriction_agreement_utils)
 from eryx.check import execute_job, make_jobs, run_checks
 from eryx.free_function_placement_utils import analyze as placement
+from eryx.marker_analysis import marker_index
+from eryx.method_analysis import declarations
 from offline_fixtures import create_repo, fake_tools, native_result
 
 
@@ -83,6 +87,26 @@ class TestFreeFunctionPlacement(unittest.TestCase):
         self.assertEqual(report["execution_error"], None)
         self.assertEqual({item["rule"] for item in report["diagnostics"]},
                          {"MULTIPLE_OUTER_CLASSES"})
+
+    def test_method_marker_and_restriction_helpers_keep_imports_and_placement(self):
+        paths = [f"src/eryx/{name}.py" for name in (
+            "_method_decorators_worker", "method_analysis/declarations", "method_declaration_utils",
+            "_markers", "marker_analysis/marker_index", "marker_utils",
+            "_restricted_agreement", "restriction_agreement_utils")]
+        self.assertEqual(placement(ERYX, paths), ([], None))
+        manifest = self.root / "migrated-helpers.json"
+        manifest.write_text(json.dumps(paths), encoding="utf-8")
+        result = capture([sys.executable, str(ERYX / "_free_function_placement_worker.py"),
+                          "--manifest", str(manifest)], ERYX, timeout=30)
+        self.assertEqual((result["exit_code"], result["error"]), (0, None))
+        self.assertEqual(json.loads(result["stdout"])["diagnostics"], [])
+
+        self.assertIs(_markers.identity_definition, marker_utils.identity_definition)
+        self.assertIs(marker_index.local_names, marker_utils.local_names)
+        self.assertIs(_method_decorators_worker.analyze, method_declaration_utils.analyze)
+        self.assertIs(declarations.needs_receiver, method_declaration_utils.needs_receiver)
+        self.assertIs(declarations.Declarations, _method_decorators_worker.Declarations)
+        self.assertIs(_restricted_agreement.agreement, restriction_agreement_utils.agreement)
 
     @override
     def setUp(self) -> None:

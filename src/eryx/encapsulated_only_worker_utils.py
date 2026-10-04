@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from eryx._instance_fields_worker import Ownership
-from eryx._restricted_agreement import agreement
+from eryx.restriction_agreement_utils import agreement
 from eryx.restricted_calls.calls import Calls
 from eryx.restricted_targets.resolution import Restrictions
 
