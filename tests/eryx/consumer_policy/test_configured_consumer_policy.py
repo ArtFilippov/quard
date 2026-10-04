@@ -18,11 +18,6 @@ from offline_fixtures import create_repo, managed_bytes
 
 
 class TestConfiguredConsumerPolicy(unittest.TestCase):
-    def test_clean_arch_mapping_preserves_domain_direction(self):
-        mapping = _policy.clean_config()["layer_map"]
-        self.assertIn("Domain", mapping)
-        self.assertIn("domain", mapping["Domain"])
-
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
         directory = TemporaryDirectory(prefix="eryx-test with spaces-")
@@ -38,6 +33,9 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         self.assertEqual(data["production"]["max_statements"], 30)
         self.assertEqual(data["tests"]["max_statements"], 60)
         self.assertEqual(data["tests"]["max_line_length"], 100)
+        mapping = _policy.clean_config()["layer_map"]
+        self.assertIn("Domain", mapping)
+        self.assertIn("domain", mapping["Domain"])
 
     def test_apply_idempotent(self):
         self.assertEqual(self.policy().apply(), [])

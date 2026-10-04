@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Callable
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, override
 import unittest
 from unittest.mock import patch
 
@@ -26,19 +27,23 @@ from offline_fixtures import create_repo, fake_tools
 class TestNativeCheckRunner(unittest.TestCase):
     def test_tool_checkout_is_a_valid_consumer(self):
         self.assertEqual(project_dir(ERYX), ERYX)
+        self.assertEqual(project_dir(self.root), self.root)
 
-    def setUp(self):
-        self.temp = TemporaryDirectory(prefix="eryx-runner with spaces-")
-        self.root = Path(self.temp.name)
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.root: Path = Path(self.enterContext(
+            TemporaryDirectory(prefix="eryx-runner with spaces-")))
         create_repo(self.root)
         self.runner: CheckRunner = NativeCheckRunner()
 
-    def tearDown(self):
-        self.temp.cleanup()
+    def run_report(self, fake: Callable[[list[str], Path, int], dict[str, Any]],
+                   selection: str | None = None, serial: bool = False) -> dict[str, Any]:
+        def versions(_root: Path) -> tuple[dict[str, str], list[str]]:
+            return {}, []
 
-    def run_report(self, fake, selection=None, serial=False):
         return self.runner.run(self.root, lcom_files=selection, serial=serial, timeout=30,
-                               capture_fn=fake, versions_fn=lambda _: ({}, []))
+                               capture_fn=fake, versions_fn=versions)
 
     def test_full_run_archives_reports_and_each_job(self):
         fake, seen = fake_tools()
@@ -61,7 +66,8 @@ class TestNativeCheckRunner(unittest.TestCase):
 
     def test_selected_lcom4_keeps_other_manifests_full(self):
         fake, seen = fake_tools()
-        report = self.run_report(fake, "tests/test_value.py src/demo/domain/api.py tests/test_value.py")
+        report = self.run_report(
+            fake, "tests/test_value.py src/demo/domain/api.py tests/test_value.py")
         coverage = report["coverage"]["lcom4"]
         self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 14))
         self.assertEqual(coverage["selected_files"],
@@ -104,9 +110,9 @@ class TestNativeCheckRunner(unittest.TestCase):
                          ["status"], "error")
 
     def test_error_over_violation_and_no_fail_fast(self):
+        message = "src/demo/domain/api.py:1: DOC101: Missing argument\n"
         fake, seen = fake_tools({"pyright": {"stdout": "broken", "code": 2},
-                                 "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
-                                               "code": 1}})
+                                 "pydoclint": {"stderr": message, "code": 1}})
         report = self.run_report(fake, serial=True)
         self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 14))
         self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
@@ -142,7 +148,8 @@ class TestNativeCheckRunner(unittest.TestCase):
         validate(report, read_json(ERYX / "report.schema.json"))
 
     def test_native_violation_returns_one_and_retains_diagnostic(self):
-        fake, seen = fake_tools({"pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
+        fake, seen = fake_tools({"pydoclint": {
+            "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
                                  "code": 1}})
         report = self.run_report(fake)
         self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 14))
@@ -151,19 +158,21 @@ class TestNativeCheckRunner(unittest.TestCase):
                          [("DOC101", "src/demo/domain/api.py", 1)])
 
     def test_malformed_native_output_preserves_other_diagnostics(self):
+        message = "src/demo/domain/api.py:1: DOC101: Native issue\n"
         for failure in ({"stdout": "not JSON", "code": 0},
                         {"stdout": "", "code": None, "error": "TOOL_TIMEOUT"}):
             with self.subTest(failure=failure):
                 fake, seen = fake_tools({"encapsulated-only": failure,
-                                         "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n",
-                                                       "code": 1}})
+                                         "pydoclint": {"stderr": message, "code": 1}})
                 report = self.run_report(fake, "")
                 self.assertEqual((report["status"], report["exit_code"], len(seen)),
                                  ("error", 2, 13))
                 self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
-                self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]
-                                    if item["tool"] == "encapsulated-only"))
-                self.assertEqual(next(job for job in report["tools"] if job["name"] == "encapsulated-only")
+                self.assertTrue(any(
+                    item["is_infrastructure_error"] for item in report["diagnostics"]
+                    if item["tool"] == "encapsulated-only"))
+                self.assertEqual(next(
+                    job for job in report["tools"] if job["name"] == "encapsulated-only")
                                  ["status"], "error")
                 validate(report, read_json(ERYX / "report.schema.json"))
 
@@ -184,13 +193,15 @@ class TestNativeCheckRunner(unittest.TestCase):
 
     def test_native_worker_violation_and_pyright_survive_skipped_lcom4(self):
         source = self.root / "src/demo/domain/api.py"
-        source.write_text("class Example:\n    @staticmethod\n    def make(): pass\n", encoding="utf-8")
+        source.write_text(
+            "class Example:\n    @staticmethod\n    def make(): pass\n", encoding="utf-8")
         fake, seen = fake_tools({"pyright": {"stdout": json.dumps({
             "generalDiagnostics": [{"file": str(source), "message": "Native issue",
                                     "severity": "error", "rule": "reportReturnType",
-                                    "range": {"start": {"line": 0, "character": 0}}}]}), "code": 1}})
+                                     "range": {"start": {"line": 0, "character": 0}}}]
+        }), "code": 1}})
 
-        def mixed(argv, cwd, timeout):
+        def mixed(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             if str(ERYX / "_method_decorators_worker.py") in argv:
                 seen.append("method-decorators")
                 return capture(argv, cwd, timeout)
@@ -212,7 +223,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "class Stub:\n    async def defaulted(self = ...) -> None: ...\n", encoding="utf-8")
         fake, _ = fake_tools()
 
-        def mixed(argv, cwd, timeout):
+        def mixed(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             if str(ERYX / "_method_decorators_worker.py") in argv:
                 return capture(argv, cwd, timeout)
             return fake(argv, cwd, timeout)
@@ -236,9 +247,10 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, _ = fake_tools({"pyright": {"stdout": json.dumps({
             "generalDiagnostics": [{"file": str(source), "message": "Native issue",
                                     "severity": "error", "rule": "reportReturnType",
-                                    "range": {"start": {"line": 0, "character": 0}}}]}), "code": 1}})
+                                     "range": {"start": {"line": 0, "character": 0}}}]
+        }), "code": 1}})
 
-        def mixed(argv, cwd, timeout):
+        def mixed(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             if str(ERYX / "_instance_fields_worker.py") in argv:
                 return capture(argv, cwd, timeout)
             return fake(argv, cwd, timeout)
@@ -254,14 +266,16 @@ class TestNativeCheckRunner(unittest.TestCase):
     def test_class_contracts_keep_full_source_test_and_stub_scope(self):
         source = self.root / "src/demo/domain/api.py"
         source.write_text("class Missing: pass\n", encoding="utf-8")
-        (self.root / "tests/test_value.py").write_text("class TestFixture: pass\n", encoding="utf-8")
+        (self.root / "tests/test_value.py").write_text(
+            "class TestFixture: pass\n", encoding="utf-8")
         (self.root / "src/demo/domain/stubs.pyi").write_text("class Stub: ...\n", encoding="utf-8")
         fake, _ = fake_tools({"pyright": {"stdout": json.dumps({
             "generalDiagnostics": [{"file": str(source), "message": "Native issue",
                                     "severity": "error", "rule": "reportReturnType",
-                                    "range": {"start": {"line": 0, "character": 0}}}]}), "code": 1}})
+                                     "range": {"start": {"line": 0, "character": 0}}}]
+        }), "code": 1}})
 
-        def mixed(argv, cwd, timeout):
+        def mixed(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             if str(ERYX / "_class_contracts_worker.py") in argv:
                 return capture(argv, cwd, timeout)
             return fake(argv, cwd, timeout)
@@ -283,7 +297,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             encoding="utf-8")
         fake, _ = fake_tools()
 
-        def mixed(argv, cwd, timeout):
+        def mixed(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             if str(ERYX / "_method_decorators_worker.py") in argv:
                 return capture(argv, cwd, timeout)
             return fake(argv, cwd, timeout)
@@ -298,7 +312,8 @@ class TestNativeCheckRunner(unittest.TestCase):
 
     def test_invalid_readability_still_completes_jobs(self):
         path = self.root / ".eryx/readability.toml"
-        path.write_text(path.read_text().replace("max_module_lines = 400", "max_module_lines = 410"))
+        path.write_text(path.read_text().replace(
+            "max_module_lines = 400", "max_module_lines = 410"))
         fake, seen = fake_tools()
         report = self.run_report(fake)
         self.assertEqual((report["exit_code"], len(seen)), (2, 14))

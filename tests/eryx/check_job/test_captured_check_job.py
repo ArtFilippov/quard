@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 from pathlib import Path
 import sys
@@ -19,8 +20,11 @@ from eryx._common import capture
 
 class TestCapturedCheckJob(unittest.TestCase):
     def run_job(self, job: dict[str, Any], root: Path, run_dir: Path,
-                timeout: int = 30) -> dict[str, Any]:
-        return CapturedCheckJob().execute(job, root, run_dir, timeout=timeout, capture_fn=capture)
+                timeout: int = 30,
+                capture_fn: Callable[[list[str], Path, int], dict[str, Any]] = capture
+                ) -> dict[str, Any]:
+        return CapturedCheckJob().execute(job, root, run_dir, timeout=timeout,
+                                          capture_fn=capture_fn)
 
     def run_pylint(
         self, code: str, enabled: list[str]
@@ -106,8 +110,7 @@ class TestCapturedCheckJob(unittest.TestCase):
                                ) -> dict[str, Any]:
                 raise OSError("subprocess failed")
 
-            result = CapturedCheckJob().execute(
-                job, root, run_dir, timeout=30, capture_fn=broken_capture)
+            result = self.run_job(job, root, run_dir, capture_fn=broken_capture)
             self.assertEqual((result["status"], result["exit_code"]), ("error", None))
             self.assertEqual(result["error"], "RUNNER_SUBPROCESS_ERROR")
             self.assertEqual((root / result["raw_output"]["stderr"]).read_text(encoding="utf-8"),

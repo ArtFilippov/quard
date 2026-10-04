@@ -24,7 +24,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.root = Path(self.enterContext(TemporaryDirectory(prefix="eryx-architecture with spaces-")))
+        self.root: Path = Path(self.enterContext(
+            TemporaryDirectory(prefix="eryx-architecture with spaces-")))
         create_repo(self.root)
         self.architecture = ConfiguredArchitectureDraft(self.root)
 
@@ -102,7 +103,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             path.write_text(path.read_text() + "\n# native sync retained\n")
             return native_result(argv)
 
-        with patch("eryx.architecture_draft.configured_architecture_draft.capture", side_effect=sync) as capture:
+        with patch("eryx.architecture_draft.configured_architecture_draft.capture",
+                   side_effect=sync) as capture:
             event, details = self.architecture.initialize(force=True)
         self.assertEqual(capture.call_count, 1)
         self.assertEqual(event, "review_required")
@@ -122,9 +124,11 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         def check(argv: list[str], cwd: Path) -> dict[str, Any]:
             self.assertEqual(argv[-1], "check")
             self.assertEqual(cwd, self.root)
-            return native_result(argv, code=1, stdout="src/demo/domain/api.py[L1]: dependency violation")
+            return native_result(
+                argv, code=1, stdout="src/demo/domain/api.py[L1]: dependency violation")
 
-        with patch("eryx.architecture_draft.configured_architecture_draft.capture", side_effect=check) as capture:
+        with patch("eryx.architecture_draft.configured_architecture_draft.capture",
+                   side_effect=check) as capture:
             event, details = self.architecture.initialize(accept=True)
         capture.assert_called_once()
         self.assertEqual(event, "initialized")
@@ -143,7 +147,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             with self.assertRaisesRegex(EryxError, "Cannot validate Tach config"):
                 self.architecture.initialize(accept=True)
         self.assertFalse(marker.exists())
-        self.assertIn("invalid native config", (self.root / ".eryx/logs/init-check.log").read_text())
+        self.assertIn("invalid native config",
+                      (self.root / ".eryx/logs/init-check.log").read_text())
 
     def test_multi_package_reviewed_boundaries_are_accepted_without_regeneration(self):
         (self.root / "src/second").mkdir()
@@ -172,7 +177,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
     def test_command_uses_selected_consumer_and_reports_review_required(self):
         from eryx import init_architecture
 
-        with patch.object(sys, "argv", ["init_architecture.py", "--project", str(self.root), "--json"]), \
+        with patch.object(sys, "argv", ["init_architecture.py", "--project",
+                                        str(self.root), "--json"]), \
              patch.object(init_architecture, "require_runtime"), \
              patch.object(init_architecture, "emit_event") as event:
             self.assertEqual(init_architecture.main(), 0)

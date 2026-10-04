@@ -6,23 +6,27 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import tomllib
+from typing import override
 import unittest
 
 
 ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
-from eryx.clean_architecture_layers.configured_clean_architecture_layers import ConfiguredCleanArchitectureLayers
+from eryx.clean_architecture_layers.configured_clean_architecture_layers import (
+    ConfiguredCleanArchitectureLayers,
+)
 from eryx.init_architecture import sync_clean_arch
 
 
 class TestConfiguredCleanArchitectureLayers(unittest.TestCase):
-    def setUp(self):
-        directory = TemporaryDirectory(prefix="architecture-layers-")
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
-        self.path = self.root / "pyproject.toml"
-        self.unmanaged = (
+    @override
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.root: Path = Path(self.enterContext(
+            TemporaryDirectory(prefix="architecture-layers-")))
+        self.path: Path = self.root / "pyproject.toml"
+        self.unmanaged: str = (
             '# Preserve project policy and its rationale.\n'
             '[project]\nname = "sample"\n'
             '[tool.pyright]\nstubPath = "src/stubs" # Local library declarations.\n'
@@ -40,7 +44,7 @@ class TestConfiguredCleanArchitectureLayers(unittest.TestCase):
             '[[tool.clean-arch.layers]]\nmodule = "sample.stale"\nname = "Interface"\n',
             encoding="utf-8",
         )
-        self.layers = {
+        self.layers: dict[str, str] = {
             "sample": "Domain",
             "sample.contracts": "Domain",
             "sample.execution": "UseCase",
@@ -48,7 +52,7 @@ class TestConfiguredCleanArchitectureLayers(unittest.TestCase):
             "sample.terminal": "Interface",
             "sample.wiring": "Bootstrap",
         }
-        self.tach = {
+        self.tach: dict[str, list[dict[str, str]]] = {
             "modules": [{"path": name, "layer": layer} for name, layer in self.layers.items()]
         }
 

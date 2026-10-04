@@ -58,18 +58,15 @@ def run_command(argv: list[str], cwd: Path, expected: int = 0) -> str:
 
 class TestTransactionalInstallation(unittest.TestCase):
     def test_real_native_installer_smoke_probes(self):
-        with TemporaryDirectory(prefix="eryx-native-probes-") as directory:
-            root = Path(directory)
-            (root / "pyproject.toml").write_bytes((ERYX / "pyproject.toml").read_bytes())
-            logs = root / ".eryx/logs/install-probes"
-            logs.mkdir(parents=True)
-            result = smoke_tests(root, logs)
-            self.assertEqual(result["pylint_config_and_fixture"], "passed")
-            self.assertEqual(result["pyright_type_error"], "detected")
-            self.assertEqual(result["pydoclint_signature_error"], "detected")
-            self.assertEqual(result["tach_undeclared_dependency"], "detected")
-
-    def test_installer_probe_resolves_native_binary_in_project_environment(self):
+        root = self.configured_project()
+        (root / "pyproject.toml").write_bytes((ERYX / "pyproject.toml").read_bytes())
+        logs = root / ".eryx/logs/install-probes"
+        logs.mkdir(parents=True)
+        result = smoke_tests(root, logs)
+        self.assertEqual(result["pylint_config_and_fixture"], "passed")
+        self.assertEqual(result["pyright_type_error"], "detected")
+        self.assertEqual(result["pydoclint_signature_error"], "detected")
+        self.assertEqual(result["tach_undeclared_dependency"], "detected")
         self.assertEqual(tool_binary("pydoclint"),
                          str(Path(sys.executable).parent / "pydoclint"))
         with self.assertRaises(EryxError) as error:
@@ -77,15 +74,14 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(error.exception.code, "MISSING_TOOL")
 
     def test_repo_lock_refuses_concurrent_operations(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            with repo_lock(root):
-                with self.assertRaises(EryxError):
-                    with repo_lock(root):
-                        pass
+        root = self.configured_project()
+        with repo_lock(root):
+            with self.assertRaises(EryxError):
+                with repo_lock(root):
+                    pass
 
     def test_safe_target_rejects_path_traversal(self):
-        root = Path("/tmp/example")
+        root = self.configured_project()
         with self.assertRaises(EryxError):
             safe_target(root / "../escape", root)
 
