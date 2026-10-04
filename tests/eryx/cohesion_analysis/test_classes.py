@@ -236,6 +236,9 @@ class Scopes:
     def first(receiver):
         def deferred():
             receiver.third()
+        async def delayed():
+            receiver.third()
+        later = lambda: receiver.third()
         class Nested:
             def a(self): return 1
             def b(self): return 2

@@ -3,10 +3,6 @@ from __future__ import annotations
 
 import ast
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from eryx.cohesion_references.method_references import MethodReferences
 
 
 class CohesionAnalysis(ABC):
@@ -40,12 +36,6 @@ class CohesionAnalysis(ABC):
         raise NotImplementedError
 
     def abc(self, name: str, seen: frozenset[str] = frozenset()) -> bool:
-        raise NotImplementedError
-
-    def receiver_kind(self, name: str) -> str | None:
-        raise NotImplementedError
-
-    def connects_to(self, other: MethodReferences, method: str) -> bool:
         raise NotImplementedError
 
     def results(self) -> list[dict[str, object]]:

@@ -23,8 +23,8 @@ class TestTestPlacement(unittest.TestCase):
         files = discover_files(ERYX, read_scope(ERYX))
         migrated = [
             "tests/eryx/contract_analysis/test_contracts.py",
-            "tests/eryx/contract_analysis/test_folder_ownership.py",
-            "tests/eryx/contract_analysis/test_test_placement.py",
+            "tests/eryx/folder_analysis/test_folder_ownership.py",
+            "tests/eryx/test_placement_analysis/test_test_placement.py",
             "tests/eryx/method_analysis/test_declarations.py",
             "tests/eryx/cohesion_analysis/test_classes.py",
             "tests/eryx/field_ownership/test_ownership.py",

@@ -29,7 +29,8 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   positional instance receiver, regardless of its name or use in the body.
 * **Class contracts**: `MISSING_CLASS_CONTRACT` requires each customer class to
   explicitly inherit a contract. Local Protocol and abstract-interface declarations
-  qualify; implementations may inherit these or an opaque external base (including
+  qualify, including abstract interfaces declared with `ABCMeta`; implementations
+  may inherit these or an opaque external base (including
   an explicit `object`). Implicit `object` does not qualify. This independent job
   scans discovered production, test and stub files even when LCOM4 is narrowed
   or skipped. It resolves customer ancestry across discovered modules, imported
@@ -90,7 +91,8 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   contract mirrors the contract folder under `tests/`. A concrete local base takes
   precedence over opaque external bases. `COMPETING_LOCAL_BASES` requires a separate
   combined local contract and one selected concrete base when local contracts
-  compete; the combined contract must cover that base's contract. Unresolved
+  compete; the combined contract must cover that base's contract. That direct
+  combined contract selects the owner for descendants and mirrored tests. Unresolved
   ancestry emits `UNRESOLVED_FOLDER_OWNER` rather than proving placement.
   An optional direct `envelopes/` folder under a contract folder contains a base
   `<Contract>Envelope` in `<contract>_envelope.py` (or `.pyi`) that directly inherits

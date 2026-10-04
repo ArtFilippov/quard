@@ -25,6 +25,7 @@ class Declarations(CohesionAnalysis):
     """Resolve only local class inheritance and explicit stdlib typing/abc imports."""
 
     def __init__(self, tree: ast.Module):
+        super().__init__()
         self.imports: dict[str, str] = {}
         self.classes: dict[str, ast.ClassDef] = {}
         for item in tree.body:

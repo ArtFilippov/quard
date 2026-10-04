@@ -68,6 +68,8 @@ class Other(PretendProtocol): pass
 class MetaInterface(metaclass=Meta):
     @required
     def run(self): ...
+class MetaImpl(MetaInterface):
+    def run(self): return 3
 class Outer(object):
     class Inner: pass
 def factory():
@@ -75,10 +77,11 @@ def factory():
     return Local
 ''')
         self.put("src/consumer.py", '''\
-from contracts import Port, NoContract, Interface
+from contracts import Port, NoContract, Interface, MetaInterface
 from pathlib import Path as ExternalPath
 class UsesPort(Port): pass
 class UsesABC(Interface): pass
+class UsesMeta(MetaInterface): pass
 class UsesConcrete(NoContract): pass
 class UsesExternal(ExternalPath): pass
 ''')

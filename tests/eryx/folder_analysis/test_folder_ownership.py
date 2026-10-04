@@ -80,7 +80,8 @@ class TestFolderOwnership(unittest.TestCase):
         from eryx._outer_classes_worker import analyze as outer_analyze
 
         paths = sorted(str(path.relative_to(ERYX)) for folder in (
-            "contract_analysis", "method_analysis", "cohesion_analysis", "cohesion_references")
+            "contract_analysis", "folder_analysis", "test_placement_analysis",
+            "method_analysis", "cohesion_analysis", "cohesion_references")
             for path in (ERYX / "src/eryx" / folder).glob("*.py"))
         paths.extend(f"src/eryx/{worker}.py" for worker in (
             "_class_contracts_worker", "_contract_folders_worker", "_lcom4_worker",
@@ -186,12 +187,17 @@ class TestFolderOwnership(unittest.TestCase):
         self.put("src/pkg/combined_port/impl.py", "from .combined_port import CombinedPort\n"
                  "from pkg.http_port.impl import Impl\n"
                  "class Both(CombinedPort, Impl):\n    def write(self): pass\n")
+        self.put("src/pkg/combined_port/child.py", "from .impl import Both\n"
+                 "class Child(Both): pass\n")
+        self.put("tests/pkg/combined_port/test_child.py", "class TestChild: pass\n")
         self.put("tests/pkg/http_port/test_impl.py", "from pkg.http_port.impl import Impl\n"
                  "class TestImpl(Impl): pass\n")
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("passed", 0, None), result["diagnostics"])
         self.assertEqual(result["diagnostics"], [])
+        placement, _ = self.run_worker("test-placement")
+        self.assertEqual(placement["diagnostics"], [])
         self.assertIn("tests/pkg/http_port/test_impl.py", json.loads(
             (self.run_dir / "contract-folders-files.json").read_text(encoding="utf-8")))
 

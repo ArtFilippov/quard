@@ -18,7 +18,8 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
     """
     del pattern
     root = Path(__file__).resolve().parent / "eryx"
-    for group in ("contract_analysis", "method_analysis", "cohesion_analysis",
+    for group in ("contract_analysis", "folder_analysis", "test_placement_analysis",
+                  "method_analysis", "cohesion_analysis",
                   "field_ownership", "constructor_analysis", "restricted_calls",
                   "check_job", "check_runner", "clean_architecture_layers", "installation", "outer_classes",
                    "architecture_compatibility", "architecture_draft", "afk_issue_runner", "report_parsing"):

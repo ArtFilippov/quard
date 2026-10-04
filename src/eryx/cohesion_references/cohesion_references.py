@@ -1,14 +1,16 @@
-"""Visitor interface for method-reference collection."""
+"""Operations used while collecting references from a method body."""
 from __future__ import annotations
 
 import ast
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from eryx.cohesion_analysis.cohesion_analysis import CohesionAnalysis
+if TYPE_CHECKING:
+    from eryx.cohesion_references.method_references import MethodReferences
 
 
-class CohesionReferences(CohesionAnalysis, ABC):
-    """AST callbacks used by the cohesion reference visitor."""
+class CohesionReferences(ABC):
+    """Collect calls and fields while respecting deferred nested scopes."""
 
     @abstractmethod
     def __init__(self, *args: object, **kwargs: object) -> None:
@@ -19,8 +21,18 @@ class CohesionReferences(CohesionAnalysis, ABC):
             **kwargs (object): Named visitor inputs.
         """
 
-    def visit_Call(self, node: ast.Call) -> None: ...
-    def visit_Attribute(self, node: ast.Attribute) -> None: ...
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None: ...
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None: ...
-    def visit_Lambda(self, node: ast.Lambda) -> None: ...
+    @abstractmethod
+    def receiver_kind(self, name: str) -> str | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def connects_to(self, other: MethodReferences, method: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def call(self, node: ast.Call) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def attribute(self, node: ast.Attribute) -> None:
+        raise NotImplementedError

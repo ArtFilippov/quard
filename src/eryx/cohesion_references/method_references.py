@@ -11,7 +11,8 @@ class MethodReferences(ast.NodeVisitor, CohesionReferences):
     """References in one method body, excluding deferred nested scopes."""
 
     def __init__(self, instance_receiver: str | None, class_receivers: set[str],
-                 methods: set[str], declared: set[str]):
+                  methods: set[str], declared: set[str]):
+        super().__init__()
         self.instance_receiver = instance_receiver
         self.class_receivers = class_receivers
         self.methods = methods
@@ -32,7 +33,18 @@ class MethodReferences(ast.NodeVisitor, CohesionReferences):
         return method in self.calls or bool(self.fields & other.fields)
 
     @override
-    def visit_Call(self, node: ast.Call) -> None:
+    def visit(self, node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.Call):
+            self.call(node)
+        elif isinstance(node, ast.Attribute):
+            self.attribute(node)
+        else:
+            self.generic_visit(node)
+
+    @override
+    def call(self, node: ast.Call) -> None:
         if (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                 and self.receiver_kind(node.func.value.id) is not None):
             if node.func.attr in self.methods:
@@ -47,25 +59,9 @@ class MethodReferences(ast.NodeVisitor, CohesionReferences):
             self.generic_visit(node)
 
     @override
-    def visit_Attribute(self, node: ast.Attribute) -> None:
+    def attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.value, ast.Name) and node.attr not in self.declared:
             kind = self.receiver_kind(node.value.id)
             if kind is not None:
                 self.fields.add((kind, node.attr))
         self.generic_visit(node)
-
-    @override
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        pass
-
-    @override
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        pass
-
-    @override
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        pass
-
-    @override
-    def visit_Lambda(self, node: ast.Lambda) -> None:
-        pass

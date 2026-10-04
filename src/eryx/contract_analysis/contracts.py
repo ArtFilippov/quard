@@ -60,6 +60,7 @@ class Contracts(ContractAnalysis):
     """Resolve explicit imports and local inheritance across the discovered scope."""
 
     def __init__(self, trees: dict[str, ast.Module]):
+        super().__init__()
         self.paths: dict[str, str] = {}
         self.nodes: dict[str, ast.ClassDef] = {}
         self.imports: dict[str, dict[str, str | None]] = {}
@@ -97,6 +98,14 @@ class Contracts(ContractAnalysis):
             if module not in self.imports or path.endswith(".py"):
                 self.imports[module] = bindings
             self.bindings_by_path[path] = bindings
+
+    @override
+    def all_declarations(self) -> tuple[tuple[str, ast.ClassDef, str], ...]:
+        return tuple(self.declarations)
+
+    @override
+    def path_for(self, name: str) -> str:
+        return self.paths[name]
 
     @override
     def provenance(self, target: str) -> str:
@@ -153,7 +162,8 @@ class Contracts(ContractAnalysis):
             resolved = self.resolved(name, base, path)
             if resolved in {"typing.Protocol", "typing_extensions.Protocol"}:
                 return True
-            if resolved in self.nodes and self.has_contract(resolved, seen | {name}):
+            if resolved in self.nodes and (self.declaration(resolved)
+                                           or self.has_contract(resolved, seen | {name})):
                 return True
             if resolved and resolved not in self.nodes and not self.local_module(resolved):
                 return True

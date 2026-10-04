@@ -81,7 +81,7 @@ def components(node: ast.ClassDef, declarations: Declarations) -> list[list[str]
     methods = [item for item in node.body if isinstance(item, METHOD) and eligible(item, declarations)]
     names = {item.name for item in methods}
     declared = {item.name for item in node.body if isinstance(item, METHOD)}
-    references = []
+    references: list[MethodReferences] = []
     for method in methods:
         instance_receiver = None
         class_receivers = {node.name}
@@ -124,6 +124,7 @@ def components(node: ast.ClassDef, declarations: Declarations) -> list[list[str]
 
 class Classes(ast.NodeVisitor, CohesionAnalysis):
     def __init__(self, path: str, declarations: Declarations):
+        super().__init__()
         self.path = path
         self.declarations = declarations
         self.parents: list[str] = []
