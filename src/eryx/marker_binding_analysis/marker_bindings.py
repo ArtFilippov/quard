@@ -2,26 +2,34 @@
 from __future__ import annotations
 
 import ast
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from typing import override
 
 from eryx.marker_analysis.marker_index import (FUNCTIONS, MARKER, identity_definition,
                                                import_base, local_names)
+from eryx.marker_analysis.marker_analysis import MarkerAnalysis
 from eryx.marker_binding_analysis.marker_binding_analysis import MarkerBindingAnalysis
-
-if TYPE_CHECKING:
-    from eryx.marker_analysis.marker_index import MarkerIndex
 
 
 class MarkerBindings(MarkerBindingAnalysis):
     """Resolve decorator expressions at declaration time, respecting lexical binding."""
 
-    def __init__(self, index: MarkerIndex, path: str):
+    def __init__(self, index: MarkerAnalysis, path: str,
+                 exports: Mapping[str, str | None], modules: frozenset[str]):
         super().__init__()
-        self.index = index
+        self.index: MarkerAnalysis = index
         self.path = path
+        self.exports = exports
+        self.modules = modules
         self.scopes: list[dict[str, str | None]] = [{}]
-        self.class_scope = False
+        self.class_scope: bool = False
 
+    @override
+    def module_bindings(self) -> dict[str, str | None]:
+        """Return module-level bindings without exposing mutable lexical scopes."""
+        return self.scopes[0].copy()
+
+    @override
     def value(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
             for scope in reversed(self.scopes):
@@ -35,12 +43,20 @@ class MarkerBindings(MarkerBindingAnalysis):
                 return self.imported(qualified)
         return None
 
+    @override
     def imported(self, qualified: str) -> str | None:
         for scope in reversed(self.scopes):
             if qualified in scope:
                 return scope[qualified]
-        return self.index.imported(qualified)
+        if qualified in self.exports:
+            return self.exports[qualified]
+        # An explicit external marker import follows the identity convention.
+        roots = {module.split(".")[0] for module in self.modules}
+        if qualified.split(".")[0] not in roots and qualified.endswith(".encapsulated_only"):
+            return MARKER
+        return qualified
 
+    @override
     def assign(self, target: ast.expr, value: str | None) -> None:
         if isinstance(target, ast.Name):
             self.scopes[-1][target.id] = value
@@ -54,6 +70,7 @@ class MarkerBindings(MarkerBindingAnalysis):
         elif isinstance(target, ast.Starred):
             self.assign(target.value, None)
 
+    @override
     def suite(self, body: list[ast.stmt], conditional: bool = False) -> None:
         for node in body:
             if isinstance(node, ast.Import):
@@ -66,7 +83,7 @@ class MarkerBindings(MarkerBindingAnalysis):
                         self.imported(f"{import_base(self.path, node)}.{alias.name}"))
             elif isinstance(node, FUNCTIONS + (ast.ClassDef,)):
                 for decorator in node.decorator_list:
-                    self.index.decorators[decorator] = self.value(decorator)
+                    self.index.record_decorator(decorator, self.value(decorator))
                 descriptor = next((self.value(dec) for dec in node.decorator_list
                                    if self.value(dec) in {"builtins.property", "functools.cached_property",
                                                          "builtins.property.setter", "builtins.property.deleter",
@@ -89,11 +106,11 @@ class MarkerBindings(MarkerBindingAnalysis):
                 if isinstance(node.value, ast.Call) and not conditional:
                     kind = self.value(node.value.func)
                     if kind in {"builtins.property", "functools.cached_property"}:
-                        self.index.descriptor_assignments[node] = kind
+                        self.index.record_descriptor(node, kind)
                 value = self.value(node.value) if node.value is not None and not conditional else None
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
-                    self.assign(target, self.index.descriptor_assignments.get(node, value))
+                    self.assign(target, self.index.descriptor_kind(node) or value)
             elif isinstance(node, (ast.AugAssign, ast.Delete)):
                 targets = node.targets if isinstance(node, ast.Delete) else [node.target]
                 for target in targets:

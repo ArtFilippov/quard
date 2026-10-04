@@ -108,6 +108,14 @@ class Contracts(ContractAnalysis):
         return self.paths[name]
 
     @override
+    def source_path(self, name: str) -> str | None:
+        return self.paths.get(name)
+
+    @override
+    def node_for(self, name: str | None) -> ast.ClassDef | None:
+        return self.nodes.get(name) if name is not None else None
+
+    @override
     def provenance(self, target: str) -> str:
         """Follow customer re-exports without loading or inspecting external modules."""
         seen: set[str] = set()

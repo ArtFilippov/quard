@@ -48,8 +48,9 @@ def _source_stub(index: Index, marks: Marks, emit: Emit) -> None:
             emit(owner, name, entries[0], f"{source}:{peer[0]['line']}")
 
 
-def _inherited_stub(restrictions: RestrictedTargets, index: Index, marks: Marks, emit: Emit) -> None:
-    for declaration in restrictions.class_declarations:
+def _inherited_stub(restrictions: RestrictedTargets, index: Index, marks: Marks,
+                    emit: Emit) -> None:
+    for declaration in restrictions.report_evidence()[1]:
         stub = cast(str, declaration["path"])
         if not stub.endswith(".pyi"):
             continue
@@ -60,7 +61,7 @@ def _inherited_stub(restrictions: RestrictedTargets, index: Index, marks: Marks,
         seen: set[str] = set()
         for base in (restrictions.mro(owner) or [])[1:]:
             inherited = [(name, path, entries) for (candidate, name, path), entries in index.items()
-                         if candidate == base and path == restrictions.contracts.paths.get(base)]
+                          if candidate == base and path == restrictions.contract_source_path(base)]
             for name, _, entries in inherited:
                 if name in seen:
                     continue
@@ -82,35 +83,37 @@ def _inherited_stub(restrictions: RestrictedTargets, index: Index, marks: Marks,
                          f"{source} ({owner}.{name})")
 
 
-def _ancestors(restrictions: RestrictedTargets, owner: str, node: ast.ClassDef, path: str) -> set[str]:
-    contracts = restrictions.contracts
+def _ancestors(restrictions: RestrictedTargets, owner: str,
+               node: ast.ClassDef, path: str) -> set[str]:
     visited: set[str] = set()
 
     def visit(name: str | None) -> None:
-        if name is None or name not in contracts.nodes or name in visited:
+        if name is None or restrictions.contract_node(name) is None or name in visited:
             return
         visited.add(name)
-        parent = contracts.nodes[name]
+        parent = restrictions.contract_node(name)
+        assert parent is not None
         for base in parent.bases:
-            visit(contracts.resolved(name, base))
+            visit(restrictions.resolved_base(name, base))
 
     for base in node.bases:
-        visit(contracts.resolved(owner, base, path))
-    return {name for name in visited if contracts.declaration(name)}
+        visit(restrictions.resolved_base(owner, base, path))
+    return {name for name in visited if restrictions.is_contract(name)}
 
 
 def _requirements(restrictions: RestrictedTargets, index: Index, marks: Marks,
                   members: Members, *, ancestors: set[str]) -> dict[str, list[tuple[bool, str]]]:
     required: dict[str, list[tuple[bool, str]]] = defaultdict(list)
     for contract in sorted(ancestors):
-        source = restrictions.contracts.paths[contract]
+        source = restrictions.contract_source_path(contract)
+        assert source is not None
         for name in sorted(members.get((contract, source), set())):
             required[name].append((_marked(index, marks, contract, name, path=source),
                                    f"{source}:{index[contract, name, source][0]['line']} "
                                    + f"({contract}.{name})"))
         if marks.get((contract, source), False):
             for base in restrictions.mro(contract) or []:
-                for name in sorted(members.get((base, restrictions.contracts.paths.get(base, "")),
+                for name in sorted(members.get((base, restrictions.contract_source_path(base) or ""),
                                                set()) - members.get((contract, source), set())):
                     required[name].append((True, f"{source} ({contract})"))
     return required
@@ -118,8 +121,7 @@ def _requirements(restrictions: RestrictedTargets, index: Index, marks: Marks,
 
 def _inherited(restrictions: RestrictedTargets, index: Index, marks: Marks,
                members: Members, *, emit: Emit) -> None:
-    contracts = restrictions.contracts
-    for owner, node, path in contracts.declarations:
+    for owner, node, path in restrictions.contract_declarations():
         for name, statuses in _requirements(
                 restrictions, index, marks, members,
                 ancestors=_ancestors(restrictions, owner, node, path)).items():
@@ -128,7 +130,7 @@ def _inherited(restrictions: RestrictedTargets, index: Index, marks: Marks,
                                    "column": node.col_offset + 1},
                      " and ".join(location for _, location in statuses))
                 continue
-            if (local := index.get((owner, name, path))) and not contracts.declaration(
+            if (local := index.get((owner, name, path))) and not restrictions.is_contract(
                     owner, source=(node, path)) and (
                     _marked(index, marks, owner, name, path=path) != statuses[0][0]):
                 emit(owner, name, local[0], statuses[0][1])
@@ -145,12 +147,13 @@ def agreement(restrictions: RestrictedTargets) -> list[Evidence]:
     """
     index: Index = defaultdict(list)
     members: Members = defaultdict(set)
-    for item in restrictions.declarations:
+    declarations, classes, _ = restrictions.report_evidence()
+    for item in declarations:
         owner, name, path = (cast(str, item[key]) for key in ("owner", "member", "path"))
         index[owner, name, path].append(item)
         members[owner, path].add(name)
     marks = {(str(item["owner"]), str(item["path"])): bool(item["marked"])
-             for item in restrictions.class_declarations}
+              for item in classes}
     results: list[Evidence] = []
     emitted: set[tuple[str, str, int]] = set()
 

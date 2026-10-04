@@ -29,10 +29,11 @@ def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], s
             error = "ENCAPSULATED_ONLY_PARSE_ERROR"
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc)})
-    restrictions = Restrictions(Ownership(trees))
+    ownership = Ownership(trees)
+    restrictions = Restrictions(ownership)
     diagnostics.extend(agreement(restrictions))
     for path, tree in trees.items():
-        visitor = Calls(restrictions, path)
+        visitor = Calls(restrictions, path, ownership)
         visitor.visit(tree)
         diagnostics.extend(visitor.results())
     return diagnostics, error, restrictions
@@ -50,11 +51,12 @@ def main() -> int:
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         error = "ENCAPSULATED_ONLY_EXECUTION_ERROR"
         diagnostics, restrictions = [{"rule": error, "message": str(exc)}], None
+    declarations, classes, effective_targets = (restrictions.report_evidence()
+                                                 if restrictions else ([], [], {}))
     print(json.dumps({"eryx_encapsulated_only_adapter": 1, "diagnostics": diagnostics,
-                      "execution_error": error,
-                      "declarations": restrictions.declarations if restrictions else [],
-                      "classes": restrictions.class_declarations if restrictions else [],
-                      "effective_targets": restrictions.effective_targets if restrictions else {}},
+                       "execution_error": error,
+                       "declarations": declarations, "classes": classes,
+                       "effective_targets": effective_targets},
                      ensure_ascii=False))
     return 2 if error else (1 if diagnostics else 0)
 

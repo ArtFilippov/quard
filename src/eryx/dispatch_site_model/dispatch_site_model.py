@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from typing import Protocol
 
 from eryx._instance_fields_worker import Binding
@@ -21,3 +22,6 @@ class DispatchSiteModel(Protocol):
             candidates (tuple[str, ...]): Possible dispatched methods.
         """
         super().__init__()
+
+    def forbidden_targets(self, permitted: Callable[[ast.expr], bool],
+                          intermediate: bool = False) -> tuple[tuple[str, int, int], ...]: ...

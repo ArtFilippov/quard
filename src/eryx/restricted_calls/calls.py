@@ -7,9 +7,10 @@ from typing import override
 from eryx.dispatch_site_model.dispatch_site import DispatchSite
 from eryx.field_access.accesses import Accesses
 from eryx.field_ownership.bindings import Binding, PROTOCOL_BUILTINS, assigned_names
+from eryx.field_ownership.ownership import Ownership
 from eryx.marker_analysis.marker_index import local_names
 from eryx.restricted_calls.restricted_calls import RestrictedCalls
-from eryx.restricted_targets.restricted_targets import RestrictedTargets
+from eryx.restricted_targets.restricted_targets import Parents, RestrictedTargets
 
 
 _BINARY = {
@@ -48,24 +49,24 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
     """Resolve explicit calls while keeping identity separate from known types."""
 
     def __init__(self, restrictions: RestrictedTargets, path: str,
-                 *, parents: dict[str, tuple[str | None, ...]] | None = None):
+                 ownership: Ownership,
+                 *, parents: Parents | None = None):
         super().__init__()
         self.restrictions = restrictions
-        self.resolver = Accesses(restrictions.ownership, path)
-        self.current_class: str | None = None
-        self.method_owner: str | None = None
-        self.prefix = self.resolver.module
-        self.receiver: str | None = None
-        self.receiver_valid = False
+        self.resolver = Accesses(ownership, path)
+        self._context: dict[str, str | None] = {
+            "current_class": None, "method_owner": None, "receiver": None}
+        self.prefix: str = self.resolver.module
+        self.receiver_valid: bool = False
         self.diagnostics: list[dict[str, object]] = []
         # Provenance is independent of the type bindings in Accesses: a peer and
         # the current instance can have the same type but different permissions.
         self.provenance: list[dict[str, frozenset[Binding]]] = [{}]
-        self._assigned_origin: frozenset[Binding] = frozenset()
+        self._assigned_origin: set[Binding] = set()
         self._operator_seen: set[tuple[int, int, str]] = set()
         self._operator_results: dict[int, frozenset[Binding]] = {}
         self._reassigned_builtins: set[str] = set()
-        self._ancestry_parents = parents
+        self._ancestry_parents: Parents | None = parents
 
     def _parent_map(self) -> dict[str, tuple[str | None, ...]]:
         """Return the ancestry map used when this visitor collects class bases."""
@@ -77,7 +78,8 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         return self.diagnostics
 
     def current(self, node: ast.expr) -> bool:
-        return self.origins(node) == frozenset({("current", self.method_owner)}) if self.method_owner else False
+        owner = self._context["method_owner"]
+        return self.origins(node) == frozenset({("current", owner)}) if owner else False
 
     def origins(self, node: ast.expr) -> frozenset[Binding]:
         if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare)):
@@ -109,12 +111,8 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
                     target = self.restrictions.target(owner, node.attr)
                     if target:
                         result.add(("method", target))
-                    declaring = self.restrictions.ownership.class_field_owner(owner, node.attr)
-                    if declaring:
-                        field = self.restrictions.instance_type(
-                            self.restrictions.field_types.get((declaring, node.attr)))
-                        if field:
-                            result.add(field)
+                    if field := self.restrictions.class_field_type(owner, node.attr):
+                        result.add(field)
             if not result:
                 binding = self.value(node)
                 if binding:
@@ -170,16 +168,16 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
     def super_owner(self, node: ast.expr) -> str | None:
         if not isinstance(node, ast.Call) or not self.resolver.builtin_call(node, "super"):
             return None
-        if node.keywords or self.method_owner is None:
+        owner = self._context["method_owner"]
+        if node.keywords or owner is None:
             return None
-        if not node.args and (self.receiver is None or not self.receiver_valid):
+        if not node.args and (self._context["receiver"] is None or not self.receiver_valid):
             return None
         if node.args and not (len(node.args) == 2
-                              and self.value(node.args[0]) == ("class", self.method_owner)
-                              and self.value(node.args[1]) == ("instance", self.method_owner)):
+                              and self.value(node.args[0]) == ("class", owner)
+                              and self.value(node.args[1]) == ("instance", owner)):
             return None
-        bases = self.restrictions.parents.get(self.method_owner, ())
-        return bases[0] if len(bases) == 1 and bases[0] in self.restrictions.ownership.stable else None
+        return self.restrictions.direct_parent(owner)
 
     def value(self, node: ast.expr) -> Binding | None:
         if isinstance(node, ast.Name) and node.id in PROTOCOL_BUILTINS | {
@@ -203,12 +201,9 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
             if owner and owner[0] == "instance":
                 return (self.restrictions.field_type(owner[1], node.attr)
                         or self.restrictions.return_type(owner[1], node.attr, property_only=True))
-            member = self.restrictions.ownership.member(owner, node.attr)
+            member = self.restrictions.member(owner, node.attr)
             if member is None and owner and owner[0] == "class":
-                declaring = self.restrictions.ownership.class_field_owner(owner[1], node.attr)
-                if declaring:
-                    return self.restrictions.instance_type(
-                        self.restrictions.field_types.get((declaring, node.attr)))
+                return self.restrictions.class_field_type(owner[1], node.attr)
             return member
         if isinstance(node, ast.Call):
             superclass = self.super_owner(node)
@@ -268,9 +263,7 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         if isinstance(node, ast.Attribute) and self.current(node.value):
             owner = self.value(node.value)
             if owner:
-                declaring = self.restrictions.ownership.field_owner(owner[1], node.attr)
-                return bool(declaring and node.attr in
-                            self.restrictions.ownership.instance_fields[declaring])
+                return self.restrictions.direct_field(owner[1], node.attr)
         return False
 
     def property_access(self, receiver: ast.expr, name: str, node: ast.expr,
@@ -477,13 +470,10 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         self.truth(node.test)
 
     def implicit_call(self, site: DispatchSite, *, intermediate: bool = False) -> None:
-        if (not intermediate and self.allowed(site.receiver)
-                and all(kind != "class" for kind, _ in site.origins)):
-            return
-        for target in site.candidates:
+        for target, line, column in site.forbidden_targets(self.allowed, intermediate):
             self.diagnostics.append({
                 "rule": "ENCAPSULATED_ONLY_CALL", "path": self.resolver.path,
-                "line": site.operation.lineno, "column": site.operation.col_offset + 1,
+                "line": line, "column": column,
                 "symbol": target,
                 "message": f"Implicit call to restricted method {target} requires the current instance, "
                            + "one direct stored instance field, or proven current-instance super."})
@@ -597,7 +587,8 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
             target (ast.expr): Assignment target.
             results (frozenset[Binding]): Statically established possible types.
         """
-        self._assigned_origin = results or frozenset({("unknown", "")})
+        self._assigned_origin.clear()
+        self._assigned_origin.update(results or frozenset({("unknown", "")}))
         self.assign(target, next(iter(results)) if len(results) == 1 else None)
 
     def comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp
@@ -750,37 +741,38 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
                 binding = self.value(base)
                 resolved = binding[1] if binding and binding[0] == "class" else None
                 if resolved is None:
-                    fallback = self.restrictions.contracts.resolved(owner, base, self.resolver.path)
+                    fallback = self.restrictions.resolved_base(owner, base, self.resolver.path)
                     # A local class spelling is not proof if the binding was
                     # replaced or its decorator changed the runtime class.
-                    if fallback not in self.restrictions.contracts.nodes:
+                    if self.restrictions.contract_node(fallback) is None:
                         resolved = fallback
                 bases.append(resolved)
             self._ancestry_parents[owner] = tuple(bases)
         for expression in (*node.decorator_list, *node.bases, *(item.value for item in node.keywords)):
             self.visit(expression)
-        previous = (self.current_class, self.method_owner, self.prefix,
-                     self.receiver, self.receiver_valid)
-        previous_provenance = self.provenance
+        previous = self._context.copy()
+        previous_prefix, previous_valid = self.prefix, self.receiver_valid
+        previous_provenance = self.provenance.copy()
         # A nested class cannot borrow its enclosing method's identity.
-        self.provenance = [{name: origins for name, origins in scope.items()
-                            if all(kind != "current" for kind, _ in origins)}
-                           for scope in previous_provenance]
+        self.provenance[:] = [{name: origins for name, origins in scope.items()
+                               if all(kind != "current" for kind, _ in origins)}
+                              for scope in previous_provenance]
         qualified = f"{self.prefix}.{node.name}"
-        self.current_class, self.receiver, self.receiver_valid = qualified, None, False
-        self.method_owner, self.prefix = None, qualified
-        self.resolver.scopes[-1][node.name] = (("class", qualified) if qualified in
-                                             self.restrictions.ownership.stable else None)
+        self._context.update(current_class=qualified, receiver=None, method_owner=None)
+        self.receiver_valid = False
+        self.prefix = qualified
+        self.resolver.scopes[-1][node.name] = (("class", qualified) if
+                                             self.restrictions.known_class(qualified) else None)
         self.resolver.scopes.append({})
         self.provenance.append({})
         for statement in node.body:
             self.visit(statement)
         _ = self.resolver.scopes.pop()
-        self.provenance = previous_provenance
-        (self.current_class, self.method_owner, self.prefix,
-         self.receiver, self.receiver_valid) = previous
-        self.provenance[-1][node.name] = (frozenset({("class", qualified)}) if qualified in
-                                          self.restrictions.ownership.stable else
+        self.provenance[:] = previous_provenance
+        self._context.update(previous)
+        self.prefix, self.receiver_valid = previous_prefix, previous_valid
+        self.provenance[-1][node.name] = (frozenset({("class", qualified)}) if
+                                          self.restrictions.known_class(qualified) else
                                           frozenset({("unknown", "")}))
 
     @override
@@ -792,42 +784,37 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
                            *annotations, node.returns):
             if expression is not None:
                 self.visit(expression)
-        owner = self.current_class
-        previous = (self.current_class, self.method_owner, self.prefix,
-                     self.receiver, self.receiver_valid)
-        prior_provenance = self.provenance
+        owner = self._context["current_class"]
+        previous = self._context.copy()
+        previous_prefix, previous_valid = self.prefix, self.receiver_valid
+        prior_provenance = self.provenance.copy()
         locals_: dict[str, Binding | None] = dict.fromkeys(local_names(node))
         args = node.args.posonlyargs + node.args.args
         for arg in (*args, *node.args.kwonlyargs):
             locals_[arg.arg] = self.resolver.annotation(arg.annotation, owner)
         instance = owner is not None and bool(args) and all(
-            self.restrictions.ownership.markers.is_identity(dec)
-            or self.restrictions.ownership.markers.symbol(dec) in {
-                "abc.abstractmethod", "typing.override", "typing_extensions.override",
-                "builtins.property", "builtins.property.setter", "builtins.property.deleter",
-                "builtins.property.getter", "functools.cached_property"}
-            for dec in node.decorator_list)
-        self.receiver = args[0].arg if instance else None
+            self.restrictions.decorator_is_instance(dec) for dec in node.decorator_list)
+        self._context["receiver"] = args[0].arg if instance else None
         self.receiver_valid = instance
         if instance and owner is not None:
             locals_[args[0].arg] = ("instance", owner)
         class_namespace = self.resolver.scopes.pop() if owner else None
         self.resolver.scopes.append(locals_)
-        self.provenance = [*prior_provenance, {name: frozenset() for name in locals_}]
+        self.provenance[:] = [*prior_provenance, {name: frozenset() for name in locals_}]
         if instance and owner is not None:
             self.provenance[-1][args[0].arg] = frozenset({("current", owner)})
         # Nested functions retain proven enclosing identity through lexical names.
-        self.current_class = None
-        self.method_owner = owner if instance else previous[1]
+        self._context["current_class"] = None
+        self._context["method_owner"] = owner if instance else previous["method_owner"]
         self.prefix = f"{self.prefix}.{node.name}"
         for statement in node.body:
             self.visit(statement)
         _ = self.resolver.scopes.pop()
-        self.provenance = prior_provenance
+        self.provenance[:] = prior_provenance
         if class_namespace is not None:
             self.resolver.scopes.append(class_namespace)
-        (self.current_class, self.method_owner, self.prefix,
-         self.receiver, self.receiver_valid) = previous
+        self._context.update(previous)
+        self.prefix, self.receiver_valid = previous_prefix, previous_valid
         self.resolver.scopes[-1][node.name] = None
         self.provenance[-1][node.name] = frozenset({("unknown", "")})
 
@@ -838,11 +825,11 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
     def assign(self, target: ast.expr, binding: Binding | None) -> None:
         if (isinstance(target, ast.Attribute) and self.value(target.value) == ("builtins", "builtins")):
             self._reassigned_builtins.add(target.attr)
-        if isinstance(target, ast.Name) and target.id == self.receiver:
+        if isinstance(target, ast.Name) and target.id == self._context["receiver"]:
             self.receiver_valid = False
         self.resolver.assign(target, binding)
         if isinstance(target, ast.Name):
-            self.provenance[-1][target.id] = self._assigned_origin
+            self.provenance[-1][target.id] = frozenset(self._assigned_origin)
         elif isinstance(target, (ast.Tuple, ast.List)):
             for item in target.elts:
                 self.assign(item, None)
@@ -853,7 +840,8 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         origins = self.origins(node.value)
         for target in node.targets:
             self.visit(target)
-            self._assigned_origin = origins
+            self._assigned_origin.clear()
+            self._assigned_origin.update(origins)
             self.assign(target, self.value(node.value))
 
     @override
@@ -863,7 +851,9 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         self.visit(node.target)
         binding = self.resolver.annotation(node.annotation)
         inferred = self.value(node.value) if node.value is not None else None
-        self._assigned_origin = self.origins(node.value) if node.value is not None else frozenset()
+        self._assigned_origin.clear()
+        if node.value is not None:
+            self._assigned_origin.update(self.origins(node.value))
         self.assign(node.target, binding if inferred is None or inferred == binding else None)
 
     @override
@@ -877,20 +867,21 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         if names:
             self.binary_dispatch(node, node.target, node.value, names[0], names[1], names[2])
         self.generic_visit(node)
-        self._assigned_origin = frozenset()
+        self._assigned_origin.clear()
         self.assign(node.target, None)
 
     @override
     def visit_Delete(self, node: ast.Delete) -> None:
         for target in node.targets:
             self.visit(target)
-            self._assigned_origin = frozenset()
+            self._assigned_origin.clear()
             self.assign(target, None)
 
     @override
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         self.visit(node.value)
-        self._assigned_origin = self.origins(node.value)
+        self._assigned_origin.clear()
+        self._assigned_origin.update(self.origins(node.value))
         self.assign(node.target, self.value(node.value))
 
     @override
@@ -907,18 +898,18 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         outcomes: list[tuple[list[dict[str, Binding | None]], list[dict[str, frozenset[Binding]]], bool]] = []
         for branch in paths:
             self.resolver.scopes = [scope.copy() for scope in before]
-            self.provenance = [scope.copy() for scope in origins_before]
+            self.provenance[:] = [scope.copy() for scope in origins_before]
             if invalid and branch is not paths[0]:
                 for name in invalid:
                     self.resolver.scopes[-1][name] = None
                     self.provenance[-1][name] = frozenset({("unknown", "")})
-            self.receiver_valid = valid and not (invalid and self.receiver in invalid)
+            self.receiver_valid = valid and not (invalid and self._context["receiver"] in invalid)
             for statement in branch:
                 self.visit(statement)
             outcomes.append(([scope.copy() for scope in self.resolver.scopes],
                              [scope.copy() for scope in self.provenance], self.receiver_valid))
         self.resolver.scopes = before
-        self.provenance = origins_before
+        self.provenance[:] = origins_before
         self.receiver_valid = all(outcome[2] for outcome in outcomes)
         for index, scope in enumerate(origins_before):
             names = {name for outcome in outcomes for name in outcome[1][index]}
@@ -952,9 +943,9 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
         for statement in statements:
             self.visit(statement)
         after = self.resolver.scopes
-        origins_after = self.provenance
+        origins_after = [scope.copy() for scope in self.provenance]
         self.resolver.scopes = before
-        self.provenance = origins_before
+        self.provenance[:] = origins_before
         self.receiver_valid = valid and self.receiver_valid
         for scope, updated in zip(origins_before, origins_after):
             for name in scope.keys() | updated.keys():
@@ -1016,7 +1007,8 @@ class Calls(ast.NodeVisitor, RestrictedCalls):
             captured.update(part.rest for part in ast.walk(case.pattern)
                             if isinstance(part, ast.MatchMapping) and part.rest)
             for name in captured:
-                self._assigned_origin = frozenset({("unknown", "")})
+                self._assigned_origin.clear()
+                self._assigned_origin.add(("unknown", ""))
                 self.assign(ast.Name(id=name, ctx=ast.Store()), None)
             if case.guard:
                 self.visit(case.guard)

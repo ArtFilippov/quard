@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import override
 
 from eryx.marker_analysis.marker_analysis import MarkerAnalysis
 
@@ -90,20 +91,35 @@ class MarkerIndex(MarkerAnalysis):
             self.decorators.clear()
             self.descriptor_assignments.clear()
             for path, tree in trees.items():
-                bindings = MarkerBindings(self, path)
+                bindings = MarkerBindings(self, path, self.exports, frozenset(self.modules))
                 bindings.suite(tree.body)
-                for name, value in bindings.scopes[0].items():
+                for name, value in bindings.module_bindings().items():
                     if "." not in name:
                         self.exports[f"{module_name(path)}.{name}"] = value
             if self.exports == previous:
                 break
 
+    @override
     def is_identity(self, node: ast.expr) -> bool:
         return self.decorators.get(node) == MARKER
 
+    @override
     def symbol(self, node: ast.expr) -> str | None:
         return self.decorators.get(node)
 
+    @override
+    def record_decorator(self, node: ast.expr, symbol: str | None) -> None:
+        self.decorators[node] = symbol
+
+    @override
+    def record_descriptor(self, node: ast.stmt, kind: str) -> None:
+        self.descriptor_assignments[node] = kind
+
+    @override
+    def descriptor_kind(self, node: ast.stmt) -> str | None:
+        return self.descriptor_assignments.get(node)
+
+    @override
     def property_declarations(self, node: ast.ClassDef) -> dict[str, list[tuple[ast.stmt, str, str]]]:
         """Return proven descriptor declarations without collapsing accessors."""
         result: dict[str, list[tuple[ast.stmt, str, str]]] = {}
@@ -124,12 +140,3 @@ class MarkerIndex(MarkerAnalysis):
                     if isinstance(target, ast.Name):
                         result.setdefault(target.id, []).append((item, "constructor", kind))
         return result
-
-    def imported(self, qualified: str) -> str | None:
-        if qualified in self.exports:
-            return self.exports[qualified]
-        # External marker definitions are opaque; the explicit import is the convention.
-        roots = {module.split(".")[0] for module in self.modules}
-        if qualified.split(".")[0] not in roots and qualified.endswith(".encapsulated_only"):
-            return MARKER
-        return qualified

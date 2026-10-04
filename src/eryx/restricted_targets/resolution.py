@@ -5,11 +5,11 @@ import ast
 from typing import override
 
 from eryx.contract_analysis.contracts import Contracts
-from eryx.field_ownership.bindings import Binding, assigned_names, module_name
+from eryx.field_ownership.bindings import Binding, assigned_names
 from eryx.field_ownership.ownership import Ownership
-from eryx.field_type_analysis.type_evidence import UNKNOWN, field_evidence
+from eryx.field_type_analysis.type_evidence import UNKNOWN
 from eryx.marker_analysis.marker_index import FUNCTIONS, local_names
-from eryx.restricted_targets.restricted_targets import RestrictedTargets
+from eryx.restricted_targets.restricted_targets import Parents, RestrictedTargets
 
 
 class Restrictions(RestrictedTargets):
@@ -26,29 +26,29 @@ class Restrictions(RestrictedTargets):
         self.properties: dict[tuple[str, str], list[dict[str, object]]] = {}
         self.own_properties: dict[str, set[str]] = {}
         self.class_marked: set[str] = set()
-        self.contracts = Contracts(ownership.trees)
-        self.parents: dict[str, tuple[str | None, ...]] = {}
+        self.contracts = Contracts(dict(ownership.source_trees()))
+        self.parents: Parents = {}
         self.field_types: dict[tuple[str, str], str] = {}
         primary = {owner: next((path for path, _, _, _ in sources if path.endswith(".py")),
-                               sources[0][0]) for owner, sources in ownership.field_sources.items()}
+                               sources[0][0]) for owner, sources in ownership.source_fields()}
         # Resolve base expressions in their declaration-time lexical scope, after
         # the cross-module export index reaches its fixed point.
         from eryx.ancestry_traversal.ancestry import Ancestry
-        for path, tree in ownership.trees.items():
-            ancestry = Ancestry(self, path)
+        for path, tree in ownership.source_trees():
+            ancestry = Ancestry(self, path, ownership)
             ancestry.visit(tree)
             for owner, bases in ancestry.parents.items():
                 if owner not in self.parents or path.endswith(".py"):
                     self.parents[owner] = bases
-        for owner, sources in ownership.field_sources.items():
+        for owner, sources in ownership.source_fields():
             for path, node, _, _ in sources:
-                class_marker = any(ownership.markers.is_identity(dec) for dec in node.decorator_list)
+                class_marker = any(ownership.marker_identity(dec) for dec in node.decorator_list)
                 self.class_declarations.append({"owner": owner, "path": path,
                                                 "line": node.lineno, "column": node.col_offset + 1,
                                                 "marked": class_marker})
                 if class_marker:
                     self.class_marked.add(owner)
-                descriptors = ownership.markers.property_declarations(node)
+                descriptors = ownership.descriptors(node)
                 functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
                 referenced_by: dict[ast.stmt, list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]] = {}
                 for statement in node.body:
@@ -66,7 +66,7 @@ class Restrictions(RestrictedTargets):
                         functions[statement.name] = statement
                 for name, entries in descriptors.items():
                     for member, role, kind in entries:
-                        marked = (any(ownership.markers.is_identity(dec) for dec in member.decorator_list)
+                        marked = (any(ownership.marker_identity(dec) for dec in member.decorator_list)
                                   if isinstance(member, FUNCTIONS) else False)
                         evidence: dict[str, object] = {"owner": owner, "member": name, "path": path,
                             "line": member.lineno, "column": member.col_offset + 1,
@@ -76,7 +76,7 @@ class Restrictions(RestrictedTargets):
                         for accessor, function in referenced_by.get(member, ()):
                             accessor_evidence: dict[str, object] = {"owner": owner, "member": name, "path": path,
                                 "line": function.lineno, "column": function.col_offset + 1,
-                                "marked": any(ownership.markers.is_identity(dec)
+                                "marked": any(ownership.marker_identity(dec)
                                               for dec in function.decorator_list),
                                 "kind": kind, "accessor": accessor}
                             self.declarations.append(accessor_evidence)
@@ -86,8 +86,8 @@ class Restrictions(RestrictedTargets):
                 for member in node.body:
                     if isinstance(member, FUNCTIONS):
                         decorators = member.decorator_list
-                        symbols = {ownership.markers.symbol(dec) for dec in decorators
-                                   if not ownership.markers.is_identity(dec)}
+                        symbols = {ownership.marker_symbol(dec) for dec in decorators
+                                   if not ownership.marker_identity(dec)}
                         if not symbols <= {"abc.abstractmethod", "typing.override",
                                             "typing.overload", "typing_extensions.override",
                                             "typing_extensions.overload"}:
@@ -96,32 +96,87 @@ class Restrictions(RestrictedTargets):
                             continue
                         evidence: dict[str, object] = {"owner": owner, "member": member.name, "path": path,
                                     "line": member.lineno, "column": member.col_offset + 1,
-                                    "marked": any(ownership.markers.is_identity(dec) for dec in decorators)}
+                                    "marked": any(ownership.marker_identity(dec) for dec in decorators)}
                         self.declarations.append(evidence)
                         self.methods.setdefault((owner, member.name), []).append(evidence)
                         if path == primary[owner]:
                             self.own_methods.setdefault(owner, set()).add(member.name)
-            fields = ownership.fields[owner]
+            fields = ownership.field_names(owner)
             for field in fields:
                 annotations: list[str] = []
                 writes: list[str] = []
                 for path, node, _, _ in sources:
-                    proof = field_evidence(node, {field}, module_name(path),
-                                           ownership.type_evidence, ownership.trees[path])[field]
+                    proof = ownership.type_proof(node, field, path)
                     annotations.extend(proof[0])
                     writes.extend(proof[1])
-                    if field in ownership.class_fields[owner]:
+                    if field in ownership.class_field_names(owner):
                         for item in node.body:
                             targets = item.targets if isinstance(item, ast.Assign) else (
                                 [item.target] if isinstance(item, ast.AnnAssign) else [])
                             if any(isinstance(target, ast.Name) and target.id == field
                                    for target in targets):
                                 if isinstance(item, (ast.Assign, ast.AnnAssign)) and item.value:
-                                    writes.append(ownership.type_evidence.expression(
-                                        item.value, module_name(path)))
+                                    writes.append(ownership.expression_type(item.value, path))
                 proof = annotations or writes
                 if proof and UNKNOWN not in proof and len(set(proof)) == 1:
                     self.field_types[owner, field] = proof[0]
+
+    @override
+    def known_class(self, owner: str) -> bool:
+        return owner in self.ownership.stable
+
+    @override
+    def class_field_type(self, owner: str, name: str) -> Binding | None:
+        declaring = self.ownership.class_field_owner(owner, name)
+        return (self.instance_type(self.field_types.get((declaring, name)))
+                if declaring is not None else None)
+
+    @override
+    def member(self, binding: Binding | None, name: str) -> Binding | None:
+        return self.ownership.member(binding, name)
+
+    @override
+    def direct_field(self, owner: str, name: str) -> bool:
+        declaring = self.ownership.field_owner(owner, name)
+        return declaring is not None and self.ownership.is_instance_field(declaring, name)
+
+    @override
+    def direct_parent(self, owner: str) -> str | None:
+        bases = self.parents.get(owner, ())
+        return bases[0] if len(bases) == 1 and bases[0] in self.ownership.stable else None
+
+    @override
+    def resolved_base(self, owner: str, base: ast.expr, path: str | None = None) -> str | None:
+        return self.contracts.resolved(owner, base, path)
+
+    @override
+    def contract_node(self, name: str | None) -> ast.ClassDef | None:
+        return self.contracts.node_for(name)
+
+    @override
+    def contract_source_path(self, name: str) -> str | None:
+        return self.contracts.source_path(name)
+
+    @override
+    def contract_declarations(self) -> tuple[tuple[str, ast.ClassDef, str], ...]:
+        return self.contracts.all_declarations()
+
+    @override
+    def is_contract(self, name: str, source: tuple[ast.ClassDef, str] | None = None) -> bool:
+        return self.contracts.declaration(name, source=source)
+
+    @override
+    def decorator_is_instance(self, node: ast.expr) -> bool:
+        return self.ownership.marker_identity(node) or self.ownership.marker_symbol(node) in {
+            "abc.abstractmethod", "typing.override", "typing_extensions.override",
+            "builtins.property", "builtins.property.setter", "builtins.property.deleter",
+            "builtins.property.getter", "functools.cached_property"}
+
+    @override
+    def report_evidence(self) -> tuple[list[dict[str, object]], list[dict[str, object]],
+                                       dict[str, str]]:
+        return (self.declarations.copy(), self.class_declarations.copy(),
+                self.effective_targets.copy())
 
     @override
     def instance_type(self, qualified: str | None) -> Binding | None:

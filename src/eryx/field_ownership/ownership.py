@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
+from typing import override
 
 from eryx._field_initialization import missing_fields, rebound_fields, written_fields
 from eryx.field_operation_model.field_operation import field_operations
@@ -153,6 +155,49 @@ class Ownership(FieldOwnership):
                         self.exports[f"{visitor.module}.{name}"] = binding
             if self.exports == previous:
                 break
+
+    @override
+    def source_trees(self) -> Iterator[tuple[str, ast.Module]]:
+        return iter(self.trees.items())
+
+    @override
+    def source_fields(self) -> Iterator[tuple[str, list[tuple[str, ast.ClassDef,
+                      dict[str, ast.expr], set[str]]]]]:
+        return ((owner, sources.copy()) for owner, sources in self.field_sources.items())
+
+    @override
+    def marker_identity(self, node: ast.expr) -> bool:
+        return self.markers.is_identity(node)
+
+    @override
+    def marker_symbol(self, node: ast.expr) -> str | None:
+        return self.markers.symbol(node)
+
+    @override
+    def descriptors(self, node: ast.ClassDef) -> dict[str, list[tuple[ast.stmt, str, str]]]:
+        return self.markers.property_declarations(node)
+
+    @override
+    def field_names(self, owner: str) -> set[str]:
+        return self.fields[owner].copy()
+
+    @override
+    def class_field_names(self, owner: str) -> set[str]:
+        return self.class_fields[owner].copy()
+
+    @override
+    def is_instance_field(self, owner: str, name: str) -> bool:
+        return name in self.instance_fields[owner]
+
+    @override
+    def type_proof(self, node: ast.ClassDef, field: str, path: str
+                   ) -> tuple[list[str], list[str]]:
+        return field_evidence(node, {field}, module_name(path),
+                              self.type_evidence, self.trees[path])[field]
+
+    @override
+    def expression_type(self, node: ast.expr, path: str) -> str:
+        return self.type_evidence.expression(node, module_name(path))
 
     def declaration_diagnostics(self) -> list[dict[str, object]]:
         """Return prohibited class declarations found in discovered files."""
