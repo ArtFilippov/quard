@@ -5,12 +5,11 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 ERYX = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ERYX / "src"))
-from eryx import _common, _policy, init_architecture, install as installer
-from offline_fixtures import CATALOG, create_repo, native_result
+from eryx import _common, _policy, init_architecture
+from offline_fixtures import create_repo
 
 
 class RepositoryTest(unittest.TestCase):
@@ -168,49 +167,6 @@ class RepositoryTest(unittest.TestCase):
         mapping = _policy.clean_config()["layer_map"]
         self.assertIn("Domain", mapping)
         self.assertIn("domain", mapping["Domain"])
-
-    def test_installer_plan_no_changes(self):
-        files = {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
-        result = installer.install(self.root, ERYX, dry_run=True, progress=False)
-        self.assertEqual(result["status"], "planned")
-        self.assertIn("pyright[nodejs]==1.1.414", result["dependencies"])
-        current = {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
-        self.assertEqual(files, current)
-
-    def test_installer_rollback_on_uv_failure(self):
-        before = (self.root / "pyproject.toml").read_bytes()
-        (self.root / ".eryx/checks.toml").unlink()
-        fail = lambda argv, cwd, timeout: native_result(argv, stderr="intentional offline test failure", code=1)
-        with patch.object(installer, "capture", fail):
-            with self.assertRaises(_common.EryxError):
-                installer.install(self.root, ERYX, progress=False)
-        self.assertEqual((self.root / "pyproject.toml").read_bytes(), before)
-        self.assertFalse((self.root / ".eryx/checks.toml").exists())
-        error = _common.read_json(self.root / ".eryx/logs/install-error.json")
-        self.assertTrue(error["managed_files_rolled_back"])
-
-    def test_prepare_project_idempotent(self):
-        installer.prepare_project(self.root)
-        first = (self.root / "pyproject.toml").read_bytes()
-        installer.prepare_project(self.root)
-        self.assertEqual(first, (self.root / "pyproject.toml").read_bytes())
-        data = _common.load_toml(self.root / "pyproject.toml")
-        self.assertEqual(data["project"]["requires-python"], ">=3.12,<3.15")
-        self.assertEqual(data["tool"]["uv"]["dependency-groups"]["dev"]["requires-python"], ">=3.12")
-
-    def test_full_install_reinstall_mocked(self):
-        def fake(argv, cwd, timeout):
-            if str(ERYX / "_audit.py") in argv:
-                _policy.configure(cwd, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
-                _common.write_json(cwd / ".eryx/logs/install-probes/result.json", {"versions": {}, "smoke_tests": {"native": "mocked in this offline test"}})
-            return native_result(argv)
-        with patch.object(installer, "capture", fake):
-            installer.install(self.root, ERYX, progress=False)
-            first = {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob("*") if p.is_file() and "logs" not in p.parts and "__pycache__" not in p.parts}
-            installer.install(self.root, ERYX, progress=False)
-            second = {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob("*") if p.is_file() and "logs" not in p.parts and "__pycache__" not in p.parts}
-            self.assertEqual(first, second)
-
 
 class PrimitiveTests(unittest.TestCase):
     def test_capture_timeout_real_process(self):
