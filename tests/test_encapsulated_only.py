@@ -54,6 +54,41 @@ class EncapsulatedOnlyTests(unittest.TestCase):
         self.assertTrue(all(d["rule"] == "ENCAPSULATED_ONLY_CALL" and
                             not d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_migrated_traversal_retains_class_and_member_evidence(self):
+        self.put("src/example.py", '''\
+def encapsulated_only(value): return value
+@encapsulated_only
+class Base:
+    def run(self): pass
+    @property
+    def secret(self): return 1
+    @encapsulated_only
+    def __len__(self): return 1
+class Child(Base): pass
+class Client:
+    def check(self, peer: Child):
+        peer.run()
+        peer.secret
+        len(peer)
+''')
+        result, raw, _ = self.run_worker(selected=[])
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
+                         ("violations", 1, None))
+        self.assertEqual([(d["rule"], d["line"], d["column"], d["symbol"])
+                          for d in result["diagnostics"]], [
+            ("ENCAPSULATED_ONLY_CALL", 12, 9, "example.Base.run"),
+            ("ENCAPSULATED_ONLY_PROPERTY", 13, 9, "example.Base.secret"),
+            ("ENCAPSULATED_ONLY_CALL", 14, 9, "example.Base.__len__")])
+        self.assertTrue(all(not d["is_infrastructure_error"] for d in result["diagnostics"]))
+        self.assertIn({"owner": "example.Base", "path": "src/example.py", "line": 3,
+                       "column": 1, "marked": True}, raw["classes"])
+        self.assertTrue(any(d["member"] == "secret" and d["accessor"] == "getter"
+                            for d in raw["declarations"]))
+        self.assertEqual(raw["effective_targets"], {
+            "example.Base.run": "example.Base",
+            "example.Base.secret": "example.Base",
+            "example.Base.__len__": "example.Base.__len__"})
+
     def test_builtin_protocol_helpers_match_direct_receivers_and_shadowing(self):
         self.put("src/example.py", '''\
 import builtins as native

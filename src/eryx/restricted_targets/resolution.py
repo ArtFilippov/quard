@@ -33,7 +33,7 @@ class Restrictions(RestrictedTargets):
                                sources[0][0]) for owner, sources in ownership.field_sources.items()}
         # Resolve base expressions in their declaration-time lexical scope, after
         # the cross-module export index reaches its fixed point.
-        from eryx._restricted_calls import Ancestry
+        from eryx.restricted_calls.ancestry import Ancestry
         for path, tree in ownership.trees.items():
             ancestry = Ancestry(self, path)
             ancestry.visit(tree)
