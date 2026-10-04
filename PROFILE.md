@@ -19,6 +19,9 @@ their native configs; there is no hash-based anti-edit system or hidden baseline
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
+* **Constructor purity**: the independent `CONSTRUCTOR_PURITY` rule checks eager
+  constructor syntax in discovered production and test `.py` files, including
+  nested classes. It is unaffected by `--lcom_files`; stubs have no checked body.
 * **Non-instance methods**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
   on consumer-owned classes, independently of the native analyzers and LCOM4.
@@ -354,6 +357,41 @@ This does not claim universal runtime coverage. Source read/parse errors, execut
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
 valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain
 their diagnostics. Ordinary reports, manifests and logs stay in the chosen consumer.
+
+## Constructor purity
+
+The `constructor-purity` job examines every directly declared `__init__` body in
+discovered production and test `.py` files, including nested classes. Excluded
+directories and stub-only files have no checked bodies. The receiver is the first
+mandatory positional instance argument, whatever its name; its aliases do not
+qualify. Local names and direct receiver attributes are the only permitted
+assignment targets, including for annotations, augmented, chained, starred and
+unpacked assignments. Rebinding the receiver is prohibited. Match captures may
+not rebind it either.
+
+Constructors may have an initial docstring, assignments, if/elif/else, match/case,
+raise, assert and pass. Constants, names, attributes, subscriptions/slices,
+containers/unpacking, operators, comparisons, conditional expressions and f-strings
+recursively check their eager children. Lambdas and nested function definitions
+defer their bodies; their defaults, annotations and decorator expressions are
+checked at definition time. Explicit returns, loops, comprehensions, try/with,
+imports, deletion, global/nonlocal declarations, nested classes, assignment
+expressions, await, yield and otherwise unknown eager AST forms are rejected.
+Standalone calls are allowed only for `super().__init__(...)`,
+`super(CurrentClass, receiver).__init__(...)`, and a declared direct base's
+`Base.__init__(receiver, ...)`. Shadowed `super` and incorrectly bound receivers
+do not qualify.
+
+Calls inside permitted expressions must directly name a uniquely declared
+module-level project class, an unshadowed builtin type, or one of the unshadowed
+validation builtins `isinstance`, `issubclass`, `hasattr` and `callable`.
+Their eager arguments are checked recursively. Other calls, including project
+helpers, unknown names and bare `super()`, are rejected. This initial syntactic
+slice does not prove aliases, external call provenance or decorator application;
+it makes no claim about arbitrary runtime side effects of permitted operations.
+Each forbidden node has its own one-based location and `CONSTRUCTOR_PURITY`
+diagnostic. Parse/read/worker failures are infrastructure errors (exit 2),
+while violations exit 1; raw output is archived and other jobs remain independent.
 
 ## Basic LCOM4
 

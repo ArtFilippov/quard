@@ -293,6 +293,43 @@ def parse_class_contracts(text: str, root: Path) -> tuple[list[dict[str, Any]], 
     return items, error
 
 
+def parse_constructor_purity(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    obj = find_json(text, "eryx_constructor_purity_adapter")
+    if (type(obj["eryx_constructor_purity_adapter"]) is not int
+            or obj["eryx_constructor_purity_adapter"] != 1
+            or not isinstance(obj.get("diagnostics"), list)
+            or "execution_error" not in obj):
+        raise ValueError("Unsupported constructor purity adapter report schema")
+    error = obj["execution_error"]
+    if error not in {None, "CONSTRUCTOR_PURITY_PARSE_ERROR", "CONSTRUCTOR_PURITY_EXECUTION_ERROR"}:
+        raise ValueError("Unknown constructor purity execution error")
+    items = []
+    for entry in obj["diagnostics"]:
+        if not isinstance(entry, dict) or entry.get("rule") not in {
+                "CONSTRUCTOR_PURITY", "CONSTRUCTOR_PURITY_PARSE_ERROR",
+                "CONSTRUCTOR_PURITY_EXECUTION_ERROR"}:
+            raise ValueError("Malformed constructor purity diagnostic")
+        rule = entry["rule"]
+        if (not isinstance(entry.get("message"), str)
+                or entry.get("path") is not None and not isinstance(entry["path"], str)
+                or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
+                or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)):
+            raise ValueError("Malformed constructor purity diagnostic location")
+        if rule == "CONSTRUCTOR_PURITY" and (
+                not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
+                or type(entry.get("line")) is not int or type(entry.get("column")) is not int
+                or entry["line"] < 1 or entry["column"] < 1):
+            raise ValueError("Missing constructor purity location")
+        items.append(diagnostic("constructor-purity", rule, entry["message"],
+                                path=relative_path(entry.get("path"), root), line=entry.get("line"),
+                                column=entry.get("column"), symbol=entry.get("symbol"),
+                                is_infrastructure_error=rule != "CONSTRUCTOR_PURITY"))
+    if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
+            error and not any(item["rule"] == error for item in items)):
+        raise ValueError("Constructor purity error/diagnostic mismatch")
+    return items, error
+
+
 def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None) -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
@@ -339,6 +376,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             expected = 2 if parse_error else (1 if items else 0)
             if result.get("exit_code") != expected:
                 error = error or "CLASS_CONTRACTS_EXECUTION_ERROR"
+        elif tool == "constructor-purity":
+            items, parse_error = parse_constructor_purity(result.get("stdout", ""), root)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "CONSTRUCTOR_PURITY_EXECUTION_ERROR"
         elif tool == "encapsulated-only":
             items, parse_error = parse_encapsulated_only(result.get("stdout", ""), diagnostic)
             error = error or parse_error
