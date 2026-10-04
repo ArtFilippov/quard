@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import difflib
 import json
-import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -20,6 +18,8 @@ ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 sys.path.insert(0, str(ERYX / "tests"))
 
+from installation_fixture_utils import fake_uv, run_command
+from offline_fixtures import create_repo, managed_bytes, native_result
 from eryx import install as entry
 from eryx import _policy
 from eryx._audit import smoke_tests, tool_binary
@@ -27,33 +27,6 @@ from eryx._common import (EryxError, load_toml, read_json, repo_lock, safe_targe
                           write_json)
 from eryx.installation.installation import Installation
 from eryx.installation.transactional_installation import TransactionalInstallation
-from offline_fixtures import CATALOG, create_repo, managed_bytes, native_result
-
-
-def fake_uv(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
-    if str(ERYX / "_audit.py") in argv:
-        _policy.configure(cwd, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
-        write_json(cwd / ".eryx/logs/install-probes/result.json",
-                   {"versions": {}, "smoke_tests": {"native": "mocked"}})
-    return native_result(argv)
-
-
-def run_command(argv: list[str], cwd: Path, expected: int = 0) -> str:
-    env = os.environ.copy()
-    env.pop("VIRTUAL_ENV", None)
-    env.pop("UV_PROJECT_ENVIRONMENT", None)
-    env.update({"PYTHONDONTWRITEBYTECODE": "1", "UV_NO_PROGRESS": "1",
-                "GIT_AUTHOR_NAME": "Eryx test", "GIT_AUTHOR_EMAIL": "test@example.org",
-                "GIT_COMMITTER_NAME": "Eryx test", "GIT_COMMITTER_EMAIL": "test@example.org"})
-    result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True,
-                            timeout=240, check=False)
-    if result.returncode != expected:
-        root = Path(argv[argv.index("--project") + 1]) if "--project" in argv else cwd
-        details = "\n".join(f"{path.relative_to(root)}:\n{path.read_text()[-8000:]}"
-                            for path in (root / ".eryx/logs").rglob("*.log"))
-        raise AssertionError(
-            f"{argv}\nexit={result.returncode}\n{result.stdout}\n{result.stderr}\n{details}")
-    return result.stdout
 
 
 class TestTransactionalInstallation(unittest.TestCase):

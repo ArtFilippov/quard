@@ -8,6 +8,7 @@ import sys
 from tempfile import TemporaryDirectory
 from typing import override
 import unittest
+from unittest.mock import patch
 
 from jsonschema import validate
 
@@ -27,6 +28,44 @@ from offline_fixtures import create_repo, fake_tools, native_result
 
 
 class TestFreeFunctionPlacement(unittest.TestCase):
+    def test_migrated_test_support_passes_full_discovered_test_scope(self):
+        files = discover_files(ERYX, read_scope(ERYX))
+        paths = files["tests"]
+        for path in ("tests/test_core_analyzers.py", "tests/discovery_utils.py",
+                     "tests/offline_fixtures.py", "tests/offline_fixture_utils.py",
+                     "tests/eryx/installation/installation_fixture_utils.py",
+                     "tests/eryx/afk_issue_runner/issue_fixture_utils.py",
+                     "tests/eryx/free_function_placement/test_free_function_placement.py"):
+            self.assertIn(path, paths)
+        self.assertEqual(placement(ERYX, paths), ([], None))
+        manifest = self.root / "test-scope.json"
+        manifest.write_text(json.dumps(paths), encoding="utf-8")
+        result = capture([sys.executable, str(ERYX / "_free_function_placement_worker.py"),
+                          "--manifest", str(manifest)], ERYX, timeout=30)
+        self.assertEqual((result["exit_code"], result["error"]), (0, None))
+        self.assertEqual(json.loads(result["stdout"])["diagnostics"], [])
+
+    def test_discovery_hook_and_fixture_imports_survive_migration(self):
+        import discovery_utils
+        import offline_fixture_utils
+        import offline_fixtures
+        import test_core_analyzers
+
+        self.assertIs(test_core_analyzers.load_tests, discovery_utils.load_tests)
+        for name in offline_fixtures.__all__:
+            self.assertIs(getattr(offline_fixtures, name),
+                          getattr(offline_fixture_utils, name))
+        loader = unittest.TestLoader()
+        with patch.object(loader, "discover", return_value=unittest.TestSuite()) as discover:
+            suite = discovery_utils.load_tests(loader, unittest.TestSuite(), None)
+        self.assertEqual(suite.countTestCases(), 0)
+        groups = {Path(call.args[0]).name for call in discover.call_args_list}
+        self.assertTrue({"installation", "afk_issue_runner", "free_function_placement"}
+                        <= groups)
+        self.assertTrue(all(call.kwargs["pattern"] == "test*.py" and
+                            call.kwargs["top_level_dir"] == call.args[0]
+                            for call in discover.call_args_list))
+
     def test_shared_runtime_and_policy_compatibility_and_placement(self):
         paths = [f"src/eryx/{name}.py" for name in
                  ("_common", "runtime_error", "runtime_utils", "_policy", "policy_utils",

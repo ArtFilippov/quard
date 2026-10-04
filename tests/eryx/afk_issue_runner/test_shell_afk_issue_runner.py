@@ -13,6 +13,7 @@ import unittest
 ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 
+from issue_fixture_utils import issue
 from eryx.afk_issue_runner.shell_afk_issue_runner import ShellAFKIssueRunner
 
 
@@ -125,13 +126,6 @@ for event in [
 ]:
     print(json.dumps({"sessionID": session, **event}), flush=True)
 '''
-
-
-def issue(number: int, *, state: str = "open", assignees: list[dict[str, str]] | None = None,
-          body: str = "", blocked: int = 0) -> dict[str, object]:
-    return {"number": number, "title": f"Issue {number}", "state": state,
-            "labels": ["ready-for-agent"], "assignees": assignees or [],
-            "body": body, "issue_dependencies_summary": {"blocked_by": blocked}}
 
 
 class TestShellAFKIssueRunner(unittest.TestCase):
