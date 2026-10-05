@@ -130,15 +130,29 @@ class Probe:
         if version["exit_code"] != 0 or version["stdout"].strip() != f"jscpd {required}":
             raise EryxError("JSCPD_VERSION_MISMATCH", "jscpd executable version does not match its installed package.")
         clone_json = fixture / "jscpd-report.json"
-        result = probe([tool_binary("jscpd"), "--config", str(fixture / "jscpd-config.json"),
-                        "--no-gitignore", "--absolute", "--kind", "exact", "--mode", "strict",
-                        "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
-                        "--reporters", "json",
-                        "--output", str(fixture), "--exit-code", "1", *clone_paths],
-                       fixture, "jscpd-smoke", log_root)
+        command = [tool_binary("jscpd"), "--config", str(fixture / "jscpd-config.json"),
+                   "--no-gitignore", "--absolute", "--kind", "exact", "--mode", "strict",
+                   "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
+                   "--reporters", "json", "--output", str(fixture), "--exit-code", "1",
+                   *clone_paths]
+        result = probe(command, fixture, "jscpd-smoke", log_root)
         normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
-        if normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2:
+        if (normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2
+                or {d["rule"] for d in normalized["diagnostics"]} != {"EXACT_CLONE"}):
             raise EryxError("JSCPD_SMOKE_FAILED", "jscpd did not detect both exact-clone fragments. See install-probes.")
+        (fixture / clone_paths[1]).write_text(clone_text.replace("value", "number")
+                                              .replace("first", "initial")
+                                              .replace("second", "next_value")
+                                              .replace("third", "intermediate")
+                                              .replace("fourth", "final_value"), encoding="utf-8")
+        command[command.index("--kind") + 1] = "renamed"
+        command[command.index("--mode"):command.index("--mode")] = [
+            "--ignore-identifiers", "--ignore-literals"]
+        result = probe(command, fixture, "jscpd-renamed-smoke", log_root)
+        normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
+        if (normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2
+                or {d["rule"] for d in normalized["diagnostics"]} != {"RENAMED_CLONE"}):
+            raise EryxError("JSCPD_SMOKE_FAILED", "jscpd did not detect both renamed-clone fragments. See install-probes.")
         modules = [{"path": path, "depends_on": []} for path in ("eryxprobe", "eryxprobe.first", "eryxprobe.second")]
         tach = {"source_roots": ["src"], "root_module": "forbid", "exact": True,
                 "respect_gitignore": False, "ignore_type_checking_imports": False, "modules": modules}
@@ -154,7 +168,7 @@ class Probe:
     return {"pylint_plugin_load": "passed", "pylint_config_and_fixture": "passed",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
-            "jscpd_exact_clone": "detected"}
+            "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected"}
 
 
 def audit(root: Path) -> dict[str, Any]:

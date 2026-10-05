@@ -117,12 +117,15 @@ Check supports `--serial`, `--timeout 900` (per analyzer) and
 `--max-diagnostics 50` (human output only). All jobs complete independently, with
 up to four concurrent analyzers. Pylint runs production and test profiles separately,
 with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing.
-The pinned `jscpd` binary checks exact Python clones across discovered `src/` and
-`tests/` `.py` files, including cross-profile matches; `.pyi` stubs are not a
-supported jscpd Python extension. The native minimum is five lines and one token
-in strict mode. It runs on the full scope even with `--lcom_files ""`.
-Every clone produces a positioned diagnostic for each fragment. Native JSON and
-raw streams are saved with the report; an empty or incomplete scan is an error.
+The pinned `jscpd` binary checks Type 1 (`exact`) and Type 2 (`renamed`) Python clones
+in independent native jobs over the same discovered `src/` and `tests/` `.py` files,
+including cross-profile matches. `.pyi` stubs are not a supported jscpd Python
+extension. Type 2 matches normalize
+identifiers and string/numeric literals. The native minimum is five lines and one
+token in strict mode. It runs on the full scope even with `--lcom_files ""`.
+Every clone produces a kind-specific positioned diagnostic for each fragment.
+Each job saves its native JSON and raw streams with the report; an empty or
+incomplete scan is an error.
 LCOM4 runs as an independent job over discovered production and test `.py` classes;
 see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
 The non-instance-method rule independently checks discovered `.py` and `.pyi` files

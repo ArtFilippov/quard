@@ -22,7 +22,7 @@ from eryx._common import capture, project_dir, read_json
 from eryx.check import display
 from eryx.check_runner.check_runner import CheckRunner
 from eryx.check_runner.native_check_runner import NativeCheckRunner
-from eryx.check_runner.runner_utils import installed_versions
+from eryx.check_runner.runner_utils import binary, installed_versions
 from eryx.report_utils import normalize
 from offline_fixtures import create_repo, fake_tools
 from offline_fixture_utils import native_result
@@ -53,8 +53,8 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools()
         report = self.run_report(fake)
         self.assertEqual((report["status"], report["exit_code"]), ("passed", 0))
-        self.assertEqual(len(seen), 16)
-        self.assertEqual(len({job["name"] for job in report["tools"]}), 17)
+        self.assertEqual(len(seen), 17)
+        self.assertEqual(len({job["name"] for job in report["tools"]}), 18)
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "constructor-purity")
                          ["status"], "skipped")
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")
@@ -73,7 +73,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         report = self.run_report(
             fake, "tests/test_value.py src/demo/domain/api.py tests/test_value.py")
         coverage = report["coverage"]["lcom4"]
-        self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 16))
+        self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 17))
         self.assertEqual(coverage["selected_files"],
                          ["tests/test_value.py", "src/demo/domain/api.py"])
         self.assertEqual(coverage["analyzed_files"], coverage["selected_files"])
@@ -95,7 +95,7 @@ class TestNativeCheckRunner(unittest.TestCase):
     def test_skipped_lcom4_still_runs_every_other_job(self):
         fake, seen = fake_tools()
         report = self.run_report(fake, "")
-        self.assertEqual((report["exit_code"], len(seen)), (0, 15))
+        self.assertEqual((report["exit_code"], len(seen)), (0, 16))
         self.assertNotIn("lcom4", seen)
         self.assertEqual(report["coverage"]["lcom4"], {"mode": "skipped", "requested": "",
                          "selected_files": [], "analyzed_files": []})
@@ -108,7 +108,7 @@ class TestNativeCheckRunner(unittest.TestCase):
     def test_malformed_lcom4_never_claims_analyzed_files(self):
         fake, seen = fake_tools({"lcom4": {"stdout": "not JSON", "code": 1}})
         report = self.run_report(fake, "src/demo/domain/api.py")
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 16))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 17))
         self.assertEqual(report["coverage"]["lcom4"]["selected_files"],
                          ["src/demo/domain/api.py"])
         self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"], [])
@@ -120,7 +120,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools({"pyright": {"stdout": "broken", "code": 2},
                                  "pydoclint": {"stderr": message, "code": 1}})
         report = self.run_report(fake, serial=True)
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 16))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 17))
         self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
         self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]))
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "pydoclint")
@@ -140,7 +140,7 @@ class TestNativeCheckRunner(unittest.TestCase):
 
         report = self.run_report(failing_capture, serial=True)
         self.assertEqual((report["status"], report["exit_code"], len(seen)),
-                         ("error", 2, 15))
+                         ("error", 2, 16))
         self.assertEqual({item["rule"] for item in report["diagnostics"]},
                          {"RUNNER_SUBPROCESS_ERROR", "DOC101"})
         jobs = {job["name"]: job for job in report["tools"]}
@@ -158,7 +158,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
                                  "code": 1}})
         report = self.run_report(fake)
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 16))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 17))
         self.assertEqual([(item["rule"], item["path"], item["line"])
                           for item in report["diagnostics"]],
                          [("DOC101", "src/demo/domain/api.py", 1)])
@@ -172,7 +172,7 @@ class TestNativeCheckRunner(unittest.TestCase):
                                          "pydoclint": {"stderr": message, "code": 1}})
                 report = self.run_report(fake, "")
                 self.assertEqual((report["status"], report["exit_code"], len(seen)),
-                                 ("error", 2, 15))
+                                 ("error", 2, 16))
                 self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
                 self.assertTrue(any(
                     item["is_infrastructure_error"] for item in report["diagnostics"]
@@ -189,12 +189,12 @@ class TestNativeCheckRunner(unittest.TestCase):
             with self.subTest(selection=selection):
                 fake, seen = fake_tools()
                 report = self.run_report(fake, selection)
-                self.assertEqual((report["exit_code"], len(seen)), (2, 15))
+                self.assertEqual((report["exit_code"], len(seen)), (2, 16))
                 self.assertIn("INVALID_LCOM_FILES", {d["rule"] for d in report["diagnostics"]})
         (self.root / ".eryx/architecture.ready.json").unlink()
         fake, seen = fake_tools()
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 14))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 15))
         self.assertEqual(sum(job["status"] == "blocked" for job in report["tools"]), 2)
 
     def test_native_worker_violation_and_pyright_survive_skipped_lcom4(self):
@@ -322,7 +322,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "max_module_lines = 400", "max_module_lines = 410"))
         fake, seen = fake_tools()
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 16))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 17))
         self.assertIn("READABILITY_NOT_APPLIED", {item["rule"] for item in report["diagnostics"]})
 
     def test_display_limit_does_not_truncate_archived_diagnostics(self):
@@ -335,6 +335,10 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertEqual(len(read_json(self.root / report["report_path"])["diagnostics"]), 1)
 
     def test_real_jscpd_clones_and_clean_consumer_with_lcom_skipped(self) -> None:
+        (self.root / "src/demo/domain/api.py").write_text(
+            "from typing import Protocol\n\nclass API(Protocol):\n"
+            "    def read(self) -> str: ...\n",
+            encoding="utf-8")
         first = self.root / "src/demo/first.py"
         second = self.root / "tests/second.py"
         text = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n" +
@@ -359,16 +363,146 @@ class TestNativeCheckRunner(unittest.TestCase):
         clones = [item for item in report["diagnostics"] if item["tool"] == "jscpd"]
         self.assertEqual({item["path"] for item in clones},
                          {"src/demo/first.py", "tests/second.py"})
+        self.assertEqual({item["rule"] for item in clones}, {"EXACT_CLONE"})
+        self.assertEqual({item["native_details"]["kind"] for item in clones}, {"exact"})
         self.assertTrue(all(item["line"] >= 1 and item["column"] >= 1 for item in clones))
         self.assertEqual(len(clones), 2)
         self.assertEqual(set(job["raw_output"]), {"native_json", "stdout", "stderr"})
         self.assertNotIn("src/demo/generated/hidden.py", job["argv"])
         self.assertNotIn("src/demo/companion.pyi", job["argv"])
+        self.assertEqual(job["argv"][job["argv"].index("--kind") + 1], "exact")
+        self.assertNotIn("--ignore-identifiers", job["argv"])
+        renamed = next(item for item in report["tools"] if item["name"] == "jscpd-renamed")
+        self.assertEqual(renamed["argv"][renamed["argv"].index("--kind") + 1], "renamed")
+        self.assertIn("--ignore-identifiers", renamed["argv"])
+        self.assertIn("--ignore-literals", renamed["argv"])
+        self.assertEqual(renamed["status"], "passed")
+        self.assertEqual(job["argv"][job["argv"].index("--exit-code") + 2:],
+                         renamed["argv"][renamed["argv"].index("--exit-code") + 2:])
         self.assertNotIn("lcom4", seen)
         second.unlink()
         clean = self.run_report(dispatch, "")
         self.assertEqual(next(item for item in clean["tools"] if item["name"] == "jscpd")[
             "status"], "passed")
+        self.assertEqual(next(item for item in clean["tools"] if item["name"] == "jscpd-renamed")[
+            "status"], "passed")
+
+    def test_real_jscpd_renamed_identifiers_and_literals_full_scope(self) -> None:
+        (self.root / "src/demo/domain/api.py").write_text(
+            "from typing import Protocol\n\nclass API(Protocol):\n"
+            "    def read(self) -> str: ...\n",
+            encoding="utf-8")
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        original = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n" +
+                    "    gamma = beta - 4\n    delta = gamma / 2\n    return delta + 10\n")
+        first.write_text(original, encoding="utf-8")
+        fake, _ = fake_tools()
+
+        def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if Path(argv[0]).name == "jscpd":
+                return capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        for variant in (original.replace("value", "amount").replace("alpha", "start")
+                        .replace("beta", "middle").replace("gamma", "later")
+                        .replace("delta", "answer").replace("calculate", "compute"),
+                        original.replace("17", "71").replace("3", "8")
+                        .replace("4", "6").replace("2", "9").replace("10", "22")):
+            with self.subTest(variant=variant):
+                second.write_text(variant, encoding="utf-8")
+                report = self.run_report(dispatch)
+                job = next(item for item in report["tools"] if item["name"] == "jscpd-renamed")
+                clones = [item for item in report["diagnostics"] if item["tool"] == "jscpd"]
+                self.assertEqual((report["exit_code"], job["status"], job["exit_code"]),
+                                 (1, "violations", 1), report["diagnostics"])
+                self.assertEqual({item["rule"] for item in clones}, {"RENAMED_CLONE"})
+                self.assertEqual({item["native_details"]["kind"] for item in clones},
+                                 {"renamed"})
+                self.assertEqual({item["path"] for item in clones},
+                                 {"src/demo/first.py", "tests/second.py"})
+                self.assertTrue(all(item["line"] >= 1 and item["column"] >= 1
+                                    and "clone of " in item["message"] for item in clones))
+                native = read_json(self.root / job["raw_output"]["native_json"])
+                self.assertTrue(any(entry["kind"] == "renamed" for entry in native["duplicates"]))
+                self.assertEqual(next(item for item in report["tools"] if item["name"] ==
+                                      "jscpd")["status"], "passed")
+
+    def test_renamed_native_failure_does_not_hide_exact_clones(self) -> None:
+        text = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n" +
+                "    gamma = beta - 4\n    delta = gamma / 2\n    return delta + 10\n")
+        (self.root / "src/demo/first.py").write_text(text, encoding="utf-8")
+        (self.root / "tests/second.py").write_text(text, encoding="utf-8")
+        fake, _ = fake_tools()
+
+        def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if Path(argv[0]).name == "jscpd":
+                result = capture(argv, cwd, timeout)
+                if argv[argv.index("--kind") + 1] == "renamed":
+                    (Path(argv[argv.index("--output") + 1]) / "jscpd-report.json").unlink()
+                return result
+            return fake(argv, cwd, timeout)
+
+        report = self.run_report(dispatch, "")
+        jobs = {job["name"]: job for job in report["tools"]}
+        self.assertEqual((report["exit_code"], jobs["jscpd"]["status"],
+                          jobs["jscpd-renamed"]["status"]), (2, "violations", "error"))
+        self.assertIn("EXACT_CLONE", {d["rule"] for d in report["diagnostics"]})
+        self.assertTrue(any(d.get("is_infrastructure_error") for d in report["diagnostics"]))
+
+    def test_combined_native_invocation_reports_both_kinds(self) -> None:
+        original = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n" +
+                    "    gamma = beta - 4\n    delta = gamma / 2\n    return delta + 10\n")
+        paths = ["src/demo/first.py", "tests/second.py", "tests/third.py"]
+        for path, text in zip(paths, (original, original,
+                                      original.replace("value", "amount").replace(
+                                          "alpha", "start").replace("beta", "middle")
+                                      .replace("gamma", "later").replace("delta", "answer")),
+                              strict=True):
+            (self.root / path).write_text(text, encoding="utf-8")
+        output = self.root / ".eryx/combined"
+        output.mkdir()
+        config = output / "config.json"
+        config.write_text("{}", encoding="utf-8")
+        command = [binary("jscpd"), "--config", str(config), "--no-gitignore",
+                   "--absolute", "--kind", "exact,renamed", "--ignore-identifiers",
+                   "--ignore-literals", "--mode", "strict", "--min-lines", "5",
+                   "--min-tokens", "1", "--fail-on-empty", "--reporters", "json",
+                   "--output", str(output), "--exit-code", "1", *paths]
+        result = normalize("jscpd", capture(command, self.root, 30), self.root,
+                           output / "jscpd-report.json", paths)
+        self.assertEqual(result["status"], "violations", result["diagnostics"])
+        self.assertEqual({d["rule"] for d in result["diagnostics"]},
+                         {"EXACT_CLONE", "RENAMED_CLONE"})
+        self.assertEqual({d["native_details"]["kind"] for d in result["diagnostics"]},
+                         {"exact", "renamed"})
+
+    def test_jscpd_parses_both_kinds_and_rejects_unknown_kind(self) -> None:
+        native = self.root / "jscpd-report.json"
+        fragment = {"name": str(self.root / "one.py"),
+                    "startLoc": {"line": 2, "column": 3}}
+        other = {"name": str(self.root / "two.py"),
+                 "startLoc": {"line": 5, "column": 7}}
+        clones = [{"kind": kind, "lines": 6, "tokens": 20,
+                   "firstFile": fragment, "secondFile": other}
+                  for kind in ("exact", "renamed")]
+        native.write_text(json.dumps({"duplicates": clones, "statistics": {
+            "total": {"sources": 2, "clones": 2}}}), encoding="utf-8")
+        result = normalize("jscpd", native_result([], code=1), self.root,
+                           native, ["one.py", "two.py"])
+        self.assertEqual(result["status"], "violations")
+        self.assertEqual({item["rule"] for item in result["diagnostics"]},
+                         {"EXACT_CLONE", "RENAMED_CLONE"})
+        self.assertEqual({(item["path"], item["line"], item["column"])
+                          for item in result["diagnostics"]},
+                         {("one.py", 2, 4), ("two.py", 5, 8)})
+        clones[1]["kind"] = "similar"
+        native.write_text(json.dumps({"duplicates": clones, "statistics": {
+            "total": {"sources": 2, "clones": 2}}}), encoding="utf-8")
+        invalid = normalize("jscpd", native_result([], code=1), self.root,
+                            native, ["one.py", "two.py"])
+        self.assertEqual(invalid["status"], "error")
+        self.assertTrue(any(d["is_infrastructure_error"] for d in invalid["diagnostics"]))
 
     def test_jscpd_missing_malformed_and_incomplete_output_fails_closed(self) -> None:
         native = self.root / "jscpd-report.json"

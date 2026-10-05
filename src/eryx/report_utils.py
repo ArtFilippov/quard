@@ -10,7 +10,7 @@ from typing import Any, cast
 from eryx.restricted_report_utils import parse_encapsulated_only
 
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
-JSCPD_EXACT_KIND = "exact"
+JSCPD_KINDS = {"exact": "Exact", "renamed": "Renamed"}
 
 
 def clean(text: str) -> str:
@@ -571,7 +571,8 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
     clone = cast("dict[str, object]", entry)
     lines = clone.get("lines")
     tokens = clone.get("tokens")
-    if (clone.get("kind") != JSCPD_EXACT_KIND or not _jscpd_integer(lines)
+    kind = clone.get("kind")
+    if (not isinstance(kind, str) or kind not in JSCPD_KINDS or not _jscpd_integer(lines)
             or not _jscpd_integer(tokens)):
         raise ValueError("Malformed jscpd clone")
     locations = (_jscpd_fragment(clone.get("firstFile"), root, allowed),
@@ -579,7 +580,8 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
     items: list[dict[str, Any]] = []
     for current, other in ((locations[0], locations[1]), (locations[1], locations[0])):
         items.append(diagnostic(
-            "jscpd", "EXACT_CLONE", f"Exact clone of {other[0]}:{other[1]} " +
+            "jscpd", f"{kind.upper()}_CLONE",
+            f"{JSCPD_KINDS[kind]} clone of {other[0]}:{other[1]}:{other[2]} " +
             f"({lines} lines, {tokens} tokens)", path=current[0],
             line=current[1], column=current[2], native_details=clone,
             rule_is_adapter_category=True,

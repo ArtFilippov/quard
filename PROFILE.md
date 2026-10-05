@@ -19,9 +19,13 @@ violations baseline.
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
-* **jscpd 5.4.0**: native exact Python clone detection in strict mode, blocking
-  each fragment. Scans discovered `.py` files across production and tests, not
-  `.pyi` stubs (unsupported by its Python format), irrespective of LCOM4 selection.
+* **jscpd 5.4.0**: independent native Type 1 (`exact`) and Type 2 (`renamed`)
+  Python clone jobs in strict mode, blocking each fragment. Keeping the exact
+  pass separate preserves Type 1 findings that native normalization can miss
+  on a combined scan. Type 2 normalizes identifiers and string/numeric literals.
+  Both jobs scan the same discovered `.py` files across production
+  and tests, not `.pyi` stubs (unsupported by its Python format), irrespective
+  of LCOM4 selection.
   The minimum clone length is five lines and one token. Empty or incomplete
   native scans, invalid JSON and execution failures are infrastructure errors;
   the native report and streams are archived.

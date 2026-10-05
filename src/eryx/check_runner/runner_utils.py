@@ -96,13 +96,20 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
     config = run_dir / "jscpd-config.json"
     write_json(config, {}, root)
-    output = run_dir / "raw" / "jscpd-report.json"
-    jobs.append({"name": "jscpd", "tool": "jscpd", "expected_paths": eligible,
-                 "json_file": output,
-                 "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore", "--absolute",
-                          "--kind", "exact", "--mode", "strict", "--min-lines", "5",
-                          "--min-tokens", "1", "--fail-on-empty", "--reporters", "json", "--output",
-                          str(run_dir / "raw"), "--exit-code", "1", *clone_files]})
+    # Normalization changes jscpd's exact-clone search on larger scopes. Keep the
+    # original native exact pass independent so it cannot lose Type 1 findings.
+    for name, kind, flags in (("jscpd", "exact", []),
+                              ("jscpd-renamed", "renamed",
+                               ["--ignore-identifiers", "--ignore-literals"])):
+        output_dir = run_dir / "raw" if name == "jscpd" else run_dir / "raw" / name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,
+                     "json_file": output_dir / "jscpd-report.json",
+                     "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore",
+                              "--absolute", "--kind", kind, *flags, "--mode", "strict",
+                              "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
+                              "--reporters", "json", "--output", str(output_dir), "--exit-code",
+                              "1", *clone_files]})
     manifest = run_dir / "method-decorators-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "method-decorators", "tool": "method-decorators", "argv": [sys.executable,
