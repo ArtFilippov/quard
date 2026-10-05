@@ -33,7 +33,7 @@ class ConfiguredConsumerPolicy(ConsumerPolicy):
         return _policy.discover_files(self._root, self.scope())
 
     @override
-    def constructor_purity(self) -> bool:
+    def checks(self) -> dict[str, bool]:
         return _policy.read_checks(self._root)
 
     @override

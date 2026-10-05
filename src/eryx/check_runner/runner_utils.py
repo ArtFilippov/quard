@@ -11,6 +11,7 @@ from typing import Any
 from eryx._common import EryxError, capture, read_json, tool_dir, write_json
 from eryx._reports import diagnostic
 from eryx.check_job.captured_check_job import CapturedCheckJob
+from eryx.check_selection_utils import CHECK_DEFAULTS
 
 
 def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str, Any]]]:
@@ -66,11 +67,23 @@ def select_lcom_files(files: dict[str, list[str]], requested: str | None) -> lis
 
 def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architecture_ready: bool,
               lcom_files: list[str] | None = None, constructor_purity: bool = False,
-              test_directory_names: list[str] | None = None) -> list[dict[str, Any]]:
+              test_directory_names: list[str] | None = None,
+              checks: dict[str, bool] | None = None) -> list[dict[str, Any]]:
     # Pylint opens --output before the runner writes captured stdout/stderr logs.
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     jobs: list[dict[str, Any]] = []
+    enabled = CHECK_DEFAULTS if checks is None else checks
+
+    def add_worker(key: str, name: str, scope: object) -> None:
+        if not enabled[key]:
+            return
+        manifest = run_dir / f"{name}-files.json"
+        write_json(manifest, scope, root)
+        jobs.append({"name": name, "tool": name, "argv": [sys.executable,
+                     str(tool_dir() / f"_{name.replace('-', '_')}_worker.py"),
+                     "--manifest", str(manifest)]})
+
     for profile in ("production", "tests"):
         python_files = [path for path in files[profile] if path.endswith(".py")]
         if not python_files:
@@ -85,10 +98,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                               "--output", str(output)], "json_file": output})
     source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files
     if lcom_files is None or source_files:
-        manifest = run_dir / "lcom4-files.json"
-        write_json(manifest, source_files, root)
-        jobs.append({"name": "lcom4", "tool": "lcom4", "argv": [sys.executable,
-                     str(tool_dir() / "_lcom4_worker.py"), "--manifest", str(manifest)]})
+        add_worker("lcom4", "lcom4", source_files)
     clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
                          if path.endswith(".py"))
     eligible = [path for path in clone_files if len((root / path).read_text(
@@ -111,45 +121,24 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                               "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
                               "--reporters", "json", "--output", str(output_dir), "--exit-code",
                               "1", *clone_files]})
-    manifest = run_dir / "method-decorators-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "method-decorators", "tool": "method-decorators", "argv": [sys.executable,
-                  str(tool_dir() / "_method_decorators_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "instance-fields-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "instance-fields", "tool": "instance-fields", "argv": [sys.executable,
-                  str(tool_dir() / "_instance_fields_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "class-contracts-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "class-contracts", "tool": "class-contracts", "argv": [sys.executable,
-                   str(tool_dir() / "_class_contracts_worker.py"), "--manifest", str(manifest)]})
+    full_scope = sorted(files["production"] + files["tests"])
+    for key, name in (("method_decorators", "method-decorators"),
+                      ("instance_fields", "instance-fields"),
+                      ("class_contracts", "class-contracts")):
+        add_worker(key, name, full_scope)
     if (root / ".eryx/architecture.generated.json").is_file():
         manifest = run_dir / "dependency-types-files.json"
         write_json(manifest, sorted(files["production"] + files["tests"]), root)
         jobs.append({"name": "dependency-types", "tool": "dependency-types", "argv": [sys.executable,
                      str(tool_dir() / "_dependency_types_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "contract-folders-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "contract-folders", "tool": "contract-folders", "argv": [sys.executable,
-                  str(tool_dir() / "_contract_folders_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "test-placement-files.json"
-    write_json(manifest, {"production": files["production"], "tests": files["tests"],
-                          "test_directory_names": test_directory_names or ["tests"]}, root)
-    jobs.append({"name": "test-placement", "tool": "test-placement", "argv": [sys.executable,
-                  str(tool_dir() / "_test_placement_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "outer-classes-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "outer-classes", "tool": "outer-classes", "argv": [sys.executable,
-                 str(tool_dir() / "_outer_classes_worker.py"), "--manifest", str(manifest)]})
-    manifest = run_dir / "free-function-placement-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "free-function-placement", "tool": "free-function-placement",
-                 "argv": [sys.executable, str(tool_dir() / "_free_function_placement_worker.py"),
-                          "--manifest", str(manifest)]})
-    manifest = run_dir / "encapsulated-only-files.json"
-    write_json(manifest, sorted(files["production"] + files["tests"]), root)
-    jobs.append({"name": "encapsulated-only", "tool": "encapsulated-only", "argv": [sys.executable,
-                  str(tool_dir() / "_encapsulated_only_worker.py"), "--manifest", str(manifest)]})
+    add_worker("contract_folders", "contract-folders", full_scope)
+    add_worker("test_placement", "test-placement", {
+        "production": files["production"], "tests": files["tests"],
+        "test_directory_names": test_directory_names or ["tests"]})
+    for key, name in (("outer_classes", "outer-classes"),
+                      ("free_function_placement", "free-function-placement"),
+                      ("encapsulated_only", "encapsulated-only")):
+        add_worker(key, name, full_scope)
     if constructor_purity:
         manifest = run_dir / "constructor-purity-files.json"
         write_json(manifest, sorted(path for profile in ("production", "tests")

@@ -2,6 +2,15 @@
 # The required Pylint profile always runs; checks below select optional independent jobs.
 [checks]
 constructor_purity = false
+lcom4 = true
+method_decorators = true
+instance_fields = true
+class_contracts = true
+contract_folders = true
+test_placement = true
+outer_classes = true
+free_function_placement = true
+encapsulated_only = true
 
 # Pylint's own metrics, not an AST-independent line count.
 [readability.production]

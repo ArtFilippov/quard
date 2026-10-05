@@ -14,6 +14,7 @@ from eryx._common import EryxError, load_toml
 from eryx import _policy
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx.consumer_policy.consumer_policy import ConsumerPolicy
+from eryx.check_selection_utils import OPTIONAL_JOBS
 from offline_fixtures import create_repo, managed_bytes
 
 
@@ -81,6 +82,23 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
                 with self.assertRaises(EryxError):
                     self.policy().apply()
                 self.assertEqual(managed_bytes(self.root), before)
+
+    def test_each_new_switch_requires_a_boolean_and_unknown_jobs_fail(self):
+        path = self.root / ".eryx/config.toml"
+        original = path.read_text(encoding="utf-8")
+        for key in OPTIONAL_JOBS:
+            with self.subTest(key=key):
+                path.write_text(original.replace(f"{key} = true", f"{key} = 1"),
+                                encoding="utf-8")
+                with self.assertRaises(EryxError) as failure:
+                    self.policy().checks()
+                self.assertEqual(failure.exception.code, "INVALID_CHECKS")
+        path.write_text(original.replace("lcom4 = true",
+                                         "lcom4 = true\ndependency_types = false"),
+                        encoding="utf-8")
+        with self.assertRaises(EryxError) as failure:
+            self.policy().checks()
+        self.assertEqual(failure.exception.code, "INVALID_CHECKS")
 
     def test_apply_preserves_other_settings(self):
         self.policy().apply()

@@ -22,6 +22,7 @@ from installation_fixture_utils import fake_uv, run_command
 from offline_fixtures import create_repo, managed_bytes, native_result
 from eryx import install as entry
 from eryx import _policy
+from eryx.check_selection_utils import OPTIONAL_JOBS
 from eryx._audit import smoke_tests, tool_binary
 from eryx._common import (EryxError, load_toml, read_json, repo_lock, safe_target,
                           write_json)
@@ -148,6 +149,37 @@ class TestTransactionalInstallation(unittest.TestCase):
             self.installation().install(root, ERYX, progress=False)
             self.assertEqual(managed_bytes(root), first)
 
+    def test_upgrade_adds_new_enabled_switches_without_overwriting_choices(self):
+        root = self.configured_project()
+        setting = root / ".eryx/config.toml"
+        text = setting.read_text(encoding="utf-8")
+        for key in OPTIONAL_JOBS:
+            text = text.replace(f"{key} = true\n", "")
+        text = text.replace("constructor_purity = false",
+                            "# Retain this choice\nconstructor_purity = true\n"
+                            + "instance_fields = false")
+        setting.write_text(text, encoding="utf-8")
+        with patch.object(entry, "capture", fake_uv):
+            self.installation().install(root, ERYX, progress=False)
+            updated = setting.read_text(encoding="utf-8")
+            self.installation().install(root, ERYX, progress=False)
+        self.assertEqual(setting.read_text(encoding="utf-8"), updated)
+        self.assertIn("# Retain this choice", updated)
+        self.assertTrue(_policy.read_checks(root)["constructor_purity"])
+        self.assertFalse(_policy.read_checks(root)["instance_fields"])
+        self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS
+                            if key != "instance_fields"))
+
+    def test_legacy_checks_migration_enables_new_switches(self):
+        root = self.configured_project()
+        (root / ".eryx/config.toml").unlink()
+        (root / ".eryx/checks.toml").write_text("constructor_purity = true\n")
+        with patch.object(entry, "capture", fake_uv):
+            self.installation().install(root, ERYX, progress=False)
+        self.assertTrue(_policy.read_checks(root)["constructor_purity"])
+        self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS))
+        self.assertFalse((root / ".eryx/checks.toml").exists())
+
     def test_migrate_legacy_policy_and_multi_package_architecture(self):
         root = self.configured_project()
         path = root / "pyproject.toml"
@@ -223,7 +255,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         with patch.object(entry, "capture", failing_audit), self.assertRaises(EryxError):
             self.installation().install(root, ERYX, progress=False)
         self.assertEqual(managed_bytes(root), original)
-        self.assertEqual(_policy.read_checks(root), True)
+        self.assertTrue(_policy.read_checks(root)["constructor_purity"])
         self.assertTrue(all((root / ".eryx" / name).exists() for name in
                             ("readability.toml", "scope.toml", "checks.toml")))
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)

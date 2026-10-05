@@ -68,7 +68,7 @@ class TransactionalInstallation(Installation):
             _ = select(root)
             from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
             policy = ConfiguredConsumerPolicy(root)
-            policy.constructor_purity()
+            _ = policy.checks()
             if not policy.files()["production"]:
                 raise EryxError("EMPTY_SOURCE_SCOPE", "No Python files under src/.")
             entry.prepare_project(root)

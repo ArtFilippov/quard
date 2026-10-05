@@ -16,7 +16,8 @@ from eryx._common import (EryxError, atomic_write, capture, emit_event, error_ex
                        load_toml, read_json, repo_lock, require_runtime, project_dir,
                        safe_target, tool_dir, write_json)
 from eryx.installation.transactional_installation import TransactionalInstallation
-from eryx.policy_utils import validate_checks, validate_limits, validate_scope, validate_settings
+from eryx.check_selection_utils import CHECK_DEFAULTS, validate_checks
+from eryx.policy_utils import validate_limits, validate_scope, validate_settings
 
 __all__ = ["capture", "require_runtime", "write_json"]
 
@@ -72,10 +73,17 @@ def migrate_settings(root: Path, tool: Path) -> None:
                 elif name == "scope.toml":
                     validate_scope(data)
                 else:
-                    validate_checks(data)
+                    _ = validate_checks(data)
                 document[section] = tomlkit.parse(old.read_text(encoding="utf-8"))
         atomic_write(destination, tomlkit.dumps(document), root)
     validate_settings(root)
+    # Upgrade old unified and legacy configurations without replacing explicit choices.
+    document = tomlkit.parse(destination.read_text(encoding="utf-8"))
+    existing = load_toml(destination)["checks"]
+    for key, default in CHECK_DEFAULTS.items():
+        if key not in existing:
+            document["checks"][key] = default
+    atomic_write(destination, tomlkit.dumps(document), root)
     for name in OLD_SETTINGS:
         old = root / ".eryx" / name
         safe_target(old, root)

@@ -21,6 +21,7 @@ from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPo
 from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from eryx.architecture_draft.generated_architecture_utils import generated, regenerate
 from eryx.check_runner.check_runner import CheckRunner
+from eryx.check_selection_utils import CHECK_DEFAULTS, OPTIONAL_JOBS
 from eryx.check_runner.runner_utils import (binary, execute_job, installed_versions,
                                              make_jobs, select_lcom_files)
 
@@ -86,24 +87,36 @@ class NativeCheckRunner(CheckRunner):
                 raise EryxError("EMPTY_SOURCE_SCOPE", "No Python source files found under src/. "
                                 + "Refusing an empty successful check.")
             try:
-                constructor_purity = policy.constructor_purity()
-                if not constructor_purity:
-                    results.append({"name": "constructor-purity", "tool": "constructor-purity",
-                                    "status": "skipped", "exit_code": None,
-                                    "duration_seconds": 0, "error": None, "raw_output": {}})
+                checks = policy.checks()
             except EryxError as exc:
-                constructor_purity = False
+                checks = CHECK_DEFAULTS.copy()
                 diagnostics.append(diagnostic("constructor-purity", exc.code, str(exc),
                                               is_infrastructure_error=True))
                 results.append({"name": "constructor-purity", "tool": "constructor-purity",
-                                "status": "error", "exit_code": None,
-                                "duration_seconds": 0, "error": exc.code, "raw_output": {}})
+                                 "status": "error", "exit_code": None,
+                                 "duration_seconds": 0, "error": exc.code, "raw_output": {}})
+            else:
+                if not checks["constructor_purity"]:
+                    results.append({"name": "constructor-purity", "tool": "constructor-purity",
+                                    "status": "skipped", "exit_code": None,
+                                    "duration_seconds": 0, "error": None, "raw_output": {}})
+            for key, name in OPTIONAL_JOBS.items():
+                if not checks[key] and (key != "lcom4" or lcom_files is None):
+                    results.append({"name": name, "tool": name, "status": "skipped",
+                                    "exit_code": None, "duration_seconds": 0,
+                                    "error": None, "raw_output": {}})
             try:
+                if not checks["lcom4"] and lcom_files is not None:
+                    raise EryxError("LCOM4_DISABLED",
+                                    "--lcom_files conflicts with [checks] lcom4 = false.")
                 selected = select_lcom_files(files, lcom_files)
                 lcom_coverage["mode"] = ("full" if lcom_files is None else
                                          "skipped" if lcom_files == "" else "selected")
+                if not checks["lcom4"]:
+                    selected = []
+                    lcom_coverage["mode"] = "skipped"
                 lcom_coverage["selected_files"] = selected
-                if lcom_files == "":
+                if lcom_files == "" and checks["lcom4"]:
                     results.append({"name": "lcom4", "tool": "lcom4", "status": "skipped",
                                     "exit_code": None, "duration_seconds": 0,
                                     "error": None, "raw_output": {}})
@@ -150,8 +163,9 @@ class NativeCheckRunner(CheckRunner):
                 diagnostics.append(diagnostic("system", code, message,
                                               is_infrastructure_error=True))
             jobs = make_jobs(root, run_dir, files, architecture_ready,
-                             None if lcom_files is None else selected, constructor_purity,
-                             policy.scope()["test_directory_names"])
+                             None if lcom_files is None and checks["lcom4"] else selected,
+                             checks["constructor_purity"],
+                             policy.scope()["test_directory_names"], checks)
             # Native analyzers complete independently. A failing job never cancels the others.
             job_results, job_diagnostics = self.run_jobs(
                 jobs, serial=serial, execute=partial(execute_job, root=root, run_dir=run_dir,

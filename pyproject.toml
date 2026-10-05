@@ -566,6 +566,10 @@ module = "eryx._restricted_agreement"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
+module = "eryx.check_selection_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
 module = "eryx.field_access.accesses"
 name = "Domain"
 

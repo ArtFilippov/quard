@@ -12,6 +12,7 @@ from typing import Any, cast
 import tomlkit
 
 from eryx._common import EryxError, atomic_write, load_toml, read_json, safe_target
+from eryx.check_selection_utils import validate_checks
 
 LIMIT_MAP = {
     "max_line_length": ("format", "max-line-length"),
@@ -146,18 +147,7 @@ def read_scope(root: Path) -> dict[str, list[str]]:
     return validate_scope(read_settings(root)["scope"])
 
 
-def validate_checks(data: object) -> bool:
-    if not isinstance(data, dict):
-        raise EryxError("INVALID_CHECKS",
-                        "[checks] expects only constructor_purity = true or false.")
-    data = cast(dict[str, Any], data)
-    if set(data) != {"constructor_purity"} or type(data["constructor_purity"]) is not bool:
-        raise EryxError("INVALID_CHECKS",
-                        "[checks] expects only constructor_purity = true or false.")
-    return data["constructor_purity"]
-
-
-def read_checks(root: Path) -> bool:
+def read_checks(root: Path) -> dict[str, bool]:
     return validate_checks(read_settings(root)["checks"])
 
 

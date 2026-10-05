@@ -99,13 +99,32 @@ uv run --locked --group dev python eryx/check.py --json
 uv run --locked --group dev python eryx/apply.py --json
 ```
 
-To opt in to constructor purity, set `constructor_purity = true` under `[checks]`
-in `.eryx/config.toml` and run the ordinary full check. New installations contain
-`constructor_purity = false`. Reinstallation retains an edited value. Invalid settings
-fail with exit 2. The report records the disabled job as `skipped`, with no exit
-code; no constructor manifest is created and its worker does not run.
+Select independent jobs under `[checks]` in `.eryx/config.toml`:
+
+| Setting (default) | Job |
+|---|---|
+| `lcom4 = true` | `lcom4` |
+| `method_decorators = true` | `method-decorators` (decorators and receivers) |
+| `instance_fields = true` | `instance-fields` |
+| `class_contracts = true` | `class-contracts` |
+| `contract_folders = true` | `contract-folders` |
+| `test_placement = true` | `test-placement` |
+| `outer_classes = true` | `outer-classes` |
+| `free_function_placement = true` | `free-function-placement` |
+| `encapsulated_only = true` | `encapsulated-only` |
+| `constructor_purity = false` | `constructor-purity` (opt in explicitly) |
+
+Pylint's production and test profiles remain required. The generated-architecture
+`dependency-types` job still runs only on generated projects; it has no selection
+switch. New switches default to `true` on fresh installations and when upgrading an
+older configuration; explicit values survive reinstallation. Missing new keys are
+treated as enabled until upgrade. All values must be booleans; unknown keys fail
+with exit 2. Disabled jobs appear as `skipped` with null exit codes and have no
+manifest or worker execution. Set `constructor_purity = true` to opt in to that job.
+If `lcom4 = false`, passing `--lcom_files` (even `""`) is a configuration error
+(exit 2); when enabled, full, selected and empty-string coverage work as below.
 Installation migrates existing `.eryx/readability.toml`, `.eryx/scope.toml` and
-`.eryx/checks.toml` into the single configuration (missing legacy checks default
+`.eryx/checks.toml` into the single configuration (constructor purity defaults
 to false), then removes those three files. It retains existing limits, test
 overrides and scope. Check/apply before migration fail with exit 2 and instruct
 you to reinstall. Installation rollback restores the original files on failure.

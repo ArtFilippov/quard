@@ -221,9 +221,11 @@ reports. `.pyi` files are checked by Pyright, both method rules, class contracts
 and outer classes; other tools use their native scope. `__init__.py` is included. Root scripts and
 notebooks are outside the consumer's source scope. In the Eryx checkout, its own
 `src/eryx/` and `tests/` are analyzed; its autonomous test suite verifies execution.
-`check.py --lcom_files` narrows only LCOM4 to explicitly selected, existing `.py`
-files in that scope; `--lcom_files ""` skips LCOM4. Without the option, full
-LCOM4 coverage is retained. Other analyzers always use their normal scopes.
+When `lcom4 = true`, `check.py --lcom_files` narrows only LCOM4 to explicitly
+selected, existing `.py` files in that scope; `--lcom_files ""` skips LCOM4.
+Without the option, full LCOM4 coverage is retained. When `lcom4 = false`,
+the job is skipped and any explicit `--lcom_files` is an error. Other enabled
+analyzers retain their normal scopes.
 
 The method job always scans discovered production and test `.py` and
 `.pyi` files, even with `--lcom_files ""` or a selected LCOM4 subset. It checks
@@ -457,8 +459,9 @@ their diagnostics. Ordinary reports, manifests and logs stay in the chosen consu
 
 Set `constructor_purity = true` under `[checks]` in the consumer's `.eryx/config.toml` to enable
 this independent job on ordinary full checks. The default is `false`, including
-when migrating an older installation with no `checks.toml`. The table accepts only this
-boolean key; malformed or unknown settings fail as configuration errors (exit 2).
+when migrating an older installation with no `checks.toml`. The other independent
+Eryx job switches are documented in [README.md](README.md#daily-commands) and default
+to `true` even on upgrades. Malformed or unknown settings fail as configuration errors (exit 2).
 Disabled checks appear as `skipped` with a null exit code in the report; no
 manifest or worker is started. Reinstallation preserves an existing opt-in.
 
