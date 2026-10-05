@@ -117,12 +117,16 @@ Check supports `--serial`, `--timeout 900` (per analyzer) and
 `--max-diagnostics 50` (human output only). All jobs complete independently, with
 up to four concurrent analyzers. Pylint runs production and test profiles separately,
 with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing.
-The pinned `jscpd` binary checks Type 1 (`exact`) and Type 2 (`renamed`) Python clones
-in independent native jobs over the same discovered `src/` and `tests/` `.py` files,
-including cross-profile matches. `.pyi` stubs are not a supported jscpd Python
-extension. Type 2 matches normalize
-identifiers and string/numeric literals. The native minimum is five lines and one
-token in strict mode. It runs on the full scope even with `--lcom_files ""`.
+The pinned `jscpd` binary checks Type 1 (`exact`), Type 2 (`renamed`) and
+gap-merged Type 3 (`similar`) Python clones in independent native jobs over the
+same discovered `src/` and `tests/` `.py` files, including cross-profile matches.
+`.pyi` stubs are not a supported jscpd Python extension. Type 2 matches normalize
+identifiers and string/numeric literals. The `similar` job merges detected fragments
+separated by at most **two unmatched lines in each file** (`--max-gap-lines 2`);
+it records native similarity and the `gap` method. Merging cannot detect copies
+whose individual matching parts fall below the native minimum of five lines and
+one token in strict mode. The JavaScript/TypeScript-only AST `--similarity` pass
+does not scan Python. The jobs run on the full scope even with `--lcom_files ""`.
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.

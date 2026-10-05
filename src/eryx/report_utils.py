@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, cast
@@ -10,7 +11,9 @@ from typing import Any, cast
 from eryx.restricted_report_utils import parse_encapsulated_only
 
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
-JSCPD_KINDS = {"exact": "Exact", "renamed": "Renamed"}
+JSCPD_SIMILAR = "similar"
+JSCPD_GAP_METHOD = "gap"
+JSCPD_KINDS = {"exact": "Exact", "renamed": "Renamed", JSCPD_SIMILAR: "Similar"}
 
 
 def clean(text: str) -> str:
@@ -565,16 +568,27 @@ def _jscpd_duplicates(payload: str, expected_count: int) -> list[object]:
     return duplicates
 
 
+def _jscpd_similarity(clone: dict[str, object]) -> str:
+    similarity = clone.get("similarity")
+    if not isinstance(similarity, (int, float)) or isinstance(similarity, bool):
+        raise ValueError("Malformed jscpd similarity or method")
+    if not math.isfinite(similarity) or not 0 < similarity <= 1:
+        raise ValueError("Malformed jscpd similarity or method")
+    if clone.get("method") != JSCPD_GAP_METHOD:
+        raise ValueError("Malformed jscpd similarity or method")
+    return f", similarity {similarity:g}, method {JSCPD_GAP_METHOD}"
+
+
 def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str, Any]]:
     if not isinstance(entry, dict):
         raise ValueError("Malformed jscpd clone")
     clone = cast("dict[str, object]", entry)
-    lines = clone.get("lines")
-    tokens = clone.get("tokens")
     kind = clone.get("kind")
-    if (not isinstance(kind, str) or kind not in JSCPD_KINDS or not _jscpd_integer(lines)
-            or not _jscpd_integer(tokens)):
+    if (not isinstance(kind, str) or kind not in JSCPD_KINDS
+            or not _jscpd_integer(clone.get("lines"))
+            or not _jscpd_integer(clone.get("tokens"))):
         raise ValueError("Malformed jscpd clone")
+    detail = _jscpd_similarity(clone) if kind == JSCPD_SIMILAR else ""
     locations = (_jscpd_fragment(clone.get("firstFile"), root, allowed),
                  _jscpd_fragment(clone.get("secondFile"), root, allowed))
     items: list[dict[str, Any]] = []
@@ -582,7 +596,7 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
         items.append(diagnostic(
             "jscpd", f"{kind.upper()}_CLONE",
             f"{JSCPD_KINDS[kind]} clone of {other[0]}:{other[1]}:{other[2]} " +
-            f"({lines} lines, {tokens} tokens)", path=current[0],
+            f"({clone['lines']} lines, {clone['tokens']} tokens{detail})", path=current[0],
             line=current[1], column=current[2], native_details=clone,
             rule_is_adapter_category=True,
             documentation_url="https://jscpd.dev/reporters/json"))

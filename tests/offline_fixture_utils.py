@@ -98,8 +98,9 @@ def fake_tools(failures: dict[str, dict[str, Any]] | None = None
             elif Path(argv[0]).name == "pydoclint":
                 name = "pydoclint"
             elif Path(argv[0]).name == "jscpd":
-                name = ("jscpd-renamed" if argv[argv.index("--kind") + 1] == "renamed"
-                        else "jscpd")
+                kind = argv[argv.index("--kind") + 1]
+                name = {"renamed": "jscpd-renamed", "similar": "jscpd-similar"}.get(
+                    kind, "jscpd")
                 output = Path(argv[argv.index("--output") + 1]) / "jscpd-report.json"
                 sources = sum(len((cwd / path).read_text(encoding="utf-8").splitlines()) >= 5
                               for path in argv[argv.index("--exit-code") + 2:])

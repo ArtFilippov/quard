@@ -100,7 +100,8 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     # original native exact pass independent so it cannot lose Type 1 findings.
     for name, kind, flags in (("jscpd", "exact", []),
                               ("jscpd-renamed", "renamed",
-                               ["--ignore-identifiers", "--ignore-literals"])):
+                               ["--ignore-identifiers", "--ignore-literals"]),
+                              ("jscpd-similar", "similar", ["--max-gap-lines", "2"])):
         output_dir = run_dir / "raw" if name == "jscpd" else run_dir / "raw" / name
         output_dir.mkdir(parents=True, exist_ok=True)
         jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,

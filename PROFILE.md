@@ -19,15 +19,21 @@ violations baseline.
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
-* **jscpd 5.4.0**: independent native Type 1 (`exact`) and Type 2 (`renamed`)
-  Python clone jobs in strict mode, blocking each fragment. Keeping the exact
-  pass separate preserves Type 1 findings that native normalization can miss
-  on a combined scan. Type 2 normalizes identifiers and string/numeric literals.
-  Both jobs scan the same discovered `.py` files across production
+* **jscpd 5.4.0**: independent native Type 1 (`exact`), Type 2 (`renamed`) and
+  gap-merged Type 3 (`similar`) Python clone jobs in strict mode, blocking each
+  fragment. Keeping the exact pass separate preserves Type 1 findings that
+  native normalization can miss on a combined scan. Type 2 normalizes identifiers
+  and string/numeric literals.
+  All jobs scan the same discovered `.py` files across production
   and tests, not `.pyi` stubs (unsupported by its Python format), irrespective
   of LCOM4 selection.
-  The minimum clone length is five lines and one token. Empty or incomplete
-  native scans, invalid JSON and execution failures are infrastructure errors;
+  The similar job uses `--max-gap-lines 2` to merge detected fragments with at
+  most two unmatched lines in each file; native JSON, diagnostics and raw streams
+  retain the `similar` kind, score, `gap` method and both positions. Fragments
+  individually shorter than the minimum of five lines and one token cannot be
+  discovered by gap merging. The AST `--similarity` pass covers JavaScript and
+  TypeScript functions, not Python. Empty or incomplete native scans, invalid
+  similarity/report data and execution failures are infrastructure errors;
   the native report and streams are archived.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
 * **Constructor purity (opt-in)**: the independent `CONSTRUCTOR_PURITY` rule checks
