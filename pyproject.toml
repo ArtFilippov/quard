@@ -155,7 +155,7 @@ auto-regenerate-baseline = false
 [tool.clean-arch]
 project_type = "generic"
 visibility_enforcement = true
-infrastructure_modules = ["eryx"]
+infrastructure_modules = []
 
 [tool.clean-arch.layer_map]
 Domain = ["domain"]
@@ -165,9 +165,541 @@ Interface = ["interfaces", "interface"]
 Bootstrap = ["bootstrap", "composition"]
 
 [[tool.clean-arch.layers]]
+module = "eryx.clean_architecture_layers.configured_clean_architecture_layers"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_compatibility.pinned_architecture_compatibility"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_compatibility.architecture_compatibility"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.clean_architecture_layers.clean_architecture_layers"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_draft.configured_architecture_draft"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_draft.generated_architecture_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.marker_binding_analysis.marker_binding_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.test_placement_analysis.test_placement_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_operation_model.field_operation_model"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_draft.contract_boundary_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.consumer_policy.configured_consumer_policy"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.constructor_analysis.constructor_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.constructor_analysis.constructor_checker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.afk_issue_runner.shell_afk_issue_runner"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_analysis.cohesion_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_references.cohesion_references"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.constructor_origins.constructor_origins"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.contract_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.dependency_type_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.dispatch_site_model.dispatch_site_model"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_type_analysis.field_type_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.installation.transactional_installation"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.marker_binding_analysis.marker_bindings"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.test_placement_analysis.placement_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.test_placement_analysis.test_placement"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.ancestry_traversal.ancestry_traversal"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_draft.architecture_draft"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_references.method_references"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_operation_model.field_operation"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_operation_model.operation_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.restricted_targets.restricted_targets"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_analysis.cohesion_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_analysis.declaration_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.contract_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.report_parsing.native_report_parser"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.constructor_analysis.checker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.dependency_types"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.folder_ownership"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.class_stores_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_type_analysis.evidence_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.outer_classes.parsed_outer_classes"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.afk_issue_runner.afk_issue_runner"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.constructor_origins.origins_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.dispatch_site_model.dispatch_site"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_type_analysis.type_evidence"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.restricted_calls.restricted_calls"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check_runner.native_check_runner"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.contract_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.test_placement"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.folder_analysis.folder_ownership"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._free_function_placement_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_analysis.scoring_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.consumer_policy.consumer_policy"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.field_ownership"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.ownership_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.folder_analysis.folder_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.marker_analysis.marker_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.method_analysis.method_analysis"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_analysis.declarations"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.encapsulated_only_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.bindings_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.free_function_placement_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
 module = "eryx.report_parsing.report_parsing"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
+module = "eryx.restricted_targets.resolution"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check_job.captured_check_job"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.class_stores"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.folder_analysis.folder_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.instance_fields_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.marker_analysis.marker_index"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.method_analysis.declarations"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.ancestry_traversal.ancestry"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.constructor_origins.origins"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.contract_analysis.contracts"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.outer_classes.outer_classes"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.restriction_agreement_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._constructor_purity_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_initialization_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.outer_classes_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._encapsulated_only_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._method_decorators_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.architecture_compat_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check_runner.check_runner"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check_runner.runner_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.cohesion_analysis.classes"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_access.field_access"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.ownership"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.installation.installation"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.restricted_calls.ancestry"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._contract_folders_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._dependency_types_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.accesses"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_ownership.bindings"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.method_declaration_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._class_contracts_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._instance_fields_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.init_architecture_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.restricted_report_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._test_placement_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.restricted_calls.calls"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._field_initialization"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._outer_classes_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._restricted_agreement"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.field_access.accesses"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._architecture_compat"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._constructor_origins"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._restricted_reports"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check_job.check_job"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.pylint_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._field_operations"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._restricted_calls"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.init_architecture"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.tach_worker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._pylint_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.report_parsing"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._lcom4_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.install_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.runtime_error"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.runtime_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._field_types"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._tach_worker"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.marker_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.policy_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.report_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.apply_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.audit_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._markers"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._reports"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._common"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._policy"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.install"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx._audit"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.apply"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
+module = "eryx.check"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
 module = "eryx"
-name = "Infrastructure"
+name = "Domain"

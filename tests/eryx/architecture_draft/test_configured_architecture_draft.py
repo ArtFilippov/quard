@@ -246,7 +246,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
 
     def test_generated_install_apply_check_and_external_project(self):
         root = self.generated_fixture()
-        original_tool = (ERYX / "tach.toml").read_bytes()
+        tool_tach = ERYX / "tach.toml"
+        original_tool = tool_tach.read_bytes() if tool_tach.exists() else None
         installed = self.install_generated_fixture(root)
         self.assertFalse(installed["architecture_initialization_required"])
         self.assertTrue(generated(root))
@@ -265,7 +266,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "tach")
                          ["status"], "passed", report["diagnostics"])
         self.assertEqual(report["exit_code"], 0, report["diagnostics"])
-        self.assertEqual((ERYX / "tach.toml").read_bytes(), original_tool)
+        self.assertEqual(tool_tach.read_bytes() if tool_tach.exists() else None,
+                         original_tool)
         self.assertEqual(self.install_generated_fixture(root)["modified_files"], [])
 
     def test_generated_forbidden_imports_keep_real_tach_failure(self):

@@ -5,3 +5,4 @@ __pycache__/
 .eryx/logs/
 .eryx/cache/
 .tach/
+/tach.toml
