@@ -29,8 +29,9 @@ class TestTestPlacement(unittest.TestCase):
         (self.root / "src").mkdir()
         (self.root / "tests").mkdir()
         (self.root / ".eryx").mkdir()
-        (self.root / ".eryx/scope.toml").write_text(
-            'exclude_directory_names = ["generated"]\n'
+        (self.root / ".eryx/config.toml").write_text(
+            (ERYX / "defaults/config.toml").read_text().split("[scope]")[0]
+            + '[scope]\nexclude_directory_names = ["generated"]\n'
             + 'test_directory_names = ["tests", "specs"]\n', encoding="utf-8")
         self.run_dir.mkdir(parents=True)
 

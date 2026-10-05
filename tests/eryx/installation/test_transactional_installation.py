@@ -116,7 +116,7 @@ class TestTransactionalInstallation(unittest.TestCase):
 
     def test_rollback_on_uv_failure_leaves_failure_log(self):
         root = self.configured_project()
-        (root / ".eryx/checks.toml").unlink()
+        (root / ".eryx/config.toml").unlink()
         before = managed_bytes(root)
 
         def fail(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
@@ -125,7 +125,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         with patch.object(entry, "capture", fail), self.assertRaises(EryxError):
             self.installation().install(root, ERYX, progress=False)
         self.assertEqual(managed_bytes(root), before)
-        self.assertFalse((root / ".eryx/checks.toml").exists())
+        self.assertFalse((root / ".eryx/config.toml").exists())
         self.assertTrue(read_json(root / ".eryx/logs/install-error.json")
                         ["managed_files_rolled_back"])
 
@@ -164,9 +164,14 @@ class TestTransactionalInstallation(unittest.TestCase):
         write_json(root / "pyrightconfig.json", document["tool"]["pyright"])
         (root / "src/other").mkdir()
         (root / "src/other/__init__.py").write_text("")
-        limits = root / ".eryx/readability.toml"
+        limits = root / ".eryx/config.toml"
         limits.write_text(limits.read_text().replace("max_complexity = 8", "max_complexity = 6"))
         _policy.configure(root)
+        for name in ("readability.toml", "scope.toml", "checks.toml"):
+            (root / ".eryx" / name).write_bytes((ERYX / "defaults" / name).read_bytes())
+        legacy_limits = root / ".eryx/readability.toml"
+        legacy_limits.write_text(legacy_limits.read_text().replace("max_complexity = 8", "max_complexity = 6"))
+        limits.unlink()
         original_tach = (root / "tach.toml").read_bytes()
         original_marker = (root / ".eryx/architecture.ready.json").read_bytes()
         (root / ".eryx").rename(root / "quality")
@@ -178,6 +183,9 @@ class TestTransactionalInstallation(unittest.TestCase):
         for key in ("sources", "index", "dependency-metadata"):
             self.assertEqual(actual["tool"]["uv"][key], document["tool"]["uv"][key])
         self.assertEqual(_policy.read_limits(root)["production"]["max_complexity"], 6)
+        self.assertTrue((root / ".eryx/config.toml").exists())
+        self.assertTrue(all(not (root / ".eryx" / name).exists() for name in
+                            ("readability.toml", "scope.toml", "checks.toml")))
         self.assertEqual((root / "tach.toml").read_bytes(), original_tach)
         self.assertEqual((root / ".eryx/architecture.ready.json").read_bytes(), original_marker)
         tests = load_toml(root / ".eryx/pylint-tests.toml")
@@ -189,13 +197,17 @@ class TestTransactionalInstallation(unittest.TestCase):
         legacy = root / "quality"
         legacy.mkdir()
         (legacy / "readability.toml").write_text("invalid legacy limits")
-        before = (root / ".eryx/readability.toml").read_bytes()
+        before = (root / ".eryx/config.toml").read_bytes()
         entry.initialize_state(root, ERYX)
-        self.assertEqual((root / ".eryx/readability.toml").read_bytes(), before)
+        self.assertEqual((root / ".eryx/config.toml").read_bytes(), before)
 
     def test_late_failure_restores_all_managed_files_and_modes(self):
         root = self.configured_project()
-        (root / ".eryx/checks.toml").unlink()
+        setting = root / ".eryx/config.toml"
+        setting.write_text(setting.read_text().replace("constructor_purity = false",
+                                               "constructor_purity = true"))
+        for name in ("readability.toml", "scope.toml", "checks.toml"):
+            (root / ".eryx" / name).write_bytes((ERYX / "defaults" / name).read_bytes())
         original = managed_bytes(root)
         path = root / "pyproject.toml"
         path.chmod(0o640)
@@ -211,33 +223,75 @@ class TestTransactionalInstallation(unittest.TestCase):
         with patch.object(entry, "capture", failing_audit), self.assertRaises(EryxError):
             self.installation().install(root, ERYX, progress=False)
         self.assertEqual(managed_bytes(root), original)
-        self.assertFalse((root / ".eryx/checks.toml").exists())
+        self.assertEqual(_policy.read_checks(root), True)
+        self.assertTrue(all((root / ".eryx" / name).exists() for name in
+                            ("readability.toml", "scope.toml", "checks.toml")))
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
 
     def test_constructor_opt_in_survives_reinstall_and_invalid_setting_fails(self):
         root = self.configured_project()
-        setting = root / ".eryx/checks.toml"
-        setting.write_text("constructor_purity = true\n", encoding="utf-8")
+        setting = root / ".eryx/config.toml"
+        setting.write_text(setting.read_text().replace("constructor_purity = false",
+                                               "constructor_purity = true"), encoding="utf-8")
+        before_setting = setting.read_text(encoding="utf-8")
         with patch.object(entry, "capture", fake_uv):
             self.installation().install(root, ERYX, progress=False)
             self.installation().install(root, ERYX, progress=False)
-        self.assertEqual(setting.read_text(encoding="utf-8"), "constructor_purity = true\n")
-        setting.write_text("constructor_purity = 1\n", encoding="utf-8")
+        self.assertEqual(setting.read_text(encoding="utf-8"), before_setting)
+        setting.write_text(before_setting.replace("constructor_purity = true",
+                                                  "constructor_purity = 1"), encoding="utf-8")
         before = managed_bytes(root)
         with patch.object(entry, "capture", side_effect=fake_uv) as captured:
-            with self.assertRaisesRegex(EryxError, "checks.toml expects"):
+            with self.assertRaisesRegex(EryxError, r"\[checks\] expects"):
                 self.installation().install(root, ERYX, progress=False)
         captured.assert_not_called()
         self.assertEqual(managed_bytes(root), before)
 
     def test_missing_constructor_setting_created_only_on_install(self):
         root = self.configured_project()
-        setting = root / ".eryx/checks.toml"
+        setting = root / ".eryx/config.toml"
         setting.unlink()
         with patch.object(entry, "capture", fake_uv):
             self.installation().install(root, ERYX, progress=False)
         self.assertEqual(setting.read_text(encoding="utf-8"),
-                         (ERYX / "defaults/checks.toml").read_text(encoding="utf-8"))
+                         (ERYX / "defaults/config.toml").read_text(encoding="utf-8"))
+
+    def test_migration_keeps_all_settings_and_rollback_restores_old_files(self):
+        root = self.configured_project()
+        old = root / ".eryx"
+        config = old / "config.toml"
+        config.unlink()
+        for name in ("readability.toml", "scope.toml", "checks.toml"):
+            (old / name).write_bytes((ERYX / "defaults" / name).read_bytes())
+        readability = old / "readability.toml"
+        readability.write_text(readability.read_text().replace("max_complexity = 8",
+                                                            "max_complexity = 7")
+                               .replace("max_module_lines = 800", "max_module_lines = 900"))
+        scope = old / "scope.toml"
+        scope.write_text(scope.read_text().replace('"generated", "_generated"',
+                                                  '"generated", "custom", "_generated"'))
+        (old / "checks.toml").write_text("constructor_purity = true\n")
+        before = managed_bytes(root)
+
+        def fail(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            return native_result(argv, code=1, stderr="offline failure")
+
+        with patch.object(entry, "capture", fail), self.assertRaises(EryxError):
+            self.installation().install(root, ERYX, progress=False)
+        self.assertEqual(managed_bytes(root), before)
+        self.assertFalse(config.exists())
+        with patch.object(entry, "capture", fake_uv):
+            self.installation().install(root, ERYX, progress=False)
+        self.assertTrue(config.exists())
+        self.assertTrue(all(not (old / name).exists() for name in
+                            ("readability.toml", "scope.toml", "checks.toml")))
+        self.assertEqual(_policy.read_limits(root)["production"]["max_complexity"], 7)
+        self.assertEqual(_policy.read_limits(root)["tests"]["max_module_lines"], 900)
+        self.assertIn("custom", _policy.read_scope(root)["exclude_directory_names"])
+        self.assertTrue(_policy.read_checks(root))
+        with patch.object(entry, "capture", fake_uv):
+            self.installation().install(root, ERYX, progress=False)
+        self.assertTrue(_policy.read_checks(root))
 
     def test_selected_extras_are_retained_on_reinstall(self):
         root = self.configured_project()

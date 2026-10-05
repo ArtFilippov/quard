@@ -124,6 +124,14 @@ class NativeCheckRunner(CheckRunner):
                 diagnostics.append(diagnostic("system", exc.code, str(exc),
                                               is_infrastructure_error=True))
             try:
+                mismatch = policy.scope_drift()
+                if mismatch:
+                    raise EryxError("SCOPE_NOT_APPLIED", ", ".join(mismatch)
+                                    + "; run uv run --locked --group dev python eryx/apply.py.")
+            except EryxError as exc:
+                diagnostics.append(diagnostic("system", exc.code, str(exc),
+                                              is_infrastructure_error=True))
+            try:
                 if generated(root):
                     _ = regenerate(root)
                 else:

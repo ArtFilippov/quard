@@ -1,5 +1,24 @@
 # Eryx domain context
 
+## Required Pylint profile
+
+The **required Pylint profile** is the always-on production and test analysis
+configured by Eryx. Its native diagnostics remain active regardless of optional
+check selection. Consumer-owned native options are retained when settings are applied.
+
+## Selectable check
+
+A **selectable check** is an independent Eryx job that a consumer can enable in
+`.eryx/config.toml` under `[checks]`. Currently only `constructor_purity` is
+selectable; disabled jobs are reported as skipped, not passed.
+
+## Source scope
+
+**Source scope** is the discovered production and test Python files beneath
+`src/` and `tests/`, classified and excluded by exact directory basenames in
+`[scope]`. It applies to the native tools and independent jobs, regardless of
+optional check selection or per-change LCOM4 selection.
+
 ## Customer class
 
 A **customer class** is a class declared in a consumer's discovered production or

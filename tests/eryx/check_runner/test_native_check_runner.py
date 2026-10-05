@@ -318,13 +318,26 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertTrue(all(not item["is_infrastructure_error"] for item in report["diagnostics"]))
 
     def test_invalid_readability_still_completes_jobs(self):
-        path = self.root / ".eryx/readability.toml"
+        path = self.root / ".eryx/config.toml"
         path.write_text(path.read_text().replace(
             "max_module_lines = 400", "max_module_lines = 410"))
         fake, seen = fake_tools()
         report = self.run_report(fake)
         self.assertEqual((report["exit_code"], len(seen)), (2, 18))
         self.assertIn("READABILITY_NOT_APPLIED", {item["rule"] for item in report["diagnostics"]})
+
+    def test_unapplied_scope_is_error_and_native_diagnostics_survive(self):
+        path = self.root / ".eryx/config.toml"
+        path.write_text(path.read_text().replace('"generated", "_generated"',
+                                                  '"generated", "custom", "_generated"'))
+        fake, seen = fake_tools({"pydoclint": {
+            "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
+        report = self.run_report(fake)
+        self.assertEqual((report["exit_code"], len(seen)), (2, 18))
+        self.assertIn("SCOPE_NOT_APPLIED", {item["rule"] for item in report["diagnostics"]})
+        self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
+        self.assertTrue(any(d["is_infrastructure_error"] for d in report["diagnostics"]
+                            if d["rule"] == "SCOPE_NOT_APPLIED"))
 
     def test_display_limit_does_not_truncate_archived_diagnostics(self):
         fake, _ = fake_tools({"pydoclint": {

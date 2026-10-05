@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 import tomllib
-from typing import Any
+from typing import Any, cast
 
 import tomlkit
 
@@ -82,10 +82,27 @@ ALLOWED_LAYERS = {
 }
 
 
-def read_limits(root: Path) -> dict[str, dict[str, int]]:
-    data = load_toml(root / ".eryx/readability.toml")
+def read_settings(root: Path) -> dict[str, Any]:
+    path = root / ".eryx/config.toml"
+    if not path.is_file():
+        raise EryxError("CONFIG_MIGRATION_REQUIRED",
+                        "Missing .eryx/config.toml; run bash eryx/install.sh --project . "
+                        + "to migrate existing settings before checking or applying.")
+    data = load_toml(path)
+    if set(data) != {"checks", "readability", "scope"}:
+        raise EryxError("INVALID_CONFIG",
+                        "config.toml expects [checks], [readability] and [scope].")
+    return data
+
+
+def validate_limits(data: object) -> dict[str, dict[str, int]]:
+    if not isinstance(data, dict):
+        raise EryxError("INVALID_LIMITS", "[readability] must be a TOML table.")
+    data = cast(dict[str, Any], data)
     if set(data) != {"production", "tests"}:
-        raise EryxError("INVALID_LIMITS", "readability.toml must contain [production] and [tests] only.")
+        raise EryxError("INVALID_LIMITS",
+                        "[readability] expects [readability.production] "
+                        + "and [readability.tests] only.")
     production, tests = data["production"], data["tests"]
     if not isinstance(production, dict) or not isinstance(tests, dict):
         raise EryxError("INVALID_LIMITS", "Readability profiles must be TOML tables.")
@@ -104,11 +121,17 @@ def read_limits(root: Path) -> dict[str, dict[str, int]]:
     return profiles
 
 
-def read_scope(root: Path) -> dict[str, list[str]]:
-    data = load_toml(root / ".eryx/scope.toml")
+def read_limits(root: Path) -> dict[str, dict[str, int]]:
+    return validate_limits(read_settings(root)["readability"])
+
+
+def validate_scope(data: object) -> dict[str, list[str]]:
+    if not isinstance(data, dict):
+        raise EryxError("INVALID_SCOPE", "[scope] must be a TOML table.")
+    data = cast(dict[str, Any], data)
     expected = {"exclude_directory_names", "test_directory_names"}
     if set(data) != expected:
-        raise EryxError("INVALID_SCOPE", f"scope.toml expects: {', '.join(sorted(expected))}")
+        raise EryxError("INVALID_SCOPE", f"[scope] expects: {', '.join(sorted(expected))}")
     for key in expected:
         values = data[key]
         if not isinstance(values, list) or not values:
@@ -119,15 +142,30 @@ def read_scope(root: Path) -> dict[str, list[str]]:
     return data
 
 
-def read_checks(root: Path) -> bool:
-    """Read the project-owned constructor opt-in; older installs default off."""
-    path = root / ".eryx/checks.toml"
-    if not path.exists():
-        return False
-    data = load_toml(path)
+def read_scope(root: Path) -> dict[str, list[str]]:
+    return validate_scope(read_settings(root)["scope"])
+
+
+def validate_checks(data: object) -> bool:
+    if not isinstance(data, dict):
+        raise EryxError("INVALID_CHECKS",
+                        "[checks] expects only constructor_purity = true or false.")
+    data = cast(dict[str, Any], data)
     if set(data) != {"constructor_purity"} or type(data["constructor_purity"]) is not bool:
-        raise EryxError("INVALID_CHECKS", "checks.toml expects only constructor_purity = true or false.")
+        raise EryxError("INVALID_CHECKS",
+                        "[checks] expects only constructor_purity = true or false.")
     return data["constructor_purity"]
+
+
+def read_checks(root: Path) -> bool:
+    return validate_checks(read_settings(root)["checks"])
+
+
+def validate_settings(root: Path) -> None:
+    data = read_settings(root)
+    validate_limits(data["readability"])
+    validate_scope(data["scope"])
+    validate_checks(data["checks"])
 
 
 def exclude_globs(scope: dict[str, list[str]]) -> list[str]:
@@ -282,6 +320,7 @@ def policy_notes(plugins: list[str]) -> dict[str, Any]:
 
 def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = None,
               catalog: dict[str, Any] | None = None) -> list[str]:
+    validate_settings(root)
     limits = read_limits(root)
     scope = read_scope(root)
     files = discover_files(root, scope)
@@ -358,15 +397,3 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
                 atomic_write(path, previous[name], root)
         raise
     return changed
-
-
-def limit_drift(root: Path) -> list[str]:
-    limits = read_limits(root)
-    production = load_toml(root / "pyproject.toml").get("tool", {}).get("pylint", {})
-    tests = load_toml(root / ".eryx/pylint-tests.toml").get("tool", {}).get("pylint", {})
-    mismatches = []
-    for profile, actual in (("production", production), ("tests", tests)):
-        for key, (section, option) in LIMIT_MAP.items():
-            if actual.get(section, {}).get(option) != limits[profile][key]:
-                mismatches.append(f"{profile}.{key}")
-    return mismatches

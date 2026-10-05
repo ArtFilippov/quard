@@ -43,7 +43,7 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         self.assertEqual(self.policy().limit_drift(), [])
 
     def test_apply_new_limits(self):
-        path = self.root / ".eryx/readability.toml"
+        path = self.root / ".eryx/config.toml"
         path.write_text(path.read_text().replace("max_module_lines = 400",
                                                  "max_module_lines = 444"))
         self.assertIn("production.max_module_lines", self.policy().limit_drift())
@@ -52,6 +52,36 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         self.assertEqual(config["tool"]["pylint"]["format"]["max-module-lines"], 444)
         self.assertEqual(self.policy().limit_drift(), [])
 
+    def test_apply_scope_restores_managed_fields_and_preserves_native_options(self):
+        path = self.root / ".eryx/config.toml"
+        path.write_text(path.read_text().replace('"generated", "_generated"',
+                                                  '"generated", "custom", "_generated"'))
+        pyproject = self.root / "pyproject.toml"
+        pyproject.write_text(pyproject.read_text() + '\n[tool.pylint.design.extra-policy]\nvalue = "owned"\n')
+        drift = self.policy().scope_drift()
+        self.assertIn("production.main.ignore-paths", drift)
+        self.assertIn("pyrightconfig.json.exclude", drift)
+        self.policy().apply()
+        self.assertEqual(self.policy().scope_drift(), [])
+        self.assertEqual(load_toml(pyproject)["tool"]["pylint"]["design"]["extra-policy"],
+                         {"value": "owned"})
+
+    def test_config_validation_rejects_unknown_sections_and_check_names(self):
+        path = self.root / ".eryx/config.toml"
+        original = path.read_text()
+        for text in (original + "\n[unrecognized]\nvalue = true\n",
+                     original.replace("constructor_purity = false",
+                                      "constructor_purity = false\nother_check = true"),
+                     original.replace("constructor_purity = false",
+                                      "constructor_purity = 1"),
+                     original.replace("max_complexity = 8", "max_complexity = 1000001")):
+            with self.subTest(text=text[-60:]):
+                path.write_text(text)
+                before = managed_bytes(self.root)
+                with self.assertRaises(EryxError):
+                    self.policy().apply()
+                self.assertEqual(managed_bytes(self.root), before)
+
     def test_apply_preserves_other_settings(self):
         self.policy().apply()
         data = load_toml(self.root / "pyproject.toml")
@@ -59,7 +89,7 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         self.assertEqual(data["project"]["requires-python"], ">=3.12,<3.15")
 
     def test_invalid_limit_no_writes(self):
-        path = self.root / ".eryx/readability.toml"
+        path = self.root / ".eryx/config.toml"
         path.write_text(path.read_text().replace("max_complexity = 8", "max_complexity = true"))
         original = managed_bytes(self.root)
         with self.assertRaises(EryxError):
@@ -67,13 +97,14 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         self.assertEqual(managed_bytes(self.root), original)
 
     def test_unknown_limit_rejected(self):
-        path = self.root / ".eryx/readability.toml"
-        path.write_text(path.read_text() + "\nmax_comlexity = 8\n")
+        path = self.root / ".eryx/config.toml"
+        path.write_text(path.read_text().replace("max_complexity = 8",
+                                                  "max_complexity = 8\nmax_comlexity = 8"))
         with self.assertRaises(EryxError):
             self.policy().limits()
 
     def test_inconsistent_limits_rejected(self):
-        path = self.root / ".eryx/readability.toml"
+        path = self.root / ".eryx/config.toml"
         path.write_text(path.read_text().replace("max_positional_arguments = 4",
                                                  "max_positional_arguments = 6"))
         with self.assertRaises(EryxError):
@@ -81,7 +112,7 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
 
     def test_missing_catalog_no_partial_apply(self):
         (self.root / ".eryx/pylint-catalog.json").unlink()
-        path = self.root / ".eryx/readability.toml"
+        path = self.root / ".eryx/config.toml"
         path.write_text(path.read_text().replace("max_module_lines = 400",
                                                  "max_module_lines = 450"))
         original = managed_bytes(self.root)
@@ -147,7 +178,7 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
             self.policy().files()
 
     def test_invalid_scope_rejected_without_writes(self):
-        path = self.root / ".eryx/scope.toml"
+        path = self.root / ".eryx/config.toml"
         path.write_text(path.read_text().replace('"generated"', '"../generated"'))
         original = managed_bytes(self.root)
         with self.assertRaises(EryxError):

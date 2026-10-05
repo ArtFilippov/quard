@@ -16,10 +16,12 @@ from eryx._common import (EryxError, atomic_write, capture, emit_event, error_ex
                        load_toml, read_json, repo_lock, require_runtime, project_dir,
                        safe_target, tool_dir, write_json)
 from eryx.installation.transactional_installation import TransactionalInstallation
+from eryx.policy_utils import validate_checks, validate_limits, validate_scope, validate_settings
 
 __all__ = ["capture", "require_runtime", "write_json"]
 
-STATE_FILES = ["readability.toml", "scope.toml", "checks.toml", "architecture.ready.json",
+OLD_SETTINGS = ("readability.toml", "scope.toml", "checks.toml")
+STATE_FILES = ["config.toml", *OLD_SETTINGS, "architecture.ready.json",
                "architecture.generated.json",
                "pylint-catalog.json", "pylint-tests.toml", "policy-notes.json", "installation.json"]
 
@@ -34,22 +36,50 @@ def dependency_specs(tool: Path) -> list[str]:
 
 
 def initialize_state(root: Path, tool: Path) -> None:
-    # Legacy files are read only for migration; removal is a consumer Git change.
-    # Existing .eryx files always win, even if installation.json is absent.
+    # Legacy quality/ is read only if the current .eryx state has not been initialized.
     for name in STATE_FILES:
+        if name == "config.toml" or (name in OLD_SETTINGS and
+                                     (root / ".eryx/config.toml").exists()):
+            continue
         destination = root / ".eryx" / name
         if destination.exists():
             continue
         legacy = root / "quality" / name
         default = tool / "defaults" / name
-        source = legacy if legacy.is_file() else default
-        if source.is_file():
+        source = (legacy if legacy.is_file() else
+                  None if name in OLD_SETTINGS else default)
+        if source is not None and source.is_file():
             content = source.read_text(encoding="utf-8")
             if name == "scope.toml":
                 content = content.replace('".quality"', '".eryx"')
             if name == "readability.toml":
                 content = content.replace("quality/apply.py", "eryx/apply.py")
             atomic_write(destination, content, root)
+    migrate_settings(root, tool)
+
+
+def migrate_settings(root: Path, tool: Path) -> None:
+    destination = root / ".eryx/config.toml"
+    if not destination.exists():
+        document = tomlkit.parse((tool / "defaults/config.toml").read_text(encoding="utf-8"))
+        for name, section in (("readability.toml", "readability"),
+                              ("scope.toml", "scope"), ("checks.toml", "checks")):
+            old = root / ".eryx" / name
+            if old.exists():
+                data = load_toml(old)
+                if name == "readability.toml":
+                    validate_limits(data)
+                elif name == "scope.toml":
+                    validate_scope(data)
+                else:
+                    validate_checks(data)
+                document[section] = tomlkit.parse(old.read_text(encoding="utf-8"))
+        atomic_write(destination, tomlkit.dumps(document), root)
+    validate_settings(root)
+    for name in OLD_SETTINGS:
+        old = root / ".eryx" / name
+        safe_target(old, root)
+        old.unlink(missing_ok=True)
 
 
 def validate_project(root: Path) -> dict[str, Any]:

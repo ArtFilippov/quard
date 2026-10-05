@@ -590,6 +590,10 @@ module = "eryx.pylint_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
+module = "eryx.config_drift_utils"
+name = "Domain"
+
+[[tool.clean-arch.layers]]
 module = "eryx._field_operations"
 name = "Domain"
 

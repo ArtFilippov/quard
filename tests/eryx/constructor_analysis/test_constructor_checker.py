@@ -34,8 +34,9 @@ class TestConstructorChecker(unittest.TestCase):
         (self.root / "src").mkdir()
         (self.root / "tests").mkdir()
         (self.root / ".eryx").mkdir()
-        (self.root / ".eryx/scope.toml").write_text(
-            'exclude_directory_names = ["generated"]\n'
+        (self.root / ".eryx/config.toml").write_text(
+            (ERYX / "defaults/config.toml").read_text().split("[scope]")[0]
+            + '[scope]\nexclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
         self.run_dir.mkdir(parents=True)
 
@@ -545,37 +546,40 @@ class Model:
                            "diagnostics": [], "execution_error": None}), 1)["error"],
                          "CONSTRUCTOR_PURITY_EXECUTION_ERROR")
 
-    def test_old_install_defaults_off_and_invalid_opt_in_keeps_other_diagnostics(self):
+    def test_old_install_requires_migration_and_invalid_opt_in_fails(self):
         with TemporaryDirectory(prefix="eryx-constructor-config-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
-            setting = root / ".eryx/checks.toml"
+            setting = root / ".eryx/config.toml"
             setting.unlink()
             fake, seen = fake_tools({"pydoclint": {
                 "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n", "code": 1}})
             report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
-            self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
-            self.assertEqual({d["rule"] for d in report["diagnostics"]}, {"DOC101"})
+            self.assertEqual((report["status"], report["exit_code"]), ("error", 2))
+            self.assertIn("CONFIG_MIGRATION_REQUIRED", {d["rule"] for d in report["diagnostics"]})
             self.assertNotIn("constructor-purity", seen)
-            tool = next(t for t in report["tools"] if t["name"] == "constructor-purity")
-            self.assertEqual((tool["status"], tool["exit_code"]), ("skipped", None))
+            self.assertEqual(report["tools"], [])
             self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
 
+            original = (ERYX / "defaults/config.toml").read_text(encoding="utf-8")
             for content in ("constructor_purity = 1\n", "constructor_purity = 'true'\n",
-                            "constructor_purity = true\nunknown = false\n", "[constructor_purity]\nenabled = true\n",
-                            "constructor_purity = [\n"):
+                             "constructor_purity = true\nunknown = false\n", "[constructor_purity]\nenabled = true\n",
+                             "constructor_purity = [\n"):
                 with self.subTest(content=content):
-                    setting.write_text(content, encoding="utf-8")
+                    setting.write_text(original.replace("constructor_purity = false", content.rstrip()), encoding="utf-8")
                     seen.clear()
                     report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
                     validate(report, json.loads((ERYX / "report.schema.json").read_text(encoding="utf-8")))
                     self.assertEqual((report["status"], report["exit_code"]), ("error", 2))
-                    self.assertEqual({d["rule"] for d in report["diagnostics"]},
-                                     {"DOC101", "INVALID_CONFIG" if content.endswith("[\n") else "INVALID_CHECKS"})
-                    self.assertTrue(any(d["is_infrastructure_error"] for d in report["diagnostics"]
-                                        if d["tool"] == "constructor-purity"))
-                    tool = next(t for t in report["tools"] if t["name"] == "constructor-purity")
-                    self.assertEqual((tool["status"], tool["exit_code"]), ("error", None))
+                    if not content.endswith("[\n") and not content.startswith("[constructor_purity]"):
+                        self.assertIn("DOC101", {d["rule"] for d in report["diagnostics"]})
+                    self.assertIn("INVALID_CONFIG" if content.endswith("[\n") or
+                                  content.startswith("[constructor_purity]") else "INVALID_CHECKS",
+                                  {d["rule"] for d in report["diagnostics"]})
+                    self.assertTrue(any(d["is_infrastructure_error"] for d in report["diagnostics"]))
+                    if not content.endswith("[\n") and not content.startswith("[constructor_purity]"):
+                        tool = next(t for t in report["tools"] if t["name"] == "constructor-purity")
+                        self.assertEqual((tool["status"], tool["exit_code"]), ("error", None))
                     self.assertNotIn("constructor-purity", seen)
                     self.assertFalse((root / report["report_path"]).parent.joinpath("constructor-purity-files.json").exists())
 
@@ -583,7 +587,8 @@ class Model:
         with TemporaryDirectory(prefix="eryx-constructor-runner-", dir=self.root) as directory:
             root = Path(directory)
             create_repo(root)
-            (root / ".eryx/checks.toml").write_text("constructor_purity = true\n", encoding="utf-8")
+            setting = root / ".eryx/config.toml"
+            setting.write_text(setting.read_text().replace("constructor_purity = false", "constructor_purity = true"), encoding="utf-8")
             (root / "src/demo/domain/api.py").write_text(
                 'from .decorators import project_decorator\n'
                 'class A:\n    def __init__(self):\n        return None\n'

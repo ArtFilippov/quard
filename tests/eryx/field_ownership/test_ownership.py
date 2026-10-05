@@ -30,8 +30,9 @@ class TestOwnership(unittest.TestCase):
         (self.root / "src/pkg").mkdir(parents=True)
         (self.root / "tests").mkdir()
         (self.root / ".eryx/reports/run").mkdir(parents=True)
-        (self.root / ".eryx/scope.toml").write_text(
-            'exclude_directory_names = ["generated"]\n'
+        (self.root / ".eryx/config.toml").write_text(
+            (ERYX / "defaults/config.toml").read_text().split("[scope]")[0]
+            + '[scope]\nexclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
 
     def put(self, path, text):

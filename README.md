@@ -95,16 +95,22 @@ violations. The default draft and existing reviewed configurations are unchanged
 ```bash
 uv run --locked --group dev python eryx/check.py
 uv run --locked --group dev python eryx/check.py --json
-# Edit .eryx/readability.toml or .eryx/scope.toml, then:
+# Edit .eryx/config.toml ([checks], [readability.*], [scope]), then:
 uv run --locked --group dev python eryx/apply.py --json
 ```
 
-To opt in to constructor purity, set `constructor_purity = true` in
-`.eryx/checks.toml` and run the ordinary full check. New installations contain
-`constructor_purity = false`; older installations without `checks.toml` also
-default to disabled. Reinstallation retains an explicit value. Invalid settings
+To opt in to constructor purity, set `constructor_purity = true` under `[checks]`
+in `.eryx/config.toml` and run the ordinary full check. New installations contain
+`constructor_purity = false`. Reinstallation retains an edited value. Invalid settings
 fail with exit 2. The report records the disabled job as `skipped`, with no exit
 code; no constructor manifest is created and its worker does not run.
+Installation migrates existing `.eryx/readability.toml`, `.eryx/scope.toml` and
+`.eryx/checks.toml` into the single configuration (missing legacy checks default
+to false), then removes those three files. It retains existing limits, test
+overrides and scope. Check/apply before migration fail with exit 2 and instruct
+you to reinstall. Installation rollback restores the original files on failure.
+Use `apply.py` after changing readability or scope; check reports unapplied
+native limits or scope as configuration errors. Unknown keys and check names fail.
 
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:
@@ -251,9 +257,7 @@ rule IDs or explicit adapter categories, stable fingerprints and tool/profile id
 consumer/
   eryx/                    # immutable gitlink; tool code, pins, defaults, tests
   .eryx/                   # versioned consumer settings and integration state
-    readability.toml
-    scope.toml
-    checks.toml
+    config.toml              # editable check selection, readability and scope
     architecture.generated.json  # generated-policy selection on new installs
     architecture.ready.json      # legacy reviewed-policy acceptance
     pylint-tests.toml

@@ -214,7 +214,8 @@ violations baseline.
   remain allowed.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
-in `.eryx/scope.toml`. Exclusions match **exact directory basenames**, not substrings:
+in `.eryx/config.toml` under `[scope]`. Exclusions match **exact directory basenames**,
+not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
 reports. `.pyi` files are checked by Pyright, both method rules, class contracts
 and outer classes; other tools use their native scope. `__init__.py` is included. Root scripts and
@@ -454,9 +455,9 @@ their diagnostics. Ordinary reports, manifests and logs stay in the chosen consu
 
 ## Constructor purity
 
-Set `constructor_purity = true` in the consumer's `.eryx/checks.toml` to enable
+Set `constructor_purity = true` under `[checks]` in the consumer's `.eryx/config.toml` to enable
 this independent job on ordinary full checks. The default is `false`, including
-when an older installation has no `checks.toml`. The file accepts only this
+when migrating an older installation with no `checks.toml`. The table accepts only this
 boolean key; malformed or unknown settings fail as configuration errors (exit 2).
 Disabled checks appear as `skipped` with a null exit code in the report; no
 manifest or worker is started. Reinstallation preserves an existing opt-in.
@@ -555,7 +556,9 @@ failures are infrastructure errors (exit 2), not passing results.
 
 ## Readability
 
-Edit `.eryx/readability.toml`, then run `eryx/apply.py` in the consumer environment.
+Edit `[readability.production]` and `[readability.tests]` in `.eryx/config.toml`,
+then run `eryx/apply.py` in the consumer environment. Edit `[scope]` there too;
+unapplied scope fails with `SCOPE_NOT_APPLIED`.
 Unapplied limits fail with `READABILITY_NOT_APPLIED`; invalid TOML, unknown names,
 booleans/nonpositive limits and contradictory bounds are errors.
 

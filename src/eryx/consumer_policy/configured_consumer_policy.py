@@ -48,3 +48,6 @@ class ConfiguredConsumerPolicy(ConsumerPolicy):
     @override
     def limit_drift(self) -> list[str]:
         return _policy.limit_drift(self._root)
+
+    def scope_drift(self) -> list[str]:
+        return _policy.scope_drift(self._root)
