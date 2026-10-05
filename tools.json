@@ -7,6 +7,7 @@
     "pyright": "1.1.414",
     "tach": "0.35.1",
     "pydoclint": "0.9.1",
+    "jscpd": "5.4.0",
     "tomlkit": "0.13.3",
     "packaging": "25.0"
   },

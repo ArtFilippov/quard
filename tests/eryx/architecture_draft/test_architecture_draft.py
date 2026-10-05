@@ -164,7 +164,8 @@ class TestArchitectureDraft(unittest.TestCase):
             "from demo.reader.impl import ReaderImpl\n" +
             "from demo.writer.impl import WriterImpl\n" +
             "class Assembly(ReaderImpl, WriterImpl): pass\n" +
-            "def assemble(reader: ReaderImpl) -> WriterImpl: return WriterImpl()\n")
+            "def assemble(reader: ReaderImpl) -> WriterImpl: return WriterImpl()\n" +
+            '__all__ = ["Assembly", "assemble"]\n')
         (main / "types.pyi").write_text(
             "from demo.reader.impl import ReaderImpl\n" +
             "from demo.writer.impl import WriterImpl\n" +

@@ -5,11 +5,12 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, cast
 
 from eryx.restricted_report_utils import parse_encapsulated_only
 
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+JSCPD_EXACT_KIND = "exact"
 
 
 def clean(text: str) -> str:
@@ -520,7 +521,83 @@ def parse_constructor_purity(text: str, root: Path) -> tuple[list[dict[str, Any]
     return items, error
 
 
-def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None) -> dict[str, Any]:
+def _jscpd_integer(value: object, *, minimum: int = 1) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
+def _jscpd_fragment(side: object, root: Path, allowed: set[str]) -> tuple[str, int, int]:
+    if not isinstance(side, dict):
+        raise ValueError("Missing jscpd fragment")
+    data = cast("dict[str, object]", side)
+    name = data.get("name")
+    loc = data.get("startLoc")
+    if not isinstance(name, str) or not isinstance(loc, dict):
+        raise ValueError("Invalid jscpd fragment location")
+    position = cast("dict[str, object]", loc)
+    line = position.get("line")
+    column = position.get("column")
+    path = relative_path(name, root)
+    if path not in allowed or not _jscpd_integer(line) or not _jscpd_integer(column, minimum=0):
+        raise ValueError("Invalid or out-of-scope jscpd fragment location")
+    return path, cast("int", line), cast("int", column) + 1
+
+
+def _jscpd_duplicates(payload: str, expected_count: int) -> list[object]:
+    raw: object = json.loads(payload)
+    if not isinstance(raw, dict):
+        raise ValueError("Missing jscpd report")
+    obj = cast("dict[str, object]", raw)
+    duplicates = obj.get("duplicates")
+    stats = obj.get("statistics")
+    if not isinstance(duplicates, list) or not isinstance(stats, dict):
+        raise ValueError("Missing jscpd duplicates or statistics")
+    duplicates = cast("list[object]", duplicates)
+    total = cast("dict[str, object]", stats).get("total")
+    if not isinstance(total, dict):
+        raise ValueError("Missing jscpd totals")
+    counts = cast("dict[str, object]", total)
+    sources = counts.get("sources")
+    clones = counts.get("clones")
+    if not _jscpd_integer(sources) or sources != expected_count:
+        raise ValueError("Empty or incomplete jscpd scan")
+    if not _jscpd_integer(clones, minimum=0) or clones != len(duplicates):
+        raise ValueError("Incomplete jscpd clone report")
+    return duplicates
+
+
+def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str, Any]]:
+    if not isinstance(entry, dict):
+        raise ValueError("Malformed jscpd clone")
+    clone = cast("dict[str, object]", entry)
+    lines = clone.get("lines")
+    tokens = clone.get("tokens")
+    if (clone.get("kind") != JSCPD_EXACT_KIND or not _jscpd_integer(lines)
+            or not _jscpd_integer(tokens)):
+        raise ValueError("Malformed jscpd clone")
+    locations = (_jscpd_fragment(clone.get("firstFile"), root, allowed),
+                 _jscpd_fragment(clone.get("secondFile"), root, allowed))
+    items: list[dict[str, Any]] = []
+    for current, other in ((locations[0], locations[1]), (locations[1], locations[0])):
+        items.append(diagnostic(
+            "jscpd", "EXACT_CLONE", f"Exact clone of {other[0]}:{other[1]} " +
+            f"({lines} lines, {tokens} tokens)", path=current[0],
+            line=current[1], column=current[2], native_details=clone,
+            rule_is_adapter_category=True,
+            documentation_url="https://jscpd.dev/reporters/json"))
+    return items
+
+
+def parse_jscpd(payload: str, root: Path, expected_paths: list[str]) -> list[dict[str, Any]]:
+    # Fail closed on a missing, truncated or incomplete native report.
+    allowed = set(expected_paths)
+    items: list[dict[str, Any]] = []
+    for entry in _jscpd_duplicates(payload, len(allowed)):
+        items.extend(_jscpd_clone(entry, root, allowed))
+    return items
+
+
+def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None,
+              expected_paths: list[str] | None = None) -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
     items: list[dict[str, Any]] = []
@@ -542,6 +619,11 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             items = parse_pydoclint(text, root)
             if result.get("exit_code") not in {0, 1}:
                 error = error or "PYDOCLINT_EXECUTION_ERROR"
+        elif tool == "jscpd":
+            payload = json_file.read_text(encoding="utf-8") if json_file else ""
+            items = parse_jscpd(payload, root, expected_paths or [])
+            if result.get("exit_code") != (1 if items else 0):
+                error = error or "JSCPD_EXECUTION_ERROR"
         elif tool == "lcom4":
             items, parse_error = parse_lcom4(result.get("stdout", ""), root)
             error = error or parse_error

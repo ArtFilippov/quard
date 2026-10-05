@@ -119,6 +119,26 @@ class Probe:
         normalized = normalize("pydoclint", result, fixture)
         if normalized["status"] != "violations":
             raise EryxError("PYDOCLINT_SMOKE_FAILED", "pydoclint did not report the intentional docstring/signature mismatch, or rejected its config. See install-probes.")
+        clone_text = ("def repeat(value):\n    first = value + 17\n    second = first * 3\n"
+                      "    third = second - 4\n    fourth = third / 2\n    return fourth + 10\n")
+        clone_paths = ["src/eryxprobe/clone_one.py", "src/eryxprobe/clone_two.py"]
+        for path in clone_paths:
+            (fixture / path).write_text(clone_text, encoding="utf-8")
+        write_json(fixture / "jscpd-config.json", {})
+        version = probe([tool_binary("jscpd"), "--version"], fixture, "jscpd-version", log_root)
+        required = read_json(tool_dir() / "tools.json")["dependencies"]["jscpd"]
+        if version["exit_code"] != 0 or version["stdout"].strip() != f"jscpd {required}":
+            raise EryxError("JSCPD_VERSION_MISMATCH", "jscpd executable version does not match its installed package.")
+        clone_json = fixture / "jscpd-report.json"
+        result = probe([tool_binary("jscpd"), "--config", str(fixture / "jscpd-config.json"),
+                        "--no-gitignore", "--absolute", "--kind", "exact", "--mode", "strict",
+                        "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
+                        "--reporters", "json",
+                        "--output", str(fixture), "--exit-code", "1", *clone_paths],
+                       fixture, "jscpd-smoke", log_root)
+        normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
+        if normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2:
+            raise EryxError("JSCPD_SMOKE_FAILED", "jscpd did not detect both exact-clone fragments. See install-probes.")
         modules = [{"path": path, "depends_on": []} for path in ("eryxprobe", "eryxprobe.first", "eryxprobe.second")]
         tach = {"source_roots": ["src"], "root_module": "forbid", "exact": True,
                 "respect_gitignore": False, "ignore_type_checking_imports": False, "modules": modules}
@@ -133,7 +153,8 @@ class Probe:
             raise EryxError("TACH_EXTERNAL_SMOKE_FAILED", "The native external-dependency command failed on a project with no external imports. See install-probes.")
     return {"pylint_plugin_load": "passed", "pylint_config_and_fixture": "passed",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
-            "tach_undeclared_dependency": "detected", "tach_external_command": "passed"}
+            "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
+            "jscpd_exact_clone": "detected"}
 
 
 def audit(root: Path) -> dict[str, Any]:

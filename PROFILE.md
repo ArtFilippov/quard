@@ -19,6 +19,12 @@ violations baseline.
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
+* **jscpd 5.4.0**: native exact Python clone detection in strict mode, blocking
+  each fragment. Scans discovered `.py` files across production and tests, not
+  `.pyi` stubs (unsupported by its Python format), irrespective of LCOM4 selection.
+  The minimum clone length is five lines and one token. Empty or incomplete
+  native scans, invalid JSON and execution failures are infrastructure errors;
+  the native report and streams are archived.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
 * **Constructor purity (opt-in)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including

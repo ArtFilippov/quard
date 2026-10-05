@@ -39,6 +39,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(result["pylint_config_and_fixture"], "passed")
         self.assertEqual(result["pyright_type_error"], "detected")
         self.assertEqual(result["pydoclint_signature_error"], "detected")
+        self.assertEqual(result["jscpd_exact_clone"], "detected")
         self.assertEqual(result["tach_undeclared_dependency"], "detected")
         self.assertEqual(tool_binary("pydoclint"),
                          str(Path(sys.executable).parent / "pydoclint"))
@@ -109,6 +110,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         result = self.installation().install(root, ERYX, dry_run=True, progress=False)
         self.assertEqual(result["status"], "planned")
         self.assertIn("pyright[nodejs]==1.1.414", result["dependencies"])
+        self.assertIn("jscpd==5.4.0", result["dependencies"])
         self.assertEqual(managed_bytes(root), before)
 
     def test_rollback_on_uv_failure_leaves_failure_log(self):

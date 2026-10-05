@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Callable
+from importlib import metadata
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -21,7 +22,10 @@ from eryx._common import capture, project_dir, read_json
 from eryx.check import display
 from eryx.check_runner.check_runner import CheckRunner
 from eryx.check_runner.native_check_runner import NativeCheckRunner
+from eryx.check_runner.runner_utils import installed_versions
+from eryx.report_utils import normalize
 from offline_fixtures import create_repo, fake_tools
+from offline_fixture_utils import native_result
 
 
 class TestNativeCheckRunner(unittest.TestCase):
@@ -49,8 +53,8 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools()
         report = self.run_report(fake)
         self.assertEqual((report["status"], report["exit_code"]), ("passed", 0))
-        self.assertEqual(len(seen), 15)
-        self.assertEqual(len({job["name"] for job in report["tools"]}), 16)
+        self.assertEqual(len(seen), 16)
+        self.assertEqual(len({job["name"] for job in report["tools"]}), 17)
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "constructor-purity")
                          ["status"], "skipped")
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")
@@ -69,7 +73,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         report = self.run_report(
             fake, "tests/test_value.py src/demo/domain/api.py tests/test_value.py")
         coverage = report["coverage"]["lcom4"]
-        self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 15))
+        self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 16))
         self.assertEqual(coverage["selected_files"],
                          ["tests/test_value.py", "src/demo/domain/api.py"])
         self.assertEqual(coverage["analyzed_files"], coverage["selected_files"])
@@ -91,7 +95,7 @@ class TestNativeCheckRunner(unittest.TestCase):
     def test_skipped_lcom4_still_runs_every_other_job(self):
         fake, seen = fake_tools()
         report = self.run_report(fake, "")
-        self.assertEqual((report["exit_code"], len(seen)), (0, 14))
+        self.assertEqual((report["exit_code"], len(seen)), (0, 15))
         self.assertNotIn("lcom4", seen)
         self.assertEqual(report["coverage"]["lcom4"], {"mode": "skipped", "requested": "",
                          "selected_files": [], "analyzed_files": []})
@@ -104,7 +108,7 @@ class TestNativeCheckRunner(unittest.TestCase):
     def test_malformed_lcom4_never_claims_analyzed_files(self):
         fake, seen = fake_tools({"lcom4": {"stdout": "not JSON", "code": 1}})
         report = self.run_report(fake, "src/demo/domain/api.py")
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 15))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 16))
         self.assertEqual(report["coverage"]["lcom4"]["selected_files"],
                          ["src/demo/domain/api.py"])
         self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"], [])
@@ -116,7 +120,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools({"pyright": {"stdout": "broken", "code": 2},
                                  "pydoclint": {"stderr": message, "code": 1}})
         report = self.run_report(fake, serial=True)
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 15))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 16))
         self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
         self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]))
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "pydoclint")
@@ -136,7 +140,7 @@ class TestNativeCheckRunner(unittest.TestCase):
 
         report = self.run_report(failing_capture, serial=True)
         self.assertEqual((report["status"], report["exit_code"], len(seen)),
-                         ("error", 2, 14))
+                         ("error", 2, 15))
         self.assertEqual({item["rule"] for item in report["diagnostics"]},
                          {"RUNNER_SUBPROCESS_ERROR", "DOC101"})
         jobs = {job["name"]: job for job in report["tools"]}
@@ -154,7 +158,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
                                  "code": 1}})
         report = self.run_report(fake)
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 15))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 16))
         self.assertEqual([(item["rule"], item["path"], item["line"])
                           for item in report["diagnostics"]],
                          [("DOC101", "src/demo/domain/api.py", 1)])
@@ -168,7 +172,7 @@ class TestNativeCheckRunner(unittest.TestCase):
                                          "pydoclint": {"stderr": message, "code": 1}})
                 report = self.run_report(fake, "")
                 self.assertEqual((report["status"], report["exit_code"], len(seen)),
-                                 ("error", 2, 14))
+                                 ("error", 2, 15))
                 self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
                 self.assertTrue(any(
                     item["is_infrastructure_error"] for item in report["diagnostics"]
@@ -185,12 +189,12 @@ class TestNativeCheckRunner(unittest.TestCase):
             with self.subTest(selection=selection):
                 fake, seen = fake_tools()
                 report = self.run_report(fake, selection)
-                self.assertEqual((report["exit_code"], len(seen)), (2, 14))
+                self.assertEqual((report["exit_code"], len(seen)), (2, 15))
                 self.assertIn("INVALID_LCOM_FILES", {d["rule"] for d in report["diagnostics"]})
         (self.root / ".eryx/architecture.ready.json").unlink()
         fake, seen = fake_tools()
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 13))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 14))
         self.assertEqual(sum(job["status"] == "blocked" for job in report["tools"]), 2)
 
     def test_native_worker_violation_and_pyright_survive_skipped_lcom4(self):
@@ -318,7 +322,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "max_module_lines = 400", "max_module_lines = 410"))
         fake, seen = fake_tools()
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 15))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 16))
         self.assertIn("READABILITY_NOT_APPLIED", {item["rule"] for item in report["diagnostics"]})
 
     def test_display_limit_does_not_truncate_archived_diagnostics(self):
@@ -329,6 +333,77 @@ class TestNativeCheckRunner(unittest.TestCase):
             display(report, False, 0)
         self.assertIn("1 more diagnostics", output.getvalue())
         self.assertEqual(len(read_json(self.root / report["report_path"])["diagnostics"]), 1)
+
+    def test_real_jscpd_clones_and_clean_consumer_with_lcom_skipped(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        text = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n" +
+                "    gamma = beta - 4\n    delta = gamma / 2\n    return delta + 10\n")
+        first.write_text(text, encoding="utf-8")
+        second.write_text(text, encoding="utf-8")
+        excluded = self.root / "src/demo/generated"
+        excluded.mkdir()
+        (excluded / "hidden.py").write_text(text, encoding="utf-8")
+        (self.root / "src/demo/companion.pyi").write_text(text, encoding="utf-8")
+        fake, seen = fake_tools()
+
+        def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if Path(argv[0]).name == "jscpd":
+                return capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        report = self.run_report(dispatch, "")
+        job = next(item for item in report["tools"] if item["name"] == "jscpd")
+        self.assertEqual((report["exit_code"], job["status"], job["exit_code"]),
+                         (1, "violations", 1), report["diagnostics"])
+        clones = [item for item in report["diagnostics"] if item["tool"] == "jscpd"]
+        self.assertEqual({item["path"] for item in clones},
+                         {"src/demo/first.py", "tests/second.py"})
+        self.assertTrue(all(item["line"] >= 1 and item["column"] >= 1 for item in clones))
+        self.assertEqual(len(clones), 2)
+        self.assertEqual(set(job["raw_output"]), {"native_json", "stdout", "stderr"})
+        self.assertNotIn("src/demo/generated/hidden.py", job["argv"])
+        self.assertNotIn("src/demo/companion.pyi", job["argv"])
+        self.assertNotIn("lcom4", seen)
+        second.unlink()
+        clean = self.run_report(dispatch, "")
+        self.assertEqual(next(item for item in clean["tools"] if item["name"] == "jscpd")[
+            "status"], "passed")
+
+    def test_jscpd_missing_malformed_and_incomplete_output_fails_closed(self) -> None:
+        native = self.root / "jscpd-report.json"
+        for payload in (None, "{oops", '{"duplicates":[],"statistics":{"total":' +
+                        '{"sources":0,"clones":0}}}',
+                        '{"duplicates":[],"statistics":{"total":' +
+                        '{"sources":2,"clones":0}}}'):
+            with self.subTest(payload=payload):
+                if payload is None:
+                    native.unlink(missing_ok=True)
+                else:
+                    native.write_text(payload, encoding="utf-8")
+                result = normalize("jscpd", native_result([], code=0), self.root,
+                                   native, ["one.py"])
+                self.assertEqual(result["status"], "error")
+                self.assertTrue(any(d["is_infrastructure_error"] for d in result["diagnostics"]))
+        native.write_text('{"duplicates":[],"statistics":{"total":' +
+                          '{"sources":1,"clones":0}}}', encoding="utf-8")
+        failed = normalize("jscpd", native_result([], code=3), self.root, native, ["one.py"])
+        self.assertEqual((failed["status"], failed["error"]), ("error", "JSCPD_EXECUTION_ERROR"))
+
+    def test_jscpd_version_audit_requires_pin(self) -> None:
+        versions, errors = installed_versions(self.root)
+        self.assertEqual(versions["jscpd"], "5.4.0")
+        self.assertFalse(errors)
+        actual_version = metadata.version
+
+        def wrong_version(name: str) -> str:
+            return "0.0.0" if name == "jscpd" else actual_version(name)
+
+        with patch("eryx.check_runner.runner_utils.metadata.version",
+                   side_effect=wrong_version):
+            _, errors = installed_versions(self.root)
+        self.assertEqual([(item["rule"], item["is_infrastructure_error"]) for item in errors],
+                         [("TOOL_VERSION_MISMATCH", True)])
 
 
 if __name__ == "__main__":

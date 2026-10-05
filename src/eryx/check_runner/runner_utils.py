@@ -89,6 +89,20 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         write_json(manifest, source_files, root)
         jobs.append({"name": "lcom4", "tool": "lcom4", "argv": [sys.executable,
                      str(tool_dir() / "_lcom4_worker.py"), "--manifest", str(manifest)]})
+    clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
+                         if path.endswith(".py"))
+    eligible = [path for path in clone_files if len((root / path).read_text(
+        encoding="utf-8").splitlines()) >= 5]
+    # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
+    config = run_dir / "jscpd-config.json"
+    write_json(config, {}, root)
+    output = run_dir / "raw" / "jscpd-report.json"
+    jobs.append({"name": "jscpd", "tool": "jscpd", "expected_paths": eligible,
+                 "json_file": output,
+                 "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore", "--absolute",
+                          "--kind", "exact", "--mode", "strict", "--min-lines", "5",
+                          "--min-tokens", "1", "--fail-on-empty", "--reporters", "json", "--output",
+                          str(run_dir / "raw"), "--exit-code", "1", *clone_files]})
     manifest = run_dir / "method-decorators-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "method-decorators", "tool": "method-decorators", "argv": [sys.executable,

@@ -36,7 +36,8 @@ class CapturedCheckJob(CheckJob):
     def execute(self, job: dict[str, Any], root: Path, run_dir: Path, timeout: int, *,
                 capture_fn: Callable[..., dict[str, Any]]) -> dict[str, Any]:
         result, logs = self.capture_output(job, root, run_dir, timeout, capture_fn=capture_fn)
-        normalized = NativeReportParser(root).normalize(job["tool"], result, job.get("json_file"))
+        normalized = NativeReportParser(root).normalize(job["tool"], result, job.get("json_file"),
+                                                        job.get("expected_paths"))
         for entry in normalized["diagnostics"]:
             entry["job"] = job["name"]
             if "profile" in job:

@@ -37,5 +37,6 @@ class NativeReportParser(ReportParsing):
 
     @override
     def normalize(self, tool: str, result: dict[str, Any],
-                  json_file: Path | None = None) -> dict[str, Any]:
-        return _reports.normalize(tool, result, self._root, json_file)
+                  json_file: Path | None = None,
+                  expected_paths: list[str] | None = None) -> dict[str, Any]:
+        return _reports.normalize(tool, result, self._root, json_file, expected_paths)

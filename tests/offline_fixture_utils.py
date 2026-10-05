@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 from pathlib import Path
 import shutil
 from typing import Any
@@ -46,9 +47,12 @@ EMPTY_OUTPUT = {
 def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None:
     shutil.copytree(ERYX / "defaults", root / ".eryx")
     (root / "src/demo/domain").mkdir(parents=True)
-    (root / "src/demo/__init__.py").write_text("", encoding="utf-8")
+    (root / "src/demo/__init__.py").write_text(
+        '"""Autonomous fixture.\n\nUsed by isolated checks.\nNo application imports.\n"""\n',
+        encoding="utf-8")
     (root / "src/demo/domain/api.py").write_text(
-        "def value() -> int:\n    return 1\n", encoding="utf-8")
+        "def value() -> int:\n    number = 1\n    result = number + 1\n"
+        "    output = result - 1\n    return output\n", encoding="utf-8")
     (root / "tests").mkdir()
     (root / "tests/test_value.py").write_text(
         "def test_value() -> None:\n    assert 1 == 1\n", encoding="utf-8")
@@ -93,6 +97,13 @@ def fake_tools(failures: dict[str, dict[str, Any]] | None = None
                 name = "pyright"
             elif Path(argv[0]).name == "pydoclint":
                 name = "pydoclint"
+            elif Path(argv[0]).name == "jscpd":
+                name = "jscpd"
+                output = Path(argv[argv.index("--output") + 1]) / "jscpd-report.json"
+                sources = sum(len((cwd / path).read_text(encoding="utf-8").splitlines()) >= 5
+                              for path in argv[argv.index("--exit-code") + 2:])
+                output.write_text(json.dumps({"duplicates": [], "statistics": {
+                    "total": {"sources": sources, "clones": 0}}}), encoding="utf-8")
             else:
                 name = "tach-external" if "check-external" in argv else "tach"
         seen.append(name)
