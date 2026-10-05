@@ -104,6 +104,9 @@ violations baseline.
   `ENVELOPE_FOLDER` or `ENVELOPE_FILE` diagnostics. The same layout applies under
   `tests/`; source and stubs may each declare the same class in companion files.
   This checks static structure and inheritance, not runtime delegation or composition.
+  Production files in the direct contract `envelopes/` folder may assemble
+  implementations from other contract folders; this does not disable envelope
+  placement or inheritance diagnostics.
   The independent outer-class and class-contract jobs still check these files.
   Production assembly classes under any `main/` folder (including nested files and
   stubs) may combine implementations from several contract folders; contract
@@ -611,8 +614,9 @@ configurations remain consumer-owned. The optional legacy
 `init_architecture.py --contract-only` draft creates an explicit Tach
 module for each discovered production file or package, including nested folders and
 stubs. It exposes verified local contracts to ordinary modules; files anywhere under
-a production `main/` folder may also import concrete implementation classes from
-multiple contract folders. Other modules' utilities remain private. Dependency
+a production `main/` folder or in a direct contract `envelopes/` folder may import
+concrete implementation classes from any contract folder, including type-only imports
+and companion stubs. Other modules' utilities remain private. Dependency
 declarations are limited to observed eligible source imports, including type-checking
 imports; stub-only imports do not create unused Tach dependencies. `main/` files use
 Bootstrap layers. Exact mode and layer prohibitions remain active. Generated policy

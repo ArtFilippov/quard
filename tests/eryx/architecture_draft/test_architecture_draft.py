@@ -265,6 +265,151 @@ class TestArchitectureDraft(unittest.TestCase):
                           {(item["path"], item["rule"])
                            for item in FolderOwnership(trees).folder_violations()})
 
+    def envelope_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
+        pkg, _, client = self.main_fixture(root)
+        envelopes = pkg / "reader/envelopes"
+        envelopes.mkdir()
+        base = envelopes / "reader_envelope.py"
+        base.write_text(
+            "from demo.reader.reader import Reader\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "class ReaderEnvelope(Reader):\n" +
+            "    def wire(self, implementation: WriterImpl) -> WriterImpl: " +
+            "return implementation\n")
+        (envelopes / "reader_envelope.pyi").write_text(
+            "from demo.reader.reader import Reader\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "class ReaderEnvelope(Reader):\n" +
+            "    def wire(self, implementation: WriterImpl) -> WriterImpl: ...\n")
+        named = envelopes / "named_envelope.py"
+        named.write_text(
+            "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n" +
+            "from typing import TYPE_CHECKING\n" +
+            "if TYPE_CHECKING:\n    from demo.writer.impl import WriterImpl\n" +
+            "class NamedEnvelope(ReaderEnvelope): pass\n")
+        (envelopes / "named_envelope.pyi").write_text(
+            "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "class NamedEnvelope(ReaderEnvelope): ...\n")
+        return envelopes, base, named, client
+
+    def test_envelope_assembles_unrelated_implementations_with_native_checks(self):
+        with TemporaryDirectory(prefix="eryx-envelope-assembly-") as directory:
+            root = Path(directory)
+            envelopes, base, named, client = self.envelope_fixture(root)
+            config, _ = ConfiguredArchitectureDraft(root).draft(
+                contract_only=True, validate_ownership=False)
+            self.write_config(root, config)
+            self.assertEqual(run("check", root)["exit_code"], 0)
+            visible = next(interface for interface in config["interfaces"]
+                           if interface["from"] == [r"^demo\.writer\.impl$"]
+                           and "visibility" in interface)
+            self.assertIn("demo.reader.envelopes.reader_envelope", visible["visibility"])
+            self.assertIn("demo.reader.envelopes.named_envelope", visible["visibility"])
+            self.assertEqual(next(module for module in config["modules"]
+                                  if module["path"] == "demo.reader.envelopes.reader_envelope")
+                             ["layer"], "Bootstrap")
+            self.assertEqual(next(module for module in config["modules"]
+                                  if module["path"] == "demo.reader.envelopes.named_envelope")
+                             ["depends_on"], ["demo.reader.envelopes.reader_envelope",
+                                              "demo.writer.impl"])
+            stub_only = envelopes / "assembly_types.pyi"
+            stub_only.write_text("from demo.writer.impl import WriterImpl\n")
+            config, _ = ConfiguredArchitectureDraft(root).draft(
+                contract_only=True, validate_ownership=False)
+            self.write_config(root, config)
+            self.assertIn("demo.reader.envelopes.assembly_types", next(
+                interface for interface in config["interfaces"]
+                if interface["from"] == [r"^demo\.writer\.impl$"]
+                and "visibility" in interface)["visibility"])
+            self.assertEqual(next(module for module in config["modules"]
+                                  if module["path"] == "demo.reader.envelopes.assembly_types")
+                             ["depends_on"], [])
+            fake, _ = fake_tools()
+
+            def real_boundaries(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+                if any(script in " ".join(argv) for script in (
+                    "_tach_worker.py", "_contract_folders_worker.py")):
+                    return capture(argv, cwd, timeout)
+                return fake(argv, cwd, timeout)
+
+            def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
+                return {}, []
+
+            def check() -> dict[str, Any]:
+                return NativeCheckRunner().run(root, capture_fn=real_boundaries,
+                                               versions_fn=versions)
+
+            report = check()
+            self.assertEqual(report["exit_code"], 0, report["diagnostics"])
+            self.assertTrue(all(job["status"] == "passed" for job in report["tools"]
+                                if job["name"] in {"tach", "contract-folders"}))
+            client.write_text("from demo.writer.writer import Writer\n" +
+                              "from demo.writer.impl import WriterImpl\n")
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/client.py"
+                                for item in rejected["diagnostics"]), rejected)
+            client.write_text("from demo.writer.writer import Writer\n")
+            self.assertEqual(self.main_check(root)["exit_code"], 0)
+            base.write_text(base.read_text() + "from demo.writer import WriterImpl\n")
+            self.assertEqual(self.main_check(root)["exit_code"], 0)
+            base.write_text(base.read_text().replace("from demo.writer import WriterImpl\n", ""))
+            base.write_text(base.read_text() +
+                            "from demo.writer.private_utils import helper\n")
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/reader/envelopes/reader_envelope.py"
+                                for item in rejected["diagnostics"]), rejected)
+            base.write_text(base.read_text().replace(
+                "from demo.writer.private_utils import helper\n", ""))
+            nested = envelopes / "nested"
+            nested.mkdir()
+            (nested / "assembly.py").write_text("from demo.writer.impl import WriterImpl\n")
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/reader/envelopes/nested/assembly.py"
+                                for item in rejected["diagnostics"]), rejected)
+            (nested / "assembly.py").unlink()
+            named.write_text(named.read_text().replace("class NamedEnvelope(ReaderEnvelope)",
+                                                        "class NamedEnvelope(ReaderImpl)"))
+            named.write_text("from demo.reader.impl import ReaderImpl\n" + named.read_text())
+            report = check()
+            self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+            self.assertIn("ENVELOPE_INHERITANCE", {item["rule"] for item in
+                                                  report["diagnostics"]})
+            named.write_text("from demo.writer.impl import WriterImpl\n" +
+                             named.read_text().replace("class NamedEnvelope(ReaderImpl)",
+                                                       "class NamedEnvelope(WriterImpl)")
+                             .replace("from demo.reader.impl import ReaderImpl\n", ""))
+            report = check()
+            self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+            self.assertIn("ENVELOPE_FOLDER", {item["rule"] for item in
+                                             report["diagnostics"]})
+
+    def test_envelope_standalone_full_check_and_runtime(self):
+        with TemporaryDirectory(prefix="eryx-envelope-consumer-") as directory:
+            root = Path(directory)
+            self.envelope_fixture(root)
+            self.assertEqual(self.main_check(root)["exit_code"], 0)
+            report = NativeCheckRunner().run(root)
+            self.assertEqual(report["exit_code"], 1, report["summary"])
+            self.assertEqual(report["summary"]["infrastructure_errors"], 0, report["diagnostics"])
+            for job in report["tools"]:
+                if job["name"] in {"tach", "contract-folders"}:
+                    self.assertEqual((job["status"], job["exit_code"]), ("passed", 0), job)
+            execution = capture([sys.executable, "-c",
+                                 "import sys; sys.path.insert(0, 'src'); " +
+                                 "from demo.reader.envelopes.reader_envelope " +
+                                 "import ReaderEnvelope; " +
+                                 "from demo.reader.envelopes.named_envelope " +
+                                 "import NamedEnvelope; " +
+                                 "from demo.writer.impl import WriterImpl; " +
+                                 "assert ReaderEnvelope().wire(WriterImpl()).__class__ " +
+                                 "is WriterImpl; assert issubclass(NamedEnvelope, ReaderEnvelope)"],
+                                root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
     def test_layer_direction_and_exact_unused_declarations_stay_native(self):
         with TemporaryDirectory(prefix="eryx-contract-layers-") as directory:
             root = self.fixture(directory)

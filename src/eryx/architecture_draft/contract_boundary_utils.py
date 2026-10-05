@@ -95,8 +95,15 @@ def _destination(path: str, paths: dict[str, str]) -> str | None:
                  if path == module or path.startswith(module + ".")), None)
 
 
-def _main_modules(paths: dict[str, str]) -> set[str]:
-    return {name for name, path in paths.items() if MAIN_FOLDER in Path(path).parts[2:-1]}
+def _assembly_modules(paths: dict[str, str], ownership: FolderOwnership,
+                      names: set[str]) -> set[str]:
+    # Only the direct envelopes/ folder of a discovered local contract assembles;
+    # nested directories do not inherit the exception.
+    envelopes = {Path(ownership.path_for(contract)).parent / "envelopes"
+                 for contract in names}
+    return {name for name, path in paths.items()
+            if (MAIN_FOLDER in Path(path).parts[2:-1]
+                or Path(path).parent in envelopes)}
 
 
 def _declared_implementations(ownership: FolderOwnership, owners: dict[str, str]
@@ -187,15 +194,15 @@ def _modules(sources: tuple[dict[str, ast.Module], dict[str, str]],
 
 
 def _interfaces(paths: dict[str, str], owners: dict[str, str], public: dict[str, set[str]],
-                *, main: set[str], implementations: dict[str, set[str]]
+                *, assembly: set[str], implementations: dict[str, set[str]]
                  ) -> list[dict[str, Any]]:
     interfaces: list[dict[str, Any]] = []
     for name in sorted(paths):
         source = ["^" + re.escape(name) + "$"]
         interfaces.append({"from": source, "expose": ["^" + re.escape(symbol) + "$"
                                                     for symbol in sorted(public.get(name, set()))]})
-        if main and implementations.get(name):
-            interfaces.append({"from": source, "visibility": sorted(main),
+        if assembly and implementations.get(name):
+            interfaces.append({"from": source, "visibility": sorted(assembly),
                                "exclusive": True, "expose": ["^" + re.escape(symbol) + "$"
                                for symbol in sorted(implementations[name])]})
         peers = sorted(peer for peer, owner in owners.items() if peer != name
@@ -213,13 +220,13 @@ def _render_boundaries(trees: dict[str, ast.Module], ownership: FolderOwnership,
         _ = paths.setdefault(module_name(path), path)
     names = {name for name, _, _ in ownership.all_declarations() if ownership.is_contract(name)}
     owners = _owners(paths, ownership, names)
-    main = _main_modules(paths)
+    assembly = _assembly_modules(paths, ownership, names)
     implementations = _declared_implementations(ownership, owners)
     _reexported_implementations(ownership, trees, owners, implementations)
     draft["modules"] = _modules((trees, paths), ownership, owners=owners, draft=draft,
-                                assembly=(main, implementations))
+                                assembly=(assembly, implementations))
     draft["interfaces"] = _interfaces(paths, owners, _public_contracts(trees, ownership, names),
-                                      main=main, implementations=implementations)
+                                      assembly=assembly, implementations=implementations)
 
 
 def contract_boundaries(root: Path, files: list[str], draft: dict[str, Any],

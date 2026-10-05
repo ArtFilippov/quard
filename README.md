@@ -50,9 +50,10 @@ modified. Correct files are left untouched. Fresh clones need only sync dependen
 and run check. No manual acceptance or routine `tach sync` is required. Only eligible
 source imports become exact dependency declarations; imports of private
 implementations and utilities outside their contract folder remain native Tach
-violations. Files anywhere under a production `main/` folder may assemble concrete
-implementations from multiple contract folders, including type-only imports. Other
-modules' utilities stay private. Free functions and assembly classes may live under
+violations. Files anywhere under a production `main/` folder or a direct contract
+`envelopes/` folder may assemble concrete implementations from any contract folder,
+including type-only imports and companion stubs. Other modules' utilities stay
+private. Free functions and assembly classes may live under
 `main/`; placement checks continue outside it. Folder violations remain visible to
 the independent checker. Malformed
 source and regeneration failures are configuration errors (exit 2).
