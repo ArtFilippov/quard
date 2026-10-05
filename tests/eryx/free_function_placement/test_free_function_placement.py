@@ -35,7 +35,6 @@ class TestFreeFunctionPlacement(unittest.TestCase):
         for path in ("tests/test_core_analyzers.py", "tests/discovery_utils.py",
                      "tests/offline_fixtures.py", "tests/offline_fixture_utils.py",
                      "tests/eryx/installation/installation_fixture_utils.py",
-                     "tests/eryx/afk_issue_runner/issue_fixture_utils.py",
                      "tests/eryx/free_function_placement/test_free_function_placement.py"):
             self.assertIn(path, paths)
         self.assertEqual(placement(ERYX, paths), ([], None))
@@ -76,7 +75,7 @@ class TestFreeFunctionPlacement(unittest.TestCase):
             suite = discovery_utils.load_tests(loader, unittest.TestSuite(), None)
         self.assertEqual(suite.countTestCases(), 0)
         groups = {Path(call.args[0]).name for call in discover.call_args_list}
-        self.assertTrue({"installation", "afk_issue_runner", "free_function_placement"}
+        self.assertTrue({"installation", "free_function_placement"}
                         <= groups)
         self.assertTrue(all(call.kwargs["pattern"] == "test*.py" and
                             call.kwargs["top_level_dir"] == call.args[0]

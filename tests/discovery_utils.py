@@ -25,7 +25,7 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
                   "constructor_analysis", "restricted_calls", "marker_analysis",
                   "restricted_targets", "check_job", "check_runner", "clean_architecture_layers",
                   "installation", "outer_classes", "architecture_compatibility",
-                  "architecture_draft", "afk_issue_runner", "report_parsing",
+                  "architecture_draft", "report_parsing",
                   "free_function_placement"):
         directory = root / group
         suite.addTests(loader.discover(str(directory), pattern="test*.py",

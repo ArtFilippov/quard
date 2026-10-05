@@ -218,10 +218,6 @@ module = "eryx.constructor_analysis.constructor_checker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.afk_issue_runner.shell_afk_issue_runner"
-name = "Domain"
-
-[[tool.clean-arch.layers]]
 module = "eryx.cohesion_analysis.cohesion_worker_utils"
 name = "Domain"
 
@@ -327,10 +323,6 @@ name = "Domain"
 
 [[tool.clean-arch.layers]]
 module = "eryx.outer_classes.parsed_outer_classes"
-name = "Domain"
-
-[[tool.clean-arch.layers]]
-module = "eryx.afk_issue_runner.afk_issue_runner"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
