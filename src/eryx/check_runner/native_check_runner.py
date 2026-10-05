@@ -19,6 +19,7 @@ from eryx._common import (SCHEMA, EryxError, capture, read_json,
 from eryx._reports import diagnostic, sorted_diagnostics
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
+from eryx.architecture_draft.generated_architecture_utils import generated, regenerate
 from eryx.check_runner.check_runner import CheckRunner
 from eryx.check_runner.runner_utils import (binary, execute_job, installed_versions,
                                              make_jobs, select_lcom_files)
@@ -123,17 +124,21 @@ class NativeCheckRunner(CheckRunner):
                 diagnostics.append(diagnostic("system", exc.code, str(exc),
                                               is_infrastructure_error=True))
             try:
-                marker = read_json(root / ".eryx/architecture.ready.json")
-                if not isinstance(marker, dict) or not marker.get("accepted"):
-                    raise EryxError("ARCHITECTURE_NOT_INITIALIZED",
-                                    "Architecture configuration has not been accepted.")
-                ConfiguredArchitectureDraft(root).validate()
+                if generated(root):
+                    _ = regenerate(root)
+                else:
+                    marker = read_json(root / ".eryx/architecture.ready.json")
+                    if not isinstance(marker, dict) or not marker.get("accepted"):
+                        raise EryxError("ARCHITECTURE_NOT_INITIALIZED",
+                                        "Architecture configuration has not been accepted.")
+                    ConfiguredArchitectureDraft(root).validate()
                 architecture_ready = True
             except EryxError as exc:
-                code = ("ARCHITECTURE_NOT_INITIALIZED"
-                        if not (root / ".eryx/architecture.ready.json").exists() else exc.code)
-                message = (str(exc) + " Run eryx/init_architecture.py, review tach.toml, "
-                           + "then run it with --accept.")
+                legacy = not (root / ".eryx/architecture.generated.json").exists()
+                code = ("ARCHITECTURE_NOT_INITIALIZED" if legacy and not (
+                    root / ".eryx/architecture.ready.json").exists() else exc.code)
+                message = str(exc) + (" Run eryx/init_architecture.py, review tach.toml, "
+                                      + "then run it with --accept." if legacy else "")
                 diagnostics.append(diagnostic("system", code, message,
                                               is_infrastructure_error=True))
             jobs = make_jobs(root, run_dir, files, architecture_ready,
@@ -151,8 +156,10 @@ class NativeCheckRunner(CheckRunner):
             if not architecture_ready:
                 for name in ("tach", "tach-external"):
                     results.append({"name": name, "tool": name, "status": "blocked",
-                                    "exit_code": None, "duration_seconds": 0,
-                                    "error": "ARCHITECTURE_NOT_INITIALIZED", "raw_output": {}})
+                                     "exit_code": None, "duration_seconds": 0,
+                                     "error": ("ARCHITECTURE_GENERATION_FAILED" if (
+                                         root / ".eryx/architecture.generated.json").exists()
+                                         else "ARCHITECTURE_NOT_INITIALIZED"), "raw_output": {}})
         except Exception as exc:
             diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"),
                                           str(exc), is_infrastructure_error=True))

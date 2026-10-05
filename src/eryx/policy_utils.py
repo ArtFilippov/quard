@@ -333,7 +333,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     if "pyright" in tool:
         outputs["pyrightconfig.json"] = json.dumps(tomllib.loads(rendered_project)["tool"]["pyright"], ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     tach_path = root / "tach.toml"
-    if tach_path.exists():
+    if tach_path.exists() and not (root / ".eryx/architecture.generated.json").exists():
         tach = tomlkit.parse(tach_path.read_text(encoding="utf-8"))
         tach["exclude"] = exclude_globs(scope) + ["tests/**"] + [f"**/{name}/**" for name in scope["test_directory_names"]]
         outputs["tach.toml"] = tomlkit.dumps(tach)

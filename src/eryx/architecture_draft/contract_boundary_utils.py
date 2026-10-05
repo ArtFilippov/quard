@@ -158,20 +158,22 @@ def _render_boundaries(trees: dict[str, ast.Module], ownership: FolderOwnership,
     draft["interfaces"] = _interfaces(paths, owners, _public_contracts(trees, ownership, names))
 
 
-def contract_boundaries(root: Path, files: list[str], draft: dict[str, Any]) -> None:
+def contract_boundaries(root: Path, files: list[str], draft: dict[str, Any],
+                        *, validate_ownership: bool = True) -> None:
     """Replace Tach boundaries with discovered contract-owned modules.
 
     Args:
         root (Path): Selected consumer root.
         files (list[str]): Discovered production source and stub paths.
         draft (dict[str, Any]): Convention-based draft to update in place.
+        validate_ownership (bool, default=True): Enforce folder placement in review drafts.
 
     Raises:
         EryxError: Source parsing or contract folder ownership failed.
     """
     trees = _trees(root, files)
     ownership = FolderOwnership(trees)
-    if (violations := ownership.folder_violations()):
+    if validate_ownership and (violations := ownership.folder_violations()):
         first = violations[0]
         raise EryxError("INVALID_CONTRACT_OWNERSHIP", f"{first['path']}: {first['message']}")
     _render_boundaries(trees, ownership, draft)

@@ -22,8 +22,8 @@ bash eryx/install.sh --project . --dry-run --json
 ```
 
 Reinstall with the same command after updating the gitlink. Project limits, scope,
-optional checks, reviewed architecture, native settings (including `ignored-parents`
-and `stubPath`), uv indexes, sources and metadata are retained. Missing native
+optional checks, existing reviewed architecture, and native settings (including
+`ignored-parents` and `stubPath`), uv indexes, sources and metadata are retained. Missing native
 sections are initialized; shared scope, numeric limits, plugin discovery and test
 profiles are regenerated.
 `pyrightconfig.json` takes precedence over `[tool.pyright]` on installation.
@@ -39,9 +39,23 @@ and virtual environment are not transactional: resync the restored lockfile if n
 Dry-run writes no consumer files; uv bootstrap may populate its external cache.
 Single projects are supported; uv workspaces and source symlinks are rejected.
 
-### Architecture: explicit review
+### Generated architecture
 
-Installation does **not** accept architecture. For a new project:
+On a new project without `tach.toml` or an accepted architecture marker, install
+selects Eryx-managed contract-only boundaries. Commit
+`.eryx/architecture.generated.json` and the installer's `/tach.toml` Git ignore
+rule. The root `tach.toml` is generated from discovered production files, local
+contracts and folder ownership; install, apply and check restore it when missing or
+modified. Correct files are left untouched. Fresh clones need only sync dependencies
+and run check. No manual acceptance or routine `tach sync` is required. Only eligible
+source imports become exact dependency declarations; imports of private
+implementations and utilities outside their contract folder remain native Tach
+violations. Folder violations remain visible to the independent checker. Malformed
+source and regeneration failures are configuration errors (exit 2).
+
+Existing consumer-owned Tach configurations remain on the reviewed-policy path:
+
+Installation does **not** accept reviewed architecture. For a reviewed project:
 
 ```bash
 uv run --locked --group dev python eryx/init_architecture.py --json
@@ -49,14 +63,14 @@ uv run --locked --group dev python eryx/init_architecture.py --json
 uv run --locked --group dev python eryx/init_architecture.py --accept --json
 ```
 
-Draft generation supports one package beneath `src/`, classifies conventional
+Legacy draft generation supports one package beneath `src/`, classifies conventional
 directory names and runs `tach sync` once. Existing multi-package configurations
 are supported and retained. `--force` explicitly replaces a draft. Current imports
 are not automatically approved. Acceptance records a reviewed configuration, not
 a violations baseline. After changing layers, repeat `--accept`; never sync before
-routine checks. A project without accepted architecture cannot pass.
+routine checks. A reviewed project without accepted architecture cannot pass.
 
-For a standalone consumer with local contracts in their required folders, opt in to
+For a legacy reviewable draft with local contracts in their required folders, use
 file-level contract-only Tach boundaries with
 `python eryx/init_architecture.py --contract-only --force --json`. Review the
 resulting `tach.toml`, then run the ordinary `--accept`. This draft uses discovered
@@ -217,7 +231,8 @@ consumer/
     readability.toml
     scope.toml
     checks.toml
-    architecture.ready.json
+    architecture.generated.json  # generated-policy selection on new installs
+    architecture.ready.json      # legacy reviewed-policy acceptance
     pylint-tests.toml
     pylint-catalog.json
     policy-notes.json
@@ -228,10 +243,11 @@ consumer/
   pyproject.toml           # native configs remain in their standard locations
   uv.lock
   pyrightconfig.json
-  tach.toml
+  tach.toml                # ignored when generated; committed when consumer-owned
 ```
 
-Commit `.gitmodules`, the Eryx gitlink, `.eryx/` settings and native configs.
+Commit `.gitmodules`, the Eryx gitlink, `.eryx/` settings and consumer-owned native
+configs. Generated `tach.toml` is ignored; commit its selection marker instead.
 Ignore only runtime directories, not `.eryx/` wholesale. Analyzer caches and logs
 are consumer-owned; uv retains its normal package cache. Tach may use `.tach/` in
 the consumer. A normal install/check/apply/accept leaves the tool checkout clean.

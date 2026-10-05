@@ -11,12 +11,15 @@ git submodule update --init --recursive
 uv sync --locked --group dev
 uv run --locked --group dev python eryx/check.py
 uv run --locked --group dev python eryx/apply.py --json
-uv run --locked --group dev python eryx/init_architecture.py --accept --json
+uv run --locked --group dev python eryx/init_architecture.py --accept --json  # reviewed configurations only
 ```
 
-Architecture acceptance follows explicit review of `tach.toml`; first generate a
-draft with `init_architecture.py --json` only for an uninitialized project.
-Edit readability/scope in `.eryx/`; native configs remain consumer-owned. Every
+Fresh installs select generated contract-only architecture: commit
+`.eryx/architecture.generated.json` and the installer-added `/tach.toml` ignore
+rule. Install/apply/check regenerate root `tach.toml` from source without syncing
+or accepting imports. Existing reviewed configurations keep explicit acceptance;
+use `init_architecture.py` for that flow. Edit readability/scope in `.eryx/`;
+other native configs remain consumer-owned. Every
 entry point accepts `--project`, defaulting to the current working directory.
 Keep Eryx code, pins, defaults and schema independent from the consumer root.
 

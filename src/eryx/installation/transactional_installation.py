@@ -11,6 +11,7 @@ from typing import Any, override
 from eryx._common import (EryxError, atomic_write, load_toml, read_json,
                           require_runtime, safe_target, write_json)
 from eryx.installation.installation import Installation
+from eryx.architecture_draft.generated_architecture_utils import select
 
 
 class TransactionalInstallation(Installation):
@@ -64,6 +65,7 @@ class TransactionalInstallation(Installation):
                 print("Installing Eryx configuration and exact dev dependencies...",
                       file=sys.stderr)
             entry.initialize_state(root, tool)
+            _ = select(root)
             from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
             policy = ConfiguredConsumerPolicy(root)
             policy.constructor_purity()
@@ -92,7 +94,8 @@ class TransactionalInstallation(Installation):
             old_ignore = ignore_path.read_text(encoding="utf-8") if ignore_path.exists() else ""
             additions = [line for line in (
                 "/.eryx/reports/", "/.eryx/logs/", "/.eryx/cache/", "/.tach/",
-            ) if line not in old_ignore.splitlines()]
+                "/tach.toml" if (root / ".eryx/architecture.generated.json").exists() else "",
+            ) if line and line not in old_ignore.splitlines()]
             if additions:
                 atomic_write(ignore_path, old_ignore.rstrip("\n")
                              + ("\n" if old_ignore else "")
@@ -105,7 +108,8 @@ class TransactionalInstallation(Installation):
                 "extras": selected_extras, "dependencies": specs, "source_layout": "src",
                 "mode": "strict",
                 "architecture_initialization_required": not (
-                    marker.exists() and read_json(marker).get("accepted")),
+                    (root / ".eryx/architecture.generated.json").exists()
+                    or (marker.exists() and read_json(marker).get("accepted"))),
             }
             write_json(root / ".eryx/installation.json", installation, root)
             modified = [name for name, old in saved.items()
@@ -118,7 +122,10 @@ class TransactionalInstallation(Installation):
                     "architecture_initialization_required"],
                 "instructions": str(tool / "README.md"),
                 "agent_instructions": str(tool / "AGENTS.md"),
-                "next_command": "uv run --locked --group dev python eryx/init_architecture.py",
+                "next_command": ("uv run --locked --group dev python eryx/check.py"
+                                 if not installation["architecture_initialization_required"]
+                                 else "uv run --locked --group dev python "
+                                 + "eryx/init_architecture.py"),
                 "exit_code": 0,
             }
         except BaseException as exc:

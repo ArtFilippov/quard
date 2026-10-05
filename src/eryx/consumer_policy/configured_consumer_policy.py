@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, override
 
 from eryx import _policy
+from eryx.architecture_draft.generated_architecture_utils import generated, regenerate
 from eryx.consumer_policy.consumer_policy import ConsumerPolicy
 
 
@@ -38,7 +39,11 @@ class ConfiguredConsumerPolicy(ConsumerPolicy):
     @override
     def apply(self, *, initial: bool = False, plugins: list[str] | None = None,
               catalog: dict[str, Any] | None = None) -> list[str]:
-        return _policy.configure(self._root, initial=initial, plugins=plugins, catalog=catalog)
+        managed = generated(self._root)
+        changed = _policy.configure(self._root, initial=initial, plugins=plugins, catalog=catalog)
+        if managed and regenerate(self._root):
+            changed.append("tach.toml")
+        return changed
 
     @override
     def limit_drift(self) -> list[str]:

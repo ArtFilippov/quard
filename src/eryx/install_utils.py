@@ -20,6 +20,7 @@ from eryx.installation.transactional_installation import TransactionalInstallati
 __all__ = ["capture", "require_runtime", "write_json"]
 
 STATE_FILES = ["readability.toml", "scope.toml", "checks.toml", "architecture.ready.json",
+               "architecture.generated.json",
                "pylint-catalog.json", "pylint-tests.toml", "policy-notes.json", "installation.json"]
 
 

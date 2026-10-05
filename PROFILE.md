@@ -2,7 +2,8 @@
 
 Eryx 1.0.0 preserves the original strict profile. Exact tool pins live in
 `tools.json`; top-level versions are verified on every check. Consumers control
-their native configs; there is no hash-based anti-edit system or hidden baseline.
+their native configs except generated contract-only `tach.toml`; there is no hidden
+violations baseline.
 
 ## Tools and scope
 
@@ -598,14 +599,18 @@ Unknown folders start as provisional Domain. Review them explicitly. Default
 package exports are `api.py` and its public symbols, not all implementation.
 Tach's public import surface and typing.Protocol are distinct contracts.
 
-The optional `init_architecture.py --contract-only` draft creates an explicit Tach
+New installations without existing Tach architecture select a generated contract-only
+root `tach.toml`. The tracked marker is `.eryx/architecture.generated.json`; the
+root config is ignored and restored by install, apply and check. Existing reviewed
+configurations remain consumer-owned. The optional legacy
+`init_architecture.py --contract-only` draft creates an explicit Tach
 module for each discovered production file or package, including nested folders and
 stubs. It exposes verified local contract names and their package re-exports only;
 implementation and class-free utility modules have no public surface outside their
 owning contract folder. Dependency declarations are limited to observed imports
 between the same contract owner or imports of verified contracts. Exact mode and
-layer prohibitions remain active. Review and accept this draft explicitly; ordinary
-drafts and existing consumer configurations retain their prior policy.
+layer prohibitions remain active. Generated policy needs no review or acceptance;
+the legacy draft still does. Existing consumer configurations retain their policy.
 
 ## Limitations
 

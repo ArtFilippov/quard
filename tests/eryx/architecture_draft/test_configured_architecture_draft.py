@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from importlib import import_module
 import sys
 from tempfile import TemporaryDirectory
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, override
 import unittest
 from unittest.mock import patch
 
@@ -15,9 +16,24 @@ ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
 sys.path.insert(0, str(ERYX / "tests"))
 
-from eryx._common import EryxError, load_toml, read_json, write_json
+from eryx._common import EryxError, capture, load_toml, read_json, write_json
 from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
-from offline_fixtures import create_repo, native_result
+from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
+
+if TYPE_CHECKING:
+    from eryx.architecture_draft.generated_architecture_utils import generated, regenerate
+    from eryx.check_runner.native_check_runner import NativeCheckRunner
+    from eryx.installation.transactional_installation import TransactionalInstallation
+    from eryx import apply_utils, install as entry
+else:
+    generated_policy = import_module("eryx.architecture_draft.generated_architecture_utils")
+    generated = generated_policy.generated
+    regenerate = generated_policy.regenerate
+    NativeCheckRunner = import_module("eryx.check_runner.native_check_runner").NativeCheckRunner
+    TransactionalInstallation = import_module(
+        "eryx.installation.transactional_installation").TransactionalInstallation
+    apply_utils = import_module("eryx.apply_utils")
+    entry = import_module("eryx.install")
 
 
 class TestConfiguredArchitectureDraft(unittest.TestCase):
@@ -184,3 +200,117 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             self.assertEqual(init_architecture.main(), 0)
         self.assertEqual(event.call_args.args, ("review_required",))
         self.assertEqual(event.call_args.kwargs["exit_code"], 0)
+
+    def generated_fixture(self) -> Path:
+        root = self.root
+        (root / "tach.toml").unlink()
+        (root / ".eryx/architecture.ready.json").unlink()
+        port = root / "src/demo/port"
+        port.mkdir()
+        (port / "port.py").write_text(
+            "from typing import Protocol\nclass Port(Protocol):\n"
+            + "    def send(self) -> None: ...\n", encoding="utf-8")
+        (port / "impl.py").write_text(
+            "from demo.port.port import Port\nclass Impl(Port):\n"
+            + "    def send(self) -> None: pass\n", encoding="utf-8")
+        (root / "src/demo/client.py").write_text(
+            "from demo.port.port import Port\n", encoding="utf-8")
+        return root
+
+    def install_generated_fixture(self, root: Path) -> dict[str, Any]:
+        policy = import_module("eryx.consumer_policy.configured_consumer_policy")
+
+        def fake_uv(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if "_audit.py" in " ".join(argv):
+                policy.ConfiguredConsumerPolicy(cwd).apply(
+                    initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
+                write_json(cwd / ".eryx/logs/install-probes/result.json",
+                           {"versions": {}, "smoke_tests": {"native": "mocked"}})
+            return native_result(argv)
+
+        with patch.object(entry, "capture", fake_uv):
+            return TransactionalInstallation(entry).install(root, ERYX, progress=False)
+
+    def generated_report(self, root: Path) -> dict[str, Any]:
+        fake, _ = fake_tools()
+
+        def real_tach(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if "_tach_worker.py" in " ".join(argv):
+                return capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
+            return {}, []
+
+        return NativeCheckRunner().run(root, capture_fn=real_tach, versions_fn=versions)
+
+    def test_generated_install_apply_check_and_external_project(self):
+        root = self.generated_fixture()
+        original_tool = (ERYX / "tach.toml").read_bytes()
+        installed = self.install_generated_fixture(root)
+        self.assertFalse(installed["architecture_initialization_required"])
+        self.assertTrue(generated(root))
+        self.assertIn("/tach.toml", (root / ".gitignore").read_text().splitlines())
+        path = root / "tach.toml"
+        expected = path.read_bytes()
+        self.assertFalse(regenerate(root))
+        self.assertEqual(path.read_bytes(), expected)
+        path.write_text("exact = false\n")
+        with patch.object(sys, "argv", ["apply.py", "--project", str(root), "--json"]):
+            self.assertEqual(apply_utils.main(), 0)
+        self.assertEqual(path.read_bytes(), expected)
+        path.unlink()
+        report = self.generated_report(root)
+        self.assertEqual(path.read_bytes(), expected)
+        self.assertEqual(next(job for job in report["tools"] if job["name"] == "tach")
+                         ["status"], "passed", report["diagnostics"])
+        self.assertEqual(report["exit_code"], 0, report["diagnostics"])
+        self.assertEqual((ERYX / "tach.toml").read_bytes(), original_tool)
+        self.assertEqual(self.install_generated_fixture(root)["modified_files"], [])
+
+    def test_generated_forbidden_imports_keep_real_tach_failure(self):
+        root = self.generated_fixture()
+        self.install_generated_fixture(root)
+        path = root / "tach.toml"
+        client = root / "src/demo/client.py"
+        client.write_text(client.read_text() + "from demo.port.impl import Impl\n",
+                          encoding="utf-8")
+        path.write_text(path.read_text() + "\n# tampered\n")
+        report = self.generated_report(root)
+        module = next(item for item in load_toml(path)["modules"]
+                      if item["path"] == "demo.client")
+        self.assertEqual(module["depends_on"], ["demo.port.port"])
+        self.assertNotIn("tampered", path.read_text())
+        self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+        tach = next(job for job in report["tools"] if job["name"] == "tach")
+        self.assertEqual((tach["status"], tach["exit_code"]), ("violations", 1))
+        self.assertTrue(any(d["tool"] == "tach" and d["path"] == "src/demo/client.py"
+                            for d in report["diagnostics"]), report["diagnostics"])
+        self.assertEqual(read_json(root / ".eryx/reports/latest.json")["exit_code"], 1)
+
+    def test_generated_native_error_is_not_mistaken_for_success(self):
+        root = self.generated_fixture()
+        self.install_generated_fixture(root)
+        fake, _ = fake_tools({"tach": {"stdout": "native Tach failed", "code": 2},
+                              "pydoclint": {"stderr": (
+                                  "src/demo/domain/api.py:1: DOC101: Native issue\n"), "code": 1}})
+        def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
+            return {}, []
+
+        report = NativeCheckRunner().run(root, capture_fn=fake, versions_fn=versions)
+        self.assertEqual(report["exit_code"], 2)
+        self.assertEqual(next(job for job in report["tools"] if job["name"] == "tach")
+                         ["status"], "error")
+        self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
+        self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]))
+
+    def test_generated_install_preserves_reviewed_configuration(self):
+        root = self.generated_fixture()
+        path = root / "tach.toml"
+        config, _ = ConfiguredArchitectureDraft(root).draft()
+        serialize = getattr(tomlkit, "dumps")
+        path.write_text("# owned by consumer\n" + serialize(config))
+        self.install_generated_fixture(root)
+        self.assertFalse(generated(root))
+        self.assertNotIn("/tach.toml", (root / ".gitignore").read_text())
+        self.assertTrue(path.read_text().startswith("# owned by consumer\n"))

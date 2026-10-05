@@ -11,14 +11,14 @@ import tomlkit
 
 from eryx._common import (EryxError, atomic_write, capture, load_toml, read_json,
                           tool_binary, tool_dir, write_json)
-from eryx._policy import ALLOWED_LAYERS, LAYER_DIRS, LAYERS, exclude_globs
+from eryx._policy import (ALLOWED_LAYERS, LAYER_DIRS, LAYERS, configure, discover_files,
+                          exclude_globs, read_scope)
 from eryx._reports import normalize
 from eryx.architecture_draft.architecture_draft import ArchitectureDraft
 from eryx.architecture_draft.contract_boundary_utils import contract_boundaries
 from eryx.clean_architecture_layers.configured_clean_architecture_layers import (
     ConfiguredCleanArchitectureLayers,
 )
-from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 
 
 class ConfiguredArchitectureDraft(ArchitectureDraft):
@@ -34,7 +34,7 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
 
     @override
     def package_name(self) -> str:
-        files = ConfiguredConsumerPolicy(self._root).files()["production"]
+        files = discover_files(self._root, read_scope(self._root))["production"]
         names = {Path(path).parts[1] for path in files if len(Path(path).parts) > 2}
         direct = [path for path in files if len(Path(path).parts) == 2]
         if direct or len(names) != 1:
@@ -47,10 +47,10 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
         return name
 
     @override
-    def draft(self, *, contract_only: bool = False) -> tuple[dict[str, Any], list[str]]:
-        policy = ConfiguredConsumerPolicy(self._root)
-        scope = policy.scope()
-        files = policy.files()["production"]
+    def draft(self, *, contract_only: bool = False,
+              validate_ownership: bool = True) -> tuple[dict[str, Any], list[str]]:
+        scope = read_scope(self._root)
+        files = discover_files(self._root, scope)["production"]
         # Infer only conventional directory labels, never communities from a graph.
         modules: dict[str, str] = {self.package_name(): "Domain"}
         notes: list[str] = []
@@ -95,11 +95,12 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
                      + "only. Write actual allowed exports in tach.toml.")
         notes.append("tach sync records current imports, including undesirable ones. "
                      + "cannot_depend_on and layer checks remain active.")
-        return self._contract_draft(config, files) if contract_only else (config, notes)
+        return (self._contract_draft(config, files, validate_ownership=validate_ownership)
+                if contract_only else (config, notes))
 
-    def _contract_draft(self, config: dict[str, Any], files: list[str]
-                        ) -> tuple[dict[str, Any], list[str]]:
-        contract_boundaries(self._root, files, config)
+    def _contract_draft(self, config: dict[str, Any], files: list[str], *, validate_ownership: bool
+                         ) -> tuple[dict[str, Any], list[str]]:
+        contract_boundaries(self._root, files, config, validate_ownership=validate_ownership)
         return config, ["Contract-only boundaries come from discovered local contracts and " +
                         "folder ownership. Review tach.toml before acceptance; " +
                         "do not run tach sync."]
@@ -161,7 +162,7 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
                 raise EryxError("TACH_CONFIG_OR_EXECUTION_ERROR",
                                 f"Cannot validate Tach config. See {raw.relative_to(root)}.")
             ConfiguredCleanArchitectureLayers().sync(root, config)
-            ConfiguredConsumerPolicy(root).apply()
+            _ = configure(root)
             write_json(ready, {
                 "accepted": True, "modules": len(config["modules"]),
                 "note": "Acceptance of architecture configuration, NOT a violations baseline.",
@@ -200,7 +201,7 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
                                 + "until corrected.")
         config = load_toml(path)
         ConfiguredCleanArchitectureLayers().sync(root, config)
-        ConfiguredConsumerPolicy(root).apply()
+        _ = configure(root)
         return "review_required", {
             "configuration": "tach.toml", "notes": notes,
             "next_command": "uv run --locked --group dev python eryx/init_architecture.py --accept",
