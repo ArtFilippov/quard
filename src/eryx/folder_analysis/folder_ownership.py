@@ -11,6 +11,8 @@ from eryx.folder_analysis.folder_analysis import FolderAnalysis
 from eryx.folder_analysis.folder_utils import analyze, main, snake_case
 
 __all__ = ["FolderOwnership", "analyze", "main", "snake_case"]
+SOURCE_ROOT = "src"
+MAIN_FOLDER = "main"
 
 
 class FolderOwnership(Contracts, FolderAnalysis):
@@ -142,6 +144,9 @@ class FolderOwnership(Contracts, FolderAnalysis):
                                     "message": f"{name}: declare this contract in "
                                     f"'{expected}/{expected}{current.suffix}' (folder and module "
                                     "must match the contract name)."})
+                continue
+            if current.parts[0] == SOURCE_ROOT and MAIN_FOLDER in current.parts[2:-1]:
+                # Assembly classes can combine multiple local implementations here.
                 continue
             local_bases = [self.resolved(name, base, path) for base in node.bases]
             concrete_bases = [base for base in local_bases

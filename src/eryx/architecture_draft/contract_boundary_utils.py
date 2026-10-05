@@ -14,6 +14,7 @@ from eryx.folder_analysis.folder_ownership import FolderOwnership
 
 PACKAGE_FILE = "__init__"
 STUB_SUFFIX = ".pyi"
+MAIN_FOLDER = "main"
 
 
 def _trees(root: Path, files: list[str]) -> dict[str, ast.Module]:
@@ -94,16 +95,68 @@ def _destination(path: str, paths: dict[str, str]) -> str | None:
                  if path == module or path.startswith(module + ".")), None)
 
 
-def _dependencies(name: str, *, trees: dict[str, ast.Module], paths: dict[str, str],
-                  ownership: FolderOwnership, owners: dict[str, str]) -> list[str]:
+def _main_modules(paths: dict[str, str]) -> set[str]:
+    return {name for name, path in paths.items() if MAIN_FOLDER in Path(path).parts[2:-1]}
+
+
+def _declared_implementations(ownership: FolderOwnership, owners: dict[str, str]
+                              ) -> dict[str, set[str]]:
+    implementations: dict[str, set[str]] = {}
+    for name, node, path in ownership.all_declarations():
+        module = module_name(path)
+        if ownership.is_contract(name) or module not in owners:
+            continue
+        if Path(path).stem.endswith("_utils") or name.rpartition(".")[0] != module:
+            continue
+        if ownership.owners(name, source=(node, path))[0]:
+            implementations.setdefault(module, set()).add(node.name)
+    return implementations
+
+
+def _package_implementations(ownership: FolderOwnership, tree: ast.Module, module: str,
+                             implementations: dict[str, set[str]]) -> set[str]:
+    exports: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            symbol = alias.asname or alias.name
+            source, _, concrete = ownership.provenance(f"{module}.{symbol}").rpartition(".")
+            if concrete in implementations.get(source, set()):
+                exports.add(symbol)
+    return exports
+
+
+def _reexported_implementations(ownership: FolderOwnership, trees: dict[str, ast.Module],
+                                owners: dict[str, str], implementations: dict[str, set[str]]
+                                ) -> None:
+    for path, tree in trees.items():
+        if Path(path).stem != PACKAGE_FILE:
+            continue
+        if Path(path).suffix == STUB_SUFFIX and str(Path(path).with_suffix(".py")) in trees:
+            continue
+        if (module := module_name(path)) not in owners:
+            continue
+        if exported := _package_implementations(ownership, tree, module, implementations):
+            implementations.setdefault(module, set()).update(exported)
+
+
+def _dependencies(name: str, sources: tuple[dict[str, ast.Module], dict[str, str]],
+                  ownership: FolderOwnership, *, owners: dict[str, str],
+                  assembly: tuple[set[str], dict[str, set[str]]]) -> list[str]:
     allowed: set[str] = set()
-    for target in _imports(name, paths[name], trees[paths[name]]):
+    if Path(sources[1][name]).suffix == STUB_SUFFIX:
+        return []  # Tach checks source imports, not imports found only in stubs.
+    for target in _imports(name, sources[1][name], sources[0][sources[1][name]]):
         resolved = ownership.provenance(target)
-        destination = _destination(target, paths) or _destination(resolved, paths)
+        destination = _destination(target, sources[1]) or _destination(resolved, sources[1])
         if destination is None or destination == name:
             continue
+        assembles = (name in assembly[0] and (destination in assembly[0]
+                     or resolved == destination and destination in assembly[1]
+                     or resolved.rpartition(".")[2] in assembly[1].get(destination, set())))
         if ((owners.get(name) is not None and owners.get(name) == owners.get(destination))
-                or ownership.is_contract(resolved)):
+                or ownership.is_contract(resolved) or assembles):
             allowed.add(destination)
     return sorted(allowed)
 
@@ -116,28 +169,35 @@ def _layer(name: str, layers: dict[str, str]) -> str:
     return layers[parent] if parent else "Domain"
 
 
-def _modules(paths: dict[str, str], *, trees: dict[str, ast.Module],
-             ownership: FolderOwnership, owners: dict[str, str],
-             draft: dict[str, Any]) -> list[dict[str, Any]]:
+def _modules(sources: tuple[dict[str, ast.Module], dict[str, str]],
+             ownership: FolderOwnership, *, owners: dict[str, str],
+             draft: dict[str, Any], assembly: tuple[set[str], dict[str, set[str]]]
+             ) -> list[dict[str, Any]]:
     layers = {module["path"]: module["layer"] for module in draft["modules"]}
     modules: list[dict[str, Any]] = []
-    for name in sorted(paths):
-        layer = _layer(name, layers)
-        forbidden = [other for other in sorted(paths) if other != name
-                     and _layer(other, layers) not in ALLOWED_LAYERS[layer]]
+    for name in sorted(sources[1]):
+        layer = "Bootstrap" if name in assembly[0] else _layer(name, layers)
+        forbidden = [other for other in sorted(sources[1]) if other != name
+                     and ("Bootstrap" if other in assembly[0] else _layer(other, layers))
+                     not in ALLOWED_LAYERS[layer]]
         modules.append({"path": name, "layer": layer, "cannot_depend_on": forbidden,
-                        "depends_on": _dependencies(name, trees=trees, paths=paths,
-                                                    ownership=ownership, owners=owners)})
+                        "depends_on": _dependencies(name, sources, ownership,
+                                                    owners=owners, assembly=assembly)})
     return modules
 
 
-def _interfaces(paths: dict[str, str], owners: dict[str, str], public: dict[str, set[str]]
-                ) -> list[dict[str, Any]]:
+def _interfaces(paths: dict[str, str], owners: dict[str, str], public: dict[str, set[str]],
+                *, main: set[str], implementations: dict[str, set[str]]
+                 ) -> list[dict[str, Any]]:
     interfaces: list[dict[str, Any]] = []
     for name in sorted(paths):
         source = ["^" + re.escape(name) + "$"]
         interfaces.append({"from": source, "expose": ["^" + re.escape(symbol) + "$"
-                                                   for symbol in sorted(public.get(name, set()))]})
+                                                    for symbol in sorted(public.get(name, set()))]})
+        if main and implementations.get(name):
+            interfaces.append({"from": source, "visibility": sorted(main),
+                               "exclusive": True, "expose": ["^" + re.escape(symbol) + "$"
+                               for symbol in sorted(implementations[name])]})
         peers = sorted(peer for peer, owner in owners.items() if peer != name
                        and owner == owners[name]) if name in owners else []
         if peers:
@@ -153,9 +213,13 @@ def _render_boundaries(trees: dict[str, ast.Module], ownership: FolderOwnership,
         _ = paths.setdefault(module_name(path), path)
     names = {name for name, _, _ in ownership.all_declarations() if ownership.is_contract(name)}
     owners = _owners(paths, ownership, names)
-    draft["modules"] = _modules(paths, trees=trees, ownership=ownership,
-                                owners=owners, draft=draft)
-    draft["interfaces"] = _interfaces(paths, owners, _public_contracts(trees, ownership, names))
+    main = _main_modules(paths)
+    implementations = _declared_implementations(ownership, owners)
+    _reexported_implementations(ownership, trees, owners, implementations)
+    draft["modules"] = _modules((trees, paths), ownership, owners=owners, draft=draft,
+                                assembly=(main, implementations))
+    draft["interfaces"] = _interfaces(paths, owners, _public_contracts(trees, ownership, names),
+                                      main=main, implementations=implementations)
 
 
 def contract_boundaries(root: Path, files: list[str], draft: dict[str, Any],

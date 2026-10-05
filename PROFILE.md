@@ -105,7 +105,11 @@ violations baseline.
   `tests/`; source and stubs may each declare the same class in companion files.
   This checks static structure and inheritance, not runtime delegation or composition.
   The independent outer-class and class-contract jobs still check these files.
-  This job scans discovered `.py` and `.pyi` files independently of LCOM4 selection,
+  Production assembly classes under any `main/` folder (including nested files and
+  stubs) may combine implementations from several contract folders; contract
+  declarations there still require their normal contract folder. Other production
+  files and test files retain placement checks. This job scans discovered `.py` and
+  `.pyi` files independently of LCOM4 selection,
   resolves aliases and imports through the class-contract index, and prefers source
   ancestry when a companion stub exists. Parse and worker failures are infrastructure
   errors; all structural violations retain one-based class positions.
@@ -128,6 +132,7 @@ violations baseline.
   a class-free module named `<group_name>_utils.py` (or its `.pyi` companion), with
   a nonempty group name describing their shared purpose. Related functions can
   share a module; source and stub companions are each checked on their own.
+  Production files under any `main/` folder may declare assembly functions.
   Declarations in module-scope conditional suites count; methods and functions nested inside another
   function do not. `UTILITIES_MODULE_CLASS` reports each class declared anywhere in
   a utilities module, including nested classes. If a utilities module declares a
@@ -605,11 +610,13 @@ root config is ignored and restored by install, apply and check. Existing review
 configurations remain consumer-owned. The optional legacy
 `init_architecture.py --contract-only` draft creates an explicit Tach
 module for each discovered production file or package, including nested folders and
-stubs. It exposes verified local contract names and their package re-exports only;
-implementation and class-free utility modules have no public surface outside their
-owning contract folder. Dependency declarations are limited to observed imports
-between the same contract owner or imports of verified contracts. Exact mode and
-layer prohibitions remain active. Generated policy needs no review or acceptance;
+stubs. It exposes verified local contracts to ordinary modules; files anywhere under
+a production `main/` folder may also import concrete implementation classes from
+multiple contract folders. Other modules' utilities remain private. Dependency
+declarations are limited to observed eligible source imports, including type-checking
+imports; stub-only imports do not create unused Tach dependencies. `main/` files use
+Bootstrap layers. Exact mode and layer prohibitions remain active. Generated policy
+needs no review or acceptance;
 the legacy draft still does. Existing consumer configurations retain their policy.
 
 ## Limitations

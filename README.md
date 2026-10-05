@@ -50,7 +50,11 @@ modified. Correct files are left untouched. Fresh clones need only sync dependen
 and run check. No manual acceptance or routine `tach sync` is required. Only eligible
 source imports become exact dependency declarations; imports of private
 implementations and utilities outside their contract folder remain native Tach
-violations. Folder violations remain visible to the independent checker. Malformed
+violations. Files anywhere under a production `main/` folder may assemble concrete
+implementations from multiple contract folders, including type-only imports. Other
+modules' utilities stay private. Free functions and assembly classes may live under
+`main/`; placement checks continue outside it. Folder violations remain visible to
+the independent checker. Malformed
 source and regeneration failures are configuration errors (exit 2).
 
 Existing consumer-owned Tach configurations remain on the reviewed-policy path:

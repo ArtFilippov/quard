@@ -1,6 +1,7 @@
 """Real Tach regressions for the opt-in, consumer-owned contract boundary draft."""
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
@@ -12,10 +13,14 @@ import unittest
 import tomlkit
 
 if TYPE_CHECKING:
-    from eryx._common import EryxError, load_toml
+    from eryx._common import EryxError, capture, load_toml, write_json
+    from eryx.architecture_draft.generated_architecture_utils import IDENTITY
     from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
+    from eryx.check_runner.native_check_runner import NativeCheckRunner
+    from eryx.folder_analysis.folder_ownership import FolderOwnership
+    from eryx.free_function_placement_utils import analyze as free_functions
     from eryx.tach_worker_utils import run
-    from offline_fixtures import create_repo
+    from offline_fixtures import create_repo, fake_tools
 
 ERYX = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ERYX / "src"))
@@ -24,11 +29,18 @@ sys.path.insert(0, str(ERYX / "tests"))
 if not TYPE_CHECKING:
     common = import_module("eryx._common")
     EryxError = common.EryxError
+    capture = common.capture
     load_toml = common.load_toml
+    write_json = common.write_json
+    IDENTITY = import_module("eryx.architecture_draft.generated_architecture_utils").IDENTITY
     ConfiguredArchitectureDraft = import_module(
         "eryx.architecture_draft.configured_architecture_draft").ConfiguredArchitectureDraft
     run = import_module("eryx.tach_worker_utils").run
     create_repo = import_module("offline_fixtures").create_repo
+    fake_tools = import_module("offline_fixtures").fake_tools
+    FolderOwnership = import_module("eryx.folder_analysis.folder_ownership").FolderOwnership
+    free_functions = import_module("eryx.free_function_placement_utils").analyze
+    NativeCheckRunner = import_module("eryx.check_runner.native_check_runner").NativeCheckRunner
 
 
 class TestArchitectureDraft(unittest.TestCase):
@@ -126,6 +138,132 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertFalse((root / ".eryx/architecture.ready.json").exists())
             self.assertFalse((root / ".eryx/logs/init-sync.log").exists())
             self.assertEqual(load_toml(root / "tach.toml")["exact"], True)
+
+    def main_fixture(self, root: Path) -> tuple[Path, Path, Path]:
+        create_repo(root, ready=False)
+        write_json(root / ".eryx/architecture.generated.json", IDENTITY)
+        (root / "src/demo/domain/api.py").write_text("")
+        (root / "tests/test_value.py").write_text("")
+        pkg = root / "src/demo"
+        for label in ("reader", "writer"):
+            folder = pkg / label
+            folder.mkdir()
+            contract = label.capitalize()
+            (folder / f"{label}.py").write_text(
+                f"from typing import Protocol\nclass {contract}(Protocol): pass\n")
+            (folder / "impl.py").write_text(
+                f"from demo.{label}.{label} import {contract}\n" +
+                f"class {contract}Impl({contract}): pass\n")
+            (folder / "__init__.py").write_text(
+                f"from demo.{label}.impl import {contract}Impl\n" +
+                ("from demo.writer.private_utils import helper\n" if label == "writer" else ""))
+            (folder / "private_utils.py").write_text("def helper(): pass\n")
+        main = pkg / "main/nested"
+        main.mkdir(parents=True)
+        (main / "assembly.py").write_text(
+            "from demo.reader.impl import ReaderImpl\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "class Assembly(ReaderImpl, WriterImpl): pass\n" +
+            "def assemble(reader: ReaderImpl) -> WriterImpl: return WriterImpl()\n")
+        (main / "types.pyi").write_text(
+            "from demo.reader.impl import ReaderImpl\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "def assemble(reader: ReaderImpl) -> WriterImpl: ...\n")
+        (main / "typed.py").write_text(
+            "from typing import TYPE_CHECKING\n" +
+            "if TYPE_CHECKING:\n    from demo.reader.impl import ReaderImpl\n")
+        (main / "modules.py").write_text("import demo.reader.impl\n")
+        (main / "exports.py").write_text("from demo.reader import ReaderImpl\n")
+        client = pkg / "client.py"
+        client.write_text("from demo.reader.reader import Reader\n")
+        return pkg, main, client
+
+    def main_check(self, root: Path) -> dict[str, Any]:
+        config, _ = ConfiguredArchitectureDraft(root).draft(
+            contract_only=True, validate_ownership=False)
+        self.write_config(root, config)
+        self.assertTrue(config["exact"])
+        self.assertFalse(config["ignore_type_checking_imports"])
+        return run("check", root)
+
+    def test_main_folder_assembles_multiple_implementations_with_native_checks(self):
+        with TemporaryDirectory(prefix="eryx-main-assembly-") as directory:
+            root = Path(directory)
+            _, main, client = self.main_fixture(root)
+            self.assertEqual(self.main_check(root)["exit_code"], 0)
+            fake, _ = fake_tools()
+
+            def real_boundaries(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+                if any(script in " ".join(argv) for script in (
+                    "_tach_worker.py", "_contract_folders_worker.py",
+                    "_free_function_placement_worker.py")):
+                    return capture(argv, cwd, timeout)
+                return fake(argv, cwd, timeout)
+
+            def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
+                return {}, []
+
+            report = NativeCheckRunner().run(root, capture_fn=real_boundaries,
+                                             versions_fn=versions)
+            self.assertEqual(report["exit_code"], 0, report["diagnostics"])
+            self.assertTrue(all(job["status"] == "passed" for job in report["tools"]
+                                if job["name"] in {"tach", "contract-folders",
+                                                   "free-function-placement"}))
+            client.write_text(client.read_text() + "from demo.reader.impl import ReaderImpl\n")
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/client.py"
+                                for item in rejected["diagnostics"]), rejected)
+            client.write_text("from demo.reader import ReaderImpl\n")
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/client.py"
+                                for item in rejected["diagnostics"]), rejected)
+            client.write_text("from demo.reader.reader import Reader\n")
+            (main / "assembly.py").write_text(
+                (main / "assembly.py").read_text() +
+                "from demo.writer.private_utils import helper\n")
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/main/nested/assembly.py"
+                                for item in rejected["diagnostics"]), rejected)
+            (main / "assembly.py").write_text(
+                (main / "assembly.py").read_text().replace(
+                    "from demo.writer.private_utils import helper\n",
+                    "from demo.writer import helper\n"))
+            rejected = self.main_check(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == "src/demo/main/nested/assembly.py"
+                                for item in rejected["diagnostics"]), rejected)
+
+    def test_main_placement_keeps_outside_diagnostics(self):
+        with TemporaryDirectory(prefix="eryx-main-placement-") as directory:
+            root = Path(directory)
+            pkg, _, _ = self.main_fixture(root)
+            (pkg / "outside.py").write_text(
+                "from demo.reader.impl import ReaderImpl\n" +
+                "class Misplaced(ReaderImpl): pass\n" +
+                "def misplaced(): pass\n")
+            paths = [str(path.relative_to(root)) for path in pkg.rglob("*.py")]
+            stub_paths = [str(path.relative_to(root)) for path in pkg.rglob("*.pyi")]
+            trees = {path: ast.parse((root / path).read_text()) for path in paths}
+            folder_rules = {(item["path"], item["rule"])
+                            for item in FolderOwnership(trees).folder_violations()}
+            self.assertIn(("src/demo/outside.py", "IMPLEMENTATION_FOLDER"), folder_rules)
+            self.assertNotIn(("src/demo/main/nested/assembly.py", "COMPETING_LOCAL_BASES"),
+                             folder_rules)
+            placements, error = free_functions(root, paths + stub_paths)
+            self.assertIsNone(error)
+            self.assertIn(("src/demo/outside.py", "FREE_FUNCTION_PLACEMENT"),
+                          {(item["path"], item["rule"]) for item in placements})
+            self.assertFalse(any("/main/" in str(item["path"]) for item in placements))
+            (pkg / "main/bad_contract.py").write_text(
+                "from typing import Protocol\nclass Bad(Protocol): pass\n")
+            trees["src/demo/main/bad_contract.py"] = ast.parse(
+                (pkg / "main/bad_contract.py").read_text())
+            self.assertIn(("src/demo/main/bad_contract.py", "CONTRACT_FOLDER"),
+                          {(item["path"], item["rule"])
+                           for item in FolderOwnership(trees).folder_violations()})
 
     def test_layer_direction_and_exact_unused_declarations_stay_native(self):
         with TemporaryDirectory(prefix="eryx-contract-layers-") as directory:

@@ -10,6 +10,8 @@ import sys
 from typing import cast
 
 PARENT_SEGMENT = ".."
+SOURCE_ROOT = "src"
+MAIN_FOLDER = "main"
 
 
 def declarations(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -57,7 +59,9 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                                 "symbol": node.name,
                                 "message": (f"{node.name}: utilities module {path} "
                                             "must be class-free.")})
-        if classes or not (source.stem.endswith("_utils") and len(source.stem) > len("_utils")):
+        if (not (source.parts[0] == SOURCE_ROOT and MAIN_FOLDER in source.parts[2:-1])
+                and (classes or not (source.stem.endswith("_utils")
+                                     and len(source.stem) > len("_utils")))):
             for node in declarations(tree):
                 diagnostics.append({"rule": "FREE_FUNCTION_PLACEMENT", "path": path,
                                     "line": node.lineno, "column": node.col_offset + 1,

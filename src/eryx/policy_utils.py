@@ -73,7 +73,7 @@ LAYER_DIRS = {
     "domain": "Domain", "application": "UseCase", "use_cases": "UseCase",
     "usecase": "UseCase", "usecases": "UseCase", "infrastructure": "Infrastructure",
     "adapters": "Infrastructure", "interfaces": "Interface", "interface": "Interface",
-    "bootstrap": "Bootstrap", "composition": "Bootstrap",
+    "bootstrap": "Bootstrap", "composition": "Bootstrap", "main": "Bootstrap",
 }
 ALLOWED_LAYERS = {
     "Bootstrap": set(LAYERS), "Interface": {"Interface", "UseCase", "Domain"},
