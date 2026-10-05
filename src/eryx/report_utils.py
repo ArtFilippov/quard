@@ -332,6 +332,42 @@ def parse_contract_folders(text: str, root: Path) -> tuple[list[dict[str, Any]],
     return items, error
 
 
+def parse_dependency_types(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    obj = find_json(text, "eryx_dependency_types_adapter")
+    if (type(obj["eryx_dependency_types_adapter"]) is not int
+            or obj["eryx_dependency_types_adapter"] != 1
+            or not isinstance(obj.get("diagnostics"), list)
+            or "execution_error" not in obj):
+        raise ValueError("Unsupported dependency types adapter report schema")
+    error = obj["execution_error"]
+    failures = {"DEPENDENCY_TYPES_PARSE_ERROR", "DEPENDENCY_TYPES_EXECUTION_ERROR"}
+    violations = {"CONCRETE_DEPENDENCY_TYPE", "UNRESOLVED_DEPENDENCY_TYPE"}
+    if error not in failures | {None}:
+        raise ValueError("Unknown dependency types execution error")
+    items = []
+    for entry in obj["diagnostics"]:
+        if not isinstance(entry, dict) or entry.get("rule") not in violations | failures:
+            raise ValueError("Malformed dependency types diagnostic")
+        rule = entry["rule"]
+        if (not isinstance(entry.get("message"), str)
+                or entry.get("path") is not None and not isinstance(entry["path"], str)
+                or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
+                or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)
+                or rule in violations and (not isinstance(entry.get("path"), str)
+                                           or not isinstance(entry.get("symbol"), str)
+                                           or type(entry.get("line")) is not int
+                                           or type(entry.get("column")) is not int)):
+            raise ValueError("Malformed dependency types location")
+        items.append(diagnostic("dependency-types", rule, entry["message"],
+                                path=relative_path(entry.get("path"), root), line=entry.get("line"),
+                                column=entry.get("column"), symbol=entry.get("symbol"),
+                                is_infrastructure_error=rule in failures))
+    if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
+            error and not any(item["rule"] == error for item in items)):
+        raise ValueError("Dependency types error/diagnostic mismatch")
+    return items, error
+
+
 def parse_test_placement(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
     """Validate positioned test mapping diagnostics and independent worker failures."""
     obj = find_json(text, "eryx_test_placement_adapter")
@@ -530,6 +566,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             expected = 2 if parse_error else (1 if items else 0)
             if result.get("exit_code") != expected:
                 error = error or "CLASS_CONTRACTS_EXECUTION_ERROR"
+        elif tool == "dependency-types":
+            items, parse_error = parse_dependency_types(result.get("stdout", ""), root)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "DEPENDENCY_TYPES_EXECUTION_ERROR"
         elif tool == "contract-folders":
             items, parse_error = parse_contract_folders(result.get("stdout", ""), root)
             error = error or parse_error

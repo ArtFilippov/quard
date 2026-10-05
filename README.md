@@ -53,7 +53,12 @@ implementations and utilities outside their contract folder remain native Tach
 violations. Files anywhere under a production `main/` folder or a direct contract
 `envelopes/` folder may assemble concrete implementations from any contract folder,
 including type-only imports and companion stubs. Other modules' utilities stay
-private. Free functions and assembly classes may live under
+private. The generated policy also checks annotated parameters, stored fields
+and returns on customer classes in source and stubs: concrete classes from
+other modules require local contract types. Own types and `Self` are allowed;
+`main/` and `envelopes/` may name concrete types. Explicit customer type
+references that cannot be resolved receive separate diagnostics.
+Free functions and assembly classes may live under
 `main/`; placement checks continue outside it. Folder violations remain visible to
 the independent checker. Malformed
 source and regeneration failures are configuration errors (exit 2).

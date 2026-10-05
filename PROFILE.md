@@ -76,6 +76,16 @@ violations baseline.
   interface implementation. Overrides are normal source-positioned violations
   (exit 1); parse and report failures remain errors (exit 2) without suppressing
   other diagnostics.
+* **Generated dependency types**: on projects with generated architecture,
+  `CONCRETE_DEPENDENCY_TYPE` checks class annotations in production and tests,
+  including companion stubs and forward references. Parameters, stored receiver
+  fields, class-body field annotations and results may name local contracts,
+  the declaring class and `Self`; concrete classes declared in another module
+  require a contract. Files under `main/` or `envelopes/` are composition points.
+  Explicit references to missing customer types receive
+  `UNRESOLVED_DEPENDENCY_TYPE`, not a claim of proof. Unknown bare names and
+  external types are not proven customer concrete classes; Pyright independently
+  checks their validity. Parse and worker errors fail as infrastructure errors.
 * **Outer classes**: `MULTIPLE_OUTER_CLASSES` reports each outer class when a
   discovered `.py` or `.pyi` file contains more than one. Nested classes are allowed;
   a class inside a function counts unless enclosed by a class. Files without classes

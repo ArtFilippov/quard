@@ -23,6 +23,7 @@ WORKERS = {
     "_method_decorators_worker.py": "method-decorators",
     "_instance_fields_worker.py": "instance-fields",
     "_class_contracts_worker.py": "class-contracts",
+    "_dependency_types_worker.py": "dependency-types",
     "_contract_folders_worker.py": "contract-folders",
     "_test_placement_worker.py": "test-placement",
     "_outer_classes_worker.py": "outer-classes",

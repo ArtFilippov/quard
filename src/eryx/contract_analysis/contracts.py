@@ -43,7 +43,16 @@ class Contracts(ContractAnalysis):
                     self.paths[name] = path
             bindings: dict[str, str | None] = {}
             package = module if Path(path).stem == "__init__" else module.rpartition(".")[0]
+            # Type-checking imports participate in annotations even though they
+            # are not executed at runtime.
+            statements: list[ast.stmt] = []
             for statement in tree.body:
+                if isinstance(statement, ast.If) and dotted(statement.test) in {
+                        "TYPE_CHECKING", "typing.TYPE_CHECKING"}:
+                    statements.extend(statement.body)
+                else:
+                    statements.append(statement)
+            for statement in statements:
                 if isinstance(statement, ast.Import):
                     for alias in statement.names:
                         bindings[alias.asname or alias.name.split(".")[0]] = (
@@ -59,7 +68,16 @@ class Contracts(ContractAnalysis):
                     targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
                     for target in targets:
                         if isinstance(target, ast.Name):
-                            bindings[target.id] = None
+                            value = statement.value
+                            alias = dotted(value) if value is not None else None
+                            if alias and alias != target.id:
+                                first, _, rest = alias.partition(".")
+                                origin = bindings.get(first)
+                                bindings[target.id] = (f"{origin}.{rest}" if rest else origin) if origin else (
+                                    f"{module}.{alias}" if first in bindings and origin is None
+                                    and f"{module}.{alias}" in self.nodes else None)
+                            else:
+                                bindings[target.id] = None
             if module not in self.imports or path.endswith(".py"):
                 self.imports[module] = bindings
             self.bindings_by_path[path] = bindings
@@ -116,10 +134,14 @@ class Contracts(ContractAnalysis):
             candidate = f"{prefix}.{text}"
             if candidate in self.nodes:
                 return candidate
+        if f"{name}.{text}" in self.nodes:
+            return f"{name}.{text}"
         first, _, rest = text.partition(".")
         imported = self.bindings_by_path[path].get(first)
         if imported:
             return self.provenance(f"{imported}.{rest}" if rest else imported)
+        if first not in self.bindings_by_path[path] and first in self.customer_roots and rest:
+            return self.provenance(text)
         if (first not in self.bindings_by_path[path] and first in vars(builtins)
                 and isinstance(vars(builtins)[first], type)):
             return f"builtins.{text}"

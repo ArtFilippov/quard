@@ -288,6 +288,30 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                             for d in report["diagnostics"]), report["diagnostics"])
         self.assertEqual(read_json(root / ".eryx/reports/latest.json")["exit_code"], 1)
 
+    def test_generated_full_static_and_runtime_dependency_types(self):
+        root = self.generated_fixture()
+        self.install_generated_fixture(root)
+        client = root / "src/demo/client.py"
+        client.write_text("from demo.port.port import Port\n"
+                          "from demo.port.impl import Impl\n"
+                          "class Client(Port):\n"
+                          "    def send(self) -> None: pass\n"
+                          "    def build(self, value: Impl) -> Port: return value\n",
+                          encoding="utf-8")
+        report = NativeCheckRunner().run(root)
+        self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]), (1, 0))
+        dependency = next(job for job in report["tools"] if job["name"] == "dependency-types")
+        tach = next(job for job in report["tools"] if job["name"] == "tach")
+        pyright = next(job for job in report["tools"] if job["name"] == "pyright")
+        self.assertEqual((dependency["status"], dependency["exit_code"]), ("violations", 1))
+        self.assertEqual((tach["status"], tach["exit_code"]), ("violations", 1))
+        self.assertEqual((pyright["status"], pyright["exit_code"]), ("violations", 1))
+        self.assertIn("CONCRETE_DEPENDENCY_TYPE", {d["rule"] for d in report["diagnostics"]})
+        executed = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                            "from demo.client import Client; from demo.port.impl import Impl; "
+                            "assert isinstance(Client().build(Impl()), Impl)"], root, 10)
+        self.assertEqual(executed["exit_code"], 0, executed)
+
     def test_generated_native_error_is_not_mistaken_for_success(self):
         root = self.generated_fixture()
         self.install_generated_fixture(root)

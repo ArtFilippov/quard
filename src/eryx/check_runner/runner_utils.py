@@ -100,7 +100,12 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     manifest = run_dir / "class-contracts-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "class-contracts", "tool": "class-contracts", "argv": [sys.executable,
-                  str(tool_dir() / "_class_contracts_worker.py"), "--manifest", str(manifest)]})
+                   str(tool_dir() / "_class_contracts_worker.py"), "--manifest", str(manifest)]})
+    if (root / ".eryx/architecture.generated.json").is_file():
+        manifest = run_dir / "dependency-types-files.json"
+        write_json(manifest, sorted(files["production"] + files["tests"]), root)
+        jobs.append({"name": "dependency-types", "tool": "dependency-types", "argv": [sys.executable,
+                     str(tool_dir() / "_dependency_types_worker.py"), "--manifest", str(manifest)]})
     manifest = run_dir / "contract-folders-files.json"
     write_json(manifest, sorted(files["production"] + files["tests"]), root)
     jobs.append({"name": "contract-folders", "tool": "contract-folders", "argv": [sys.executable,

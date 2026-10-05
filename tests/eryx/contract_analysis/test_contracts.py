@@ -47,6 +47,71 @@ class TestContracts(unittest.TestCase):
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text(encoding="utf-8"))
         return result, raw, job
 
+    def test_generated_dependency_types_in_source_stubs_and_composition(self):
+        self.put(".eryx/architecture.generated.json", '{"schema_version": 1}\n')
+        self.put("src/pkg/port/port.py", "from typing import Protocol\nclass Port(Protocol): ...\n")
+        self.put("src/pkg/port/concrete.py", "from .port import Port\nclass Concrete(Port): ...\n")
+        self.put("src/pkg/port/__init__.py", "from .concrete import Concrete as Exported\n")
+        self.put("src/pkg/user/consumer.py", '''\
+from __future__ import annotations
+from typing import TYPE_CHECKING, Self
+from pkg.port.port import Port
+if TYPE_CHECKING:
+    from pkg.port import Exported as Imported
+Alias = Imported
+class Consumer(Port):
+    field: Alias
+    no_import: "pkg.port.concrete.Concrete"
+    own: Consumer
+    port: Port
+    def __init__(self, value: Alias, port: Port) -> None:
+        self.stored: Alias = value
+    def build(self, value: "list[Alias]", missing: "pkg.port.absent.Missing") -> "Alias | Self": ...
+''')
+        self.put("src/pkg/user/consumer.pyi", '''\
+from pkg.port import Exported as Imported
+class Consumer:
+    field: Imported
+    def build(self, value: Imported) -> Imported: ...
+''')
+        self.put("src/pkg/main/wiring.py", "from pkg.port import Exported\n"
+                 "class Wiring:\n    def get(self) -> Exported: ...\n")
+        self.put("src/pkg/main/wiring.pyi", "from pkg.port import Exported\n"
+                 "class Wiring:\n    def get(self) -> Exported: ...\n")
+        self.put("src/pkg/port/envelopes/wiring.py", "from pkg.port import Exported\n"
+                 "class Wiring:\n    def get(self) -> Exported: ...\n")
+        self.put("src/pkg/port/envelopes/wiring.pyi", "from pkg.port import Exported\n"
+                 "class Wiring:\n    def get(self) -> Exported: ...\n")
+
+        def run_dependency():
+            files = discover_files(self.root, read_scope(self.root))
+            job = next(job for job in make_jobs(self.root, self.run_dir, files, False, [])
+                       if job["name"] == "dependency-types")
+            return execute_job(job, self.root, self.run_dir, 30)
+
+        result = run_dependency()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1), result)
+        self.assertEqual({(d["path"], d["symbol"], d["rule"]) for d in result["diagnostics"]}, {
+            ("src/pkg/user/consumer.py", "Consumer.field", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.py", "Consumer.no_import", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.py", "Consumer.__init__.value", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.py", "Consumer.stored", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.py", "Consumer.build.value", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.py", "Consumer.build", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.py", "Consumer.build.missing", "UNRESOLVED_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.pyi", "Consumer.field", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.pyi", "Consumer.build.value", "CONCRETE_DEPENDENCY_TYPE"),
+            ("src/pkg/user/consumer.pyi", "Consumer.build", "CONCRETE_DEPENDENCY_TYPE"),
+        })
+        self.assertTrue(all(d["line"] > 0 and d["column"] > 0
+                            and not d["is_infrastructure_error"] for d in result["diagnostics"]))
+        manifest = self.run_dir / "dependency-types-files.json"
+        self.assertIn("src/pkg/user/consumer.pyi", json.loads(manifest.read_text()))
+        self.put("src/pkg/broken.py", "class Broken(\n")
+        result = run_dependency()
+        self.assertEqual((result["status"], result["exit_code"]), ("error", 2))
+        self.assertIn("CONCRETE_DEPENDENCY_TYPE", {d["rule"] for d in result["diagnostics"]})
+
     def test_local_contracts_external_bases_and_full_scope(self):
         self.put("src/contracts.py", '''\
 from typing import Protocol as P
