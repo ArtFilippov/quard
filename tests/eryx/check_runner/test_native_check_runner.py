@@ -55,7 +55,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         report = self.run_report(fake)
         self.assertEqual((report["status"], report["exit_code"]), ("passed", 0))
         self.assertEqual(len(seen), 18)
-        self.assertEqual(len({job["name"] for job in report["tools"]}), 19)
+        self.assertEqual(len({job["name"] for job in report["tools"]}), 20)
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "constructor-purity")
                          ["status"], "skipped")
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")

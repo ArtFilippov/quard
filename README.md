@@ -116,12 +116,19 @@ Select independent jobs under `[checks]` in `.eryx/config.toml`:
 | `pyright = true` | `pyright` |
 | `pydoclint = true` | `pydoclint` |
 | `duplicate_detection = true` | `jscpd`, `jscpd-renamed`, `jscpd-similar` |
+| `tach = true` | `tach`, `tach-external` (two separate native results) |
+| `dependency_types` | `dependency-types` (generated architecture only) |
 
-Pylint's production and test profiles remain required. The generated-architecture
-`dependency-types` job still runs only on generated projects; it has no selection
-switch. New switches default to `true` on fresh installations and when upgrading an
-older configuration; explicit values survive reinstallation. Missing new keys are
-treated as enabled until upgrade. All values must be booleans; unknown keys fail
+Pylint's production and test profiles remain required. `dependency_types` defaults
+to `true` on generated projects and `false` on reviewed projects, including upgrades.
+Explicitly enabling it on a reviewed project is a configuration error (exit 2).
+`tach` defaults to `true`; disabling it skips both Tach jobs and removes the
+Tach-only acceptance requirement for reviewed projects. Generated architecture
+still regenerates `tach.toml` and the mandatory Pylint layer map even with Tach
+disabled. With Tach enabled, reviewed projects still require acceptance.
+Other new switches default to `true` on fresh installations and upgrades; explicit
+values survive reinstallation. Missing new keys use those defaults until upgrade.
+All values must be booleans; unknown keys fail
 with exit 2. Disabled jobs appear as `skipped` with null exit codes and have no
 manifest or worker execution. Set `constructor_purity = true` to opt in to that job.
 Disabling duplicate detection skips all three clone jobs, their manifests and their
@@ -344,8 +351,8 @@ uv run --locked --group dev python check.py
 ```
 
 Eryx's implementation lives in `src/eryx/`. Root Python commands are compatibility
-entry points for existing consumer integrations. The checkout has its own reviewed
-`.eryx/` and `tach.toml`, so a full check from here analyzes its production modules
+entry points for existing consumer integrations. The checkout has generated
+architecture under `.eryx/`, so a full check from here analyzes its production modules
 and tests; the resulting report is in this checkout's `.eryx/reports/latest.json`.
 Consumer checks still write reports and caches only inside the selected consumer.
 

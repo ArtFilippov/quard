@@ -23,6 +23,7 @@ from offline_fixtures import create_repo, managed_bytes, native_result
 from eryx import install as entry
 from eryx import _policy
 from eryx.check_selection_utils import CHECK_DEFAULTS, OPTIONAL_JOBS
+from eryx.architecture_draft.generated_architecture_utils import IDENTITY
 from eryx._audit import smoke_tests, tool_binary
 from eryx._common import (EryxError, load_toml, read_json, repo_lock, safe_target,
                           write_json)
@@ -181,6 +182,37 @@ class TestTransactionalInstallation(unittest.TestCase):
                             if key != "instance_fields"))
         self.assertTrue(_policy.read_checks(root)["duplicate_detection"])
 
+    def test_architecture_switch_upgrade_defaults_follow_selected_mode(self):
+        for generated_policy in (False, True):
+            with self.subTest(generated=generated_policy):
+                root = self.configured_project()
+                if generated_policy:
+                    write_json(root / ".eryx/architecture.generated.json", IDENTITY)
+                setting = root / ".eryx/config.toml"
+                setting.write_text(setting.read_text(encoding="utf-8")
+                                   .replace("dependency_types = false\n", "")
+                                   .replace("tach = true\n", ""), encoding="utf-8")
+                with patch.object(entry, "capture", fake_uv):
+                    self.installation().install(root, ERYX, progress=False)
+                self.assertEqual(_policy.read_checks(root)["dependency_types"], generated_policy)
+                self.assertTrue(_policy.read_checks(root)["tach"])
+                first = setting.read_bytes()
+                with patch.object(entry, "capture", fake_uv):
+                    self.installation().install(root, ERYX, progress=False)
+                self.assertEqual(setting.read_bytes(), first)
+
+    def test_reviewed_dependency_opt_in_is_rejected_before_install_steps(self):
+        root = self.configured_project()
+        setting = root / ".eryx/config.toml"
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "dependency_types = false", "dependency_types = true"), encoding="utf-8")
+        before = managed_bytes(root)
+        with patch.object(entry, "capture", side_effect=fake_uv) as captured:
+            with self.assertRaisesRegex(EryxError, "requires generated architecture"):
+                self.installation().install(root, ERYX, progress=False)
+        captured.assert_not_called()
+        self.assertEqual(managed_bytes(root), before)
+
     def test_legacy_checks_migration_enables_new_switches(self):
         root = self.configured_project()
         (root / ".eryx/config.toml").unlink()
@@ -311,8 +343,8 @@ class TestTransactionalInstallation(unittest.TestCase):
         setting.unlink()
         with patch.object(entry, "capture", fake_uv):
             self.installation().install(root, ERYX, progress=False)
-        self.assertEqual(setting.read_text(encoding="utf-8"),
-                         (ERYX / "defaults/config.toml").read_text(encoding="utf-8"))
+        self.assertFalse(_policy.read_checks(root)["dependency_types"])
+        self.assertTrue(_policy.read_checks(root)["tach"])
 
     def test_migration_keeps_all_settings_and_rollback_restores_old_files(self):
         root = self.configured_project()

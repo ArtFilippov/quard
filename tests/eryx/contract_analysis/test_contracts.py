@@ -13,6 +13,7 @@ sys.path.insert(0, str(ERYX / "src"))
 
 from eryx._policy import discover_files, read_scope
 from eryx.check import execute_job, make_jobs
+from eryx.check_selection_utils import CHECK_DEFAULTS
 
 
 class TestContracts(unittest.TestCase):
@@ -86,7 +87,8 @@ class Consumer:
 
         def run_dependency():
             files = discover_files(self.root, read_scope(self.root))
-            job = next(job for job in make_jobs(self.root, self.run_dir, files, False, [])
+            job = next(job for job in make_jobs(self.root, self.run_dir, files, True, [],
+                                                checks={**CHECK_DEFAULTS, "dependency_types": True})
                        if job["name"] == "dependency-types")
             return execute_job(job, self.root, self.run_dir, 30)
 

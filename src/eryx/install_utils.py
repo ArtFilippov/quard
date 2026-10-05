@@ -7,7 +7,7 @@ import contextlib
 from pathlib import Path
 import sys
 sys.dont_write_bytecode = True
-from typing import Any
+from typing import Any, cast
 
 import tomlkit
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
@@ -16,7 +16,8 @@ from eryx._common import (EryxError, atomic_write, capture, emit_event, error_ex
                        load_toml, read_json, repo_lock, require_runtime, project_dir,
                        safe_target, tool_dir, write_json)
 from eryx.installation.transactional_installation import TransactionalInstallation
-from eryx.check_selection_utils import CHECK_DEFAULTS, validate_checks
+from eryx.check_selection_utils import DEPENDENCY_TYPES, architecture_defaults, validate_checks
+from eryx.architecture_draft.generated_architecture_utils import select
 from eryx.policy_utils import validate_limits, validate_scope, validate_settings
 
 __all__ = ["capture", "require_runtime", "write_json"]
@@ -56,6 +57,7 @@ def initialize_state(root: Path, tool: Path) -> None:
             if name == "readability.toml":
                 content = content.replace("quality/apply.py", "eryx/apply.py")
             atomic_write(destination, content, root)
+    _ = select(root)
     migrate_settings(root, tool)
 
 
@@ -63,6 +65,8 @@ def migrate_settings(root: Path, tool: Path) -> None:
     destination = root / ".eryx/config.toml"
     if not destination.exists():
         document = tomlkit.parse((tool / "defaults/config.toml").read_text(encoding="utf-8"))
+        cast(Any, document["checks"])[DEPENDENCY_TYPES] = architecture_defaults(root)[
+            DEPENDENCY_TYPES]
         for name, section in (("readability.toml", "readability"),
                               ("scope.toml", "scope"), ("checks.toml", "checks")):
             old = root / ".eryx" / name
@@ -80,9 +84,9 @@ def migrate_settings(root: Path, tool: Path) -> None:
     # Upgrade old unified and legacy configurations without replacing explicit choices.
     document = tomlkit.parse(destination.read_text(encoding="utf-8"))
     existing = load_toml(destination)["checks"]
-    for key, default in CHECK_DEFAULTS.items():
+    for key, default in architecture_defaults(root).items():
         if key not in existing:
-            document["checks"][key] = default
+            cast(Any, document["checks"])[key] = default
     atomic_write(destination, tomlkit.dumps(document), root)
     for name in OLD_SETTINGS:
         old = root / ".eryx" / name

@@ -1,6 +1,7 @@
 """Validate independent consumer job selections and their upgrade defaults."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 from eryx._common import EryxError
@@ -15,8 +16,38 @@ OPTIONAL_JOBS = {
 }
 CONSTRUCTOR_PURITY = "constructor_purity"
 DUPLICATE_JOBS = ("jscpd", "jscpd-renamed", "jscpd-similar")
+TACH_JOBS = ("tach", "tach-external")
+DEPENDENCY_TYPES = "dependency_types"
 CHECK_DEFAULTS = {**dict.fromkeys(OPTIONAL_JOBS, True), "duplicate_detection": True,
-                  CONSTRUCTOR_PURITY: False}
+                  "tach": True, DEPENDENCY_TYPES: False, CONSTRUCTOR_PURITY: False}
+
+
+def architecture_defaults(root: Path) -> dict[str, bool]:
+    """Return upgrade defaults for the selected architecture mode.
+
+    Args:
+        root (Path): Consumer project root.
+
+    Returns:
+        dict[str, bool]: Validated-switch defaults for this architecture mode.
+    """
+    return {**CHECK_DEFAULTS,
+            DEPENDENCY_TYPES: (root / ".eryx/architecture.generated.json").exists()}
+
+
+def validate_architecture_checks(root: Path, checks: dict[str, bool]) -> None:
+    """Reject dependency-type selection without a generated policy marker.
+
+    Args:
+        root (Path): Consumer project root.
+        checks (dict[str, bool]): Selected jobs.
+
+    Raises:
+        EryxError: Dependency types require generated architecture.
+    """
+    if checks[DEPENDENCY_TYPES] and not (root / ".eryx/architecture.generated.json").exists():
+        raise EryxError("DEPENDENCY_TYPES_REQUIRES_GENERATED",
+                        "[checks] dependency_types = true requires generated architecture.")
 
 
 def validate_checks(data: object) -> dict[str, bool]:

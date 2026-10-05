@@ -21,12 +21,15 @@ from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPo
 from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from eryx.architecture_draft.generated_architecture_utils import generated, regenerate
 from eryx.check_runner.check_runner import CheckRunner
-from eryx.check_selection_utils import CHECK_DEFAULTS, DUPLICATE_JOBS, OPTIONAL_JOBS
+from eryx.check_selection_utils import (CHECK_DEFAULTS, DUPLICATE_JOBS, OPTIONAL_JOBS,
+                                        TACH_JOBS, validate_architecture_checks)
 from eryx.check_runner.runner_utils import (binary, execute_job, installed_versions,
-                                             make_jobs, select_lcom_files)
+                                             inactive_job, make_jobs, select_lcom_files)
 
 __all__ = ["NativeCheckRunner", "binary", "execute_job", "installed_versions",
            "make_jobs", "select_lcom_files"]
+
+ARCHITECTURE_NOT_INITIALIZED = "ARCHITECTURE_NOT_INITIALIZED"
 
 
 class NativeCheckRunner(CheckRunner):
@@ -110,6 +113,11 @@ class NativeCheckRunner(CheckRunner):
                     results.append({"name": name, "tool": "jscpd", "status": "skipped",
                                     "exit_code": None, "duration_seconds": 0,
                                     "error": None, "raw_output": {}})
+            if not checks["tach"]:
+                for name in TACH_JOBS:
+                    results.append(inactive_job(name, "skipped"))
+            if not checks["dependency_types"]:
+                results.append(inactive_job("dependency-types", "skipped"))
             try:
                 if not checks["lcom4"] and lcom_files is not None:
                     raise EryxError("LCOM4_DISABLED",
@@ -149,24 +157,37 @@ class NativeCheckRunner(CheckRunner):
             except EryxError as exc:
                 diagnostics.append(diagnostic("system", exc.code, str(exc),
                                               is_infrastructure_error=True))
+            architecture_error: str | None = None
             try:
                 if generated(root):
                     _ = regenerate(root)
-                else:
-                    marker = read_json(root / ".eryx/architecture.ready.json")
+                elif checks["tach"]:
+                    marker_path = root / ".eryx/architecture.ready.json"
+                    if not marker_path.exists():
+                        raise EryxError(ARCHITECTURE_NOT_INITIALIZED,
+                                        "Architecture configuration has not been accepted.")
+                    marker = read_json(marker_path)
                     if not isinstance(marker, dict) or not marker.get("accepted"):
-                        raise EryxError("ARCHITECTURE_NOT_INITIALIZED",
+                        raise EryxError(ARCHITECTURE_NOT_INITIALIZED,
                                         "Architecture configuration has not been accepted.")
                     ConfiguredArchitectureDraft(root).validate()
                 architecture_ready = True
-            except EryxError as exc:
+            except Exception as exc:
+                architecture_error = str(getattr(exc, "code", "ARCHITECTURE_VALIDATION_FAILED"))
                 legacy = not (root / ".eryx/architecture.generated.json").exists()
-                code = ("ARCHITECTURE_NOT_INITIALIZED" if legacy and not (
-                    root / ".eryx/architecture.ready.json").exists() else exc.code)
-                message = str(exc) + (" Run eryx/init_architecture.py, review tach.toml, "
-                                      + "then run it with --accept." if legacy else "")
-                diagnostics.append(diagnostic("system", code, message,
+                message = str(exc)
+                if legacy and checks["tach"] and architecture_error == ARCHITECTURE_NOT_INITIALIZED:
+                    message += (" Run eryx/init_architecture.py, review tach.toml, "
+                                "then run it with --accept.")
+                diagnostics.append(diagnostic("system", architecture_error, message,
+                                               is_infrastructure_error=True))
+            try:
+                validate_architecture_checks(root, checks)
+            except EryxError as exc:
+                diagnostics.append(diagnostic("dependency-types", exc.code, str(exc),
                                               is_infrastructure_error=True))
+                results.append(inactive_job("dependency-types", "error", exc.code))
+                checks["dependency_types"] = False
             jobs = make_jobs(root, run_dir, files, architecture_ready,
                              None if lcom_files is None and checks["lcom4"] else selected,
                              checks["constructor_purity"],
@@ -180,13 +201,11 @@ class NativeCheckRunner(CheckRunner):
             if any(result["name"] == "lcom4" and result["status"] in {"passed", "violations"}
                    for result in job_results):
                 lcom_coverage["analyzed_files"] = selected
-            if not architecture_ready:
-                for name in ("tach", "tach-external"):
-                    results.append({"name": name, "tool": name, "status": "blocked",
-                                     "exit_code": None, "duration_seconds": 0,
-                                     "error": ("ARCHITECTURE_GENERATION_FAILED" if (
-                                         root / ".eryx/architecture.generated.json").exists()
-                                         else "ARCHITECTURE_NOT_INITIALIZED"), "raw_output": {}})
+            if not architecture_ready and checks["tach"]:
+                for name in TACH_JOBS:
+                    results.append(inactive_job(name, "blocked", architecture_error))
+            if not architecture_ready and checks["dependency_types"]:
+                results.append(inactive_job("dependency-types", "blocked", architecture_error))
         except Exception as exc:
             diagnostics.append(diagnostic("system", getattr(exc, "code", "RUNNER_ERROR"),
                                           str(exc), is_infrastructure_error=True))

@@ -94,10 +94,11 @@ violations baseline.
   interface implementation. Overrides are normal source-positioned violations
   (exit 1); parse and report failures remain errors (exit 2) without suppressing
   other diagnostics.
-* **Generated dependency types**: on projects with generated architecture,
-  `CONCRETE_DEPENDENCY_TYPE` checks class annotations in production and tests,
-  including companion stubs and forward references. Parameters, stored receiver
-  fields, class-body field annotations and results may name local contracts,
+* **Generated dependency types**: when `dependency_types = true` on projects with
+  generated architecture, `CONCRETE_DEPENDENCY_TYPE` checks class annotations in
+  production and tests, including companion stubs and forward references.
+  Parameters, stored receiver fields, class-body field annotations and results may
+  name local contracts,
   the declaring class and `Self`; concrete classes declared in another module
   require a contract. Files under `main/` or `envelopes/` are composition points.
   Explicit references to missing customer types receive

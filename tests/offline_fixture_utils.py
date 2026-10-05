@@ -47,6 +47,9 @@ EMPTY_OUTPUT = {
 def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None:
     (root / ".eryx").mkdir()
     shutil.copy2(ERYX / "defaults/config.toml", root / ".eryx/config.toml")
+    setting = root / ".eryx/config.toml"
+    setting.write_text(setting.read_text(encoding="utf-8").replace(
+        "dependency_types = true", "dependency_types = false"), encoding="utf-8")
     (root / "src/demo/domain").mkdir(parents=True)
     (root / "src/demo/__init__.py").write_text(
         '"""Autonomous fixture.\n\nUsed by isolated checks.\nNo application imports.\n"""\n',

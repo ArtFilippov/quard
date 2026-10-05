@@ -17,10 +17,11 @@ sys.path.insert(0, str(ERYX / "src"))
 sys.path.insert(0, str(ERYX / "tests"))
 
 from jsonschema import validate
-from eryx._common import read_json
+from eryx._common import read_json, write_json
 from eryx.check_runner.native_check_runner import NativeCheckRunner
 from eryx.check_runner.runner_utils import installed_versions
 from eryx.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
+from eryx.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
 
 
@@ -193,3 +194,112 @@ class TestCheckRunner(unittest.TestCase):
         self.assertIn("pylint-production", seen)
         self.assertIn("pylint-tests", seen)
         validate(report, read_json(ERYX / "report.schema.json"))
+
+    def test_reviewed_tach_selection_and_dependency_mode(self):
+        for tach in (False, True):
+            for dependency in (False, True):
+                with self.subTest(tach=tach, dependency=dependency):
+                    self.set_switch("tach", tach)
+                    self.set_switch("dependency_types", dependency)
+                    fake, seen = fake_tools({"pydoclint": {
+                        "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
+                    report = self.run_report(fake)
+                    jobs = {job["name"]: job for job in report["tools"]}
+                    run_dir = (self.root / report["report_path"]).parent
+                    self.assertEqual(report["exit_code"], 2 if dependency else 1)
+                    self.assertIn("DOC101", {d["rule"] for d in report["diagnostics"]})
+                    self.assertEqual(jobs["dependency-types"]["status"],
+                                     "error" if dependency else "skipped")
+                    for name in ("tach", "tach-external"):
+                        self.assertEqual(jobs[name]["status"], "passed" if tach else "skipped")
+                        self.assertEqual(name in seen, tach)
+                        if not tach:
+                            self.assertIsNone(jobs[name]["exit_code"])
+                            self.assertFalse((run_dir / "raw" / f"{name}.stdout.log").exists())
+                    self.assertNotIn("dependency-types", seen)
+                    self.assertFalse(((self.root / report["report_path"]).parent /
+                                      "dependency-types-files.json").exists())
+                    self.assertFalse((run_dir / "raw/dependency-types.stdout.log").exists())
+                    validate(report, read_json(ERYX / "report.schema.json"))
+
+    def test_unaccepted_reviewed_policy_blocks_only_enabled_tach(self):
+        (self.root / ".eryx/architecture.ready.json").unlink()
+        for tach in (False, True):
+            with self.subTest(tach=tach):
+                self.set_switch("tach", tach)
+                fake, seen = fake_tools({"pydoclint": {
+                    "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
+                report = self.run_report(fake)
+                jobs = {job["name"]: job for job in report["tools"]}
+                self.assertEqual(report["exit_code"], 2 if tach else 1)
+                self.assertEqual({jobs[name]["status"] for name in ("tach", "tach-external")},
+                                 {"blocked" if tach else "skipped"})
+                self.assertEqual(jobs["dependency-types"]["status"], "skipped")
+                self.assertNotIn("tach", seen)
+                self.assertIn("pylint-production", seen)
+                self.assertIn("DOC101", {d["rule"] for d in report["diagnostics"]})
+
+    def test_generated_switches_regenerate_layers_even_without_tach(self):
+        write_json(self.root / ".eryx/architecture.generated.json", IDENTITY)
+        for tach in (False, True):
+            for dependency in (False, True):
+                with self.subTest(tach=tach, dependency=dependency):
+                    self.set_switch("tach", tach)
+                    self.set_switch("dependency_types", dependency)
+                    (self.root / "tach.toml").unlink(missing_ok=True)
+                    fake, seen = fake_tools()
+                    report = self.run_report(fake)
+                    jobs = {job["name"]: job for job in report["tools"]}
+                    self.assertEqual(report["exit_code"], 0, report["diagnostics"])
+                    self.assertTrue((self.root / "tach.toml").is_file())
+                    self.assertEqual(jobs["dependency-types"]["status"],
+                                     "passed" if dependency else "skipped")
+                    self.assertEqual("dependency-types" in seen, dependency)
+                    self.assertEqual(jobs["tach"]["status"], "passed" if tach else "skipped")
+                    self.assertEqual(jobs["tach-external"]["status"],
+                                     "passed" if tach else "skipped")
+                    if not dependency:
+                        self.assertFalse(((self.root / report["report_path"]).parent /
+                                          "dependency-types-files.json").exists())
+
+    def test_generation_failure_blocks_selected_architecture_jobs_not_native_diagnostics(self):
+        write_json(self.root / ".eryx/architecture.generated.json", IDENTITY)
+        (self.root / "src/demo/domain/api.py").write_text("def broken(:\n", encoding="utf-8")
+        for tach in (False, True):
+            for dependency in (False, True):
+                with self.subTest(tach=tach, dependency=dependency):
+                    self.set_switch("tach", tach)
+                    self.set_switch("dependency_types", dependency)
+                    fake, seen = fake_tools({"pydoclint": {
+                        "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
+                    report = self.run_report(fake)
+                    jobs = {job["name"]: job for job in report["tools"]}
+                    self.assertEqual(report["exit_code"], 2)
+                    self.assertEqual(jobs["dependency-types"]["status"],
+                                     "blocked" if dependency else "skipped")
+                    for name in ("tach", "tach-external"):
+                        self.assertEqual(jobs[name]["status"], "blocked" if tach else "skipped")
+                        self.assertNotIn(name, seen)
+                    self.assertNotIn("dependency-types", seen)
+                    self.assertIn("pylint-production", seen)
+                    self.assertIn("DOC101", {d["rule"] for d in report["diagnostics"]})
+                    self.assertTrue(any(d["is_infrastructure_error"]
+                                        for d in report["diagnostics"]))
+
+    def test_unexpected_generation_failure_still_runs_unrelated_jobs(self):
+        write_json(self.root / ".eryx/architecture.generated.json", IDENTITY)
+        self.set_switch("dependency_types", True)
+        fake, seen = fake_tools({"pydoclint": {
+            "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
+        with patch("eryx.check_runner.native_check_runner.regenerate",
+                   side_effect=ValueError("unexpected generation failure")):
+            report = self.run_report(fake)
+        jobs = {job["name"]: job for job in report["tools"]}
+        self.assertEqual(report["exit_code"], 2)
+        self.assertTrue(all(jobs[name]["status"] == "blocked" for name in
+                            ("tach", "tach-external", "dependency-types")))
+        self.assertNotIn("tach", seen)
+        self.assertNotIn("dependency-types", seen)
+        self.assertIn("pylint-production", seen)
+        self.assertEqual({"DOC101", "ARCHITECTURE_VALIDATION_FAILED"},
+                         {d["rule"] for d in report["diagnostics"]})

@@ -11,7 +11,22 @@ from typing import Any
 from eryx._common import EryxError, capture, read_json, tool_dir, write_json
 from eryx._reports import diagnostic
 from eryx.check_job.captured_check_job import CapturedCheckJob
-from eryx.check_selection_utils import CHECK_DEFAULTS
+from eryx.check_selection_utils import architecture_defaults
+
+
+def inactive_job(name: str, status: str, error: str | None = None) -> dict[str, Any]:
+    """Record an architecture job that never started.
+
+    Args:
+        name (str): Job and tool name.
+        status (str): Skipped, blocked or error status.
+        error (str | None, default=None): Reason when the job could not run.
+
+    Returns:
+        dict[str, Any]: Report entry without an execution result.
+    """
+    return {"name": name, "tool": name, "status": status, "exit_code": None,
+            "duration_seconds": 0, "error": error, "raw_output": {}}
 
 
 def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str, Any]]]:
@@ -73,7 +88,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     # Create the directory before any parallel analyzer can start.
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     jobs: list[dict[str, Any]] = []
-    enabled = CHECK_DEFAULTS if checks is None else checks
+    enabled = architecture_defaults(root) if checks is None else checks
 
     def add_worker(key: str, name: str, scope: object) -> None:
         if not enabled[key]:
@@ -127,7 +142,8 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                       ("instance_fields", "instance-fields"),
                       ("class_contracts", "class-contracts")):
         add_worker(key, name, full_scope)
-    if (root / ".eryx/architecture.generated.json").is_file():
+    if (architecture_ready and enabled["dependency_types"]
+            and (root / ".eryx/architecture.generated.json").is_file()):
         manifest = run_dir / "dependency-types-files.json"
         write_json(manifest, sorted(files["production"] + files["tests"]), root)
         jobs.append({"name": "dependency-types", "tool": "dependency-types", "argv": [sys.executable,
@@ -156,7 +172,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         jobs.append({"name": "pydoclint", "tool": "pydoclint", "argv": [binary("pydoclint"),
                      "--config", str(root / "pyproject.toml"), "--quiet",
                      "--show-filenames-in-every-violation-message=True", *doc_roots]})
-    if architecture_ready:
+    if architecture_ready and enabled["tach"]:
         for name, command in (("tach", "check"), ("tach-external", "check-external")):
             jobs.append({"name": name, "tool": name,
                          "argv": [sys.executable, str(tool_dir() / "_tach_worker.py"), command]})

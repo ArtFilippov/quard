@@ -12,7 +12,8 @@ from typing import Any, cast
 import tomlkit
 
 from eryx._common import EryxError, atomic_write, load_toml, read_json, safe_target
-from eryx.check_selection_utils import validate_checks
+from eryx.check_selection_utils import (DEPENDENCY_TYPES, architecture_defaults,
+                                        validate_architecture_checks, validate_checks)
 
 LIMIT_MAP = {
     "max_line_length": ("format", "max-line-length"),
@@ -148,14 +149,18 @@ def read_scope(root: Path) -> dict[str, list[str]]:
 
 
 def read_checks(root: Path) -> dict[str, bool]:
-    return validate_checks(read_settings(root)["checks"])
+    configured = read_settings(root)["checks"]
+    checks = validate_checks(configured)
+    if DEPENDENCY_TYPES not in configured:
+        checks[DEPENDENCY_TYPES] = architecture_defaults(root)[DEPENDENCY_TYPES]
+    return checks
 
 
 def validate_settings(root: Path) -> None:
     data = read_settings(root)
     validate_limits(data["readability"])
     validate_scope(data["scope"])
-    validate_checks(data["checks"])
+    validate_architecture_checks(root, read_checks(root))
 
 
 def exclude_globs(scope: dict[str, list[str]]) -> list[str]:

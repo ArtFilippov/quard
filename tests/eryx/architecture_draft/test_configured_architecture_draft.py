@@ -292,6 +292,9 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
 
     def test_generated_full_static_and_runtime_dependency_types(self):
         root = self.generated_fixture()
+        setting = root / ".eryx/config.toml"
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "dependency_types = false", "dependency_types = true"), encoding="utf-8")
         self.install_generated_fixture(root)
         client = root / "src/demo/client.py"
         client.write_text("from demo.port.port import Port\n"

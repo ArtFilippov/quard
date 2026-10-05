@@ -14,6 +14,8 @@ encapsulated_only = true
 pyright = true
 pydoclint = true
 duplicate_detection = true
+tach = true
+dependency_types = true
 
 # Pylint's own metrics, not an AST-independent line count.
 [readability.production]
