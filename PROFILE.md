@@ -35,6 +35,8 @@ violations baseline.
   TypeScript functions, not Python. Empty or incomplete native scans, invalid
   similarity/report data and execution failures are infrastructure errors;
   the native report and streams are archived.
+  Set `duplicate_detection = false` under `[checks]` to skip all three jobs; the
+  Pylint profile and its duplicate-code rule are unaffected.
 * **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
 * **Constructor purity (opt-in)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including

@@ -11,6 +11,9 @@ test_placement = true
 outer_classes = true
 free_function_placement = true
 encapsulated_only = true
+pyright = true
+pydoclint = true
+duplicate_detection = true
 
 # Pylint's own metrics, not an AST-independent line count.
 [readability.production]

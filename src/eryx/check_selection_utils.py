@@ -11,9 +11,12 @@ OPTIONAL_JOBS = {
     "contract_folders": "contract-folders", "test_placement": "test-placement",
     "outer_classes": "outer-classes", "free_function_placement": "free-function-placement",
     "encapsulated_only": "encapsulated-only",
+    "pyright": "pyright", "pydoclint": "pydoclint",
 }
 CONSTRUCTOR_PURITY = "constructor_purity"
-CHECK_DEFAULTS = {**dict.fromkeys(OPTIONAL_JOBS, True), CONSTRUCTOR_PURITY: False}
+DUPLICATE_JOBS = ("jscpd", "jscpd-renamed", "jscpd-similar")
+CHECK_DEFAULTS = {**dict.fromkeys(OPTIONAL_JOBS, True), "duplicate_detection": True,
+                  CONSTRUCTOR_PURITY: False}
 
 
 def validate_checks(data: object) -> dict[str, bool]:

@@ -22,7 +22,7 @@ from installation_fixture_utils import fake_uv, run_command
 from offline_fixtures import create_repo, managed_bytes, native_result
 from eryx import install as entry
 from eryx import _policy
-from eryx.check_selection_utils import OPTIONAL_JOBS
+from eryx.check_selection_utils import CHECK_DEFAULTS, OPTIONAL_JOBS
 from eryx._audit import smoke_tests, tool_binary
 from eryx._common import (EryxError, load_toml, read_json, repo_lock, safe_target,
                           write_json)
@@ -33,6 +33,7 @@ from eryx.installation.transactional_installation import TransactionalInstallati
 class TestTransactionalInstallation(unittest.TestCase):
     def test_real_native_installer_smoke_probes(self):
         root = self.configured_project()
+        self.disable_native_checks(root)
         (root / "pyproject.toml").write_bytes((ERYX / "pyproject.toml").read_bytes())
         logs = root / ".eryx/logs/install-probes"
         logs.mkdir(parents=True)
@@ -65,6 +66,13 @@ class TestTransactionalInstallation(unittest.TestCase):
         root = Path(self.enterContext(TemporaryDirectory(prefix="eryx-migration-")))
         create_repo(root)
         return root
+
+    def disable_native_checks(self, root: Path) -> None:
+        setting = root / ".eryx/config.toml"
+        text = setting.read_text(encoding="utf-8")
+        for key in ("pyright", "pydoclint", "duplicate_detection"):
+            text = text.replace(f"{key} = true", f"{key} = false")
+        setting.write_text(text, encoding="utf-8")
 
     def installation(self) -> Installation:
         return TransactionalInstallation(entry)
@@ -153,7 +161,9 @@ class TestTransactionalInstallation(unittest.TestCase):
         root = self.configured_project()
         setting = root / ".eryx/config.toml"
         text = setting.read_text(encoding="utf-8")
-        for key in OPTIONAL_JOBS:
+        for key in CHECK_DEFAULTS:
+            if key == "constructor_purity":
+                continue
             text = text.replace(f"{key} = true\n", "")
         text = text.replace("constructor_purity = false",
                             "# Retain this choice\nconstructor_purity = true\n"
@@ -169,6 +179,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertFalse(_policy.read_checks(root)["instance_fields"])
         self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS
                             if key != "instance_fields"))
+        self.assertTrue(_policy.read_checks(root)["duplicate_detection"])
 
     def test_legacy_checks_migration_enables_new_switches(self):
         root = self.configured_project()
@@ -178,7 +189,22 @@ class TestTransactionalInstallation(unittest.TestCase):
             self.installation().install(root, ERYX, progress=False)
         self.assertTrue(_policy.read_checks(root)["constructor_purity"])
         self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS))
+        self.assertTrue(_policy.read_checks(root)["duplicate_detection"])
         self.assertFalse((root / ".eryx/checks.toml").exists())
+
+    def test_reinstall_retains_disabled_native_checks_and_still_runs_audit(self):
+        root = self.configured_project()
+        self.disable_native_checks(root)
+        with patch.object(entry, "capture", side_effect=fake_uv) as captured:
+            self.installation().install(root, ERYX, progress=False)
+        self.assertTrue(all(not _policy.read_checks(root)[key] for key in
+                            ("pyright", "pydoclint", "duplicate_detection")))
+        commands = [call.args[0] for call in captured.call_args_list]
+        self.assertEqual(len(commands), 3)
+        self.assertIn("pyright[nodejs]==1.1.414", commands[0])
+        self.assertIn("pydoclint==0.9.1", commands[0])
+        self.assertIn("jscpd==5.4.0", commands[0])
+        self.assertIn(str(ERYX / "_audit.py"), commands[2])
 
     def test_migrate_legacy_policy_and_multi_package_architecture(self):
         root = self.configured_project()

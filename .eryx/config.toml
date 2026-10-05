@@ -2,6 +2,9 @@
 # The required Pylint profile always runs; checks below select optional independent jobs.
 [checks]
 constructor_purity = false
+pyright = true
+pydoclint = true
+duplicate_detection = true
 
 # Pylint's own metrics, not an AST-independent line count.
 [readability.production]

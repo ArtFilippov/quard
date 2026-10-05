@@ -21,7 +21,7 @@ from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPo
 from eryx.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from eryx.architecture_draft.generated_architecture_utils import generated, regenerate
 from eryx.check_runner.check_runner import CheckRunner
-from eryx.check_selection_utils import CHECK_DEFAULTS, OPTIONAL_JOBS
+from eryx.check_selection_utils import CHECK_DEFAULTS, DUPLICATE_JOBS, OPTIONAL_JOBS
 from eryx.check_runner.runner_utils import (binary, execute_job, installed_versions,
                                              make_jobs, select_lcom_files)
 
@@ -103,6 +103,11 @@ class NativeCheckRunner(CheckRunner):
             for key, name in OPTIONAL_JOBS.items():
                 if not checks[key] and (key != "lcom4" or lcom_files is None):
                     results.append({"name": name, "tool": name, "status": "skipped",
+                                    "exit_code": None, "duration_seconds": 0,
+                                    "error": None, "raw_output": {}})
+            if not checks["duplicate_detection"]:
+                for name in DUPLICATE_JOBS:
+                    results.append({"name": name, "tool": "jscpd", "status": "skipped",
                                     "exit_code": None, "duration_seconds": 0,
                                     "error": None, "raw_output": {}})
             try:

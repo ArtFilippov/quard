@@ -113,6 +113,9 @@ Select independent jobs under `[checks]` in `.eryx/config.toml`:
 | `free_function_placement = true` | `free-function-placement` |
 | `encapsulated_only = true` | `encapsulated-only` |
 | `constructor_purity = false` | `constructor-purity` (opt in explicitly) |
+| `pyright = true` | `pyright` |
+| `pydoclint = true` | `pydoclint` |
+| `duplicate_detection = true` | `jscpd`, `jscpd-renamed`, `jscpd-similar` |
 
 Pylint's production and test profiles remain required. The generated-architecture
 `dependency-types` job still runs only on generated projects; it has no selection
@@ -121,6 +124,11 @@ older configuration; explicit values survive reinstallation. Missing new keys ar
 treated as enabled until upgrade. All values must be booleans; unknown keys fail
 with exit 2. Disabled jobs appear as `skipped` with null exit codes and have no
 manifest or worker execution. Set `constructor_purity = true` to opt in to that job.
+Disabling duplicate detection skips all three clone jobs, their manifests and their
+native JSON, without changing Pylint's required duplicate-code rule. Pyright and
+pydoclint likewise skip only their own jobs; their native configuration remains
+consumer-owned. All pinned tools are still installed and version-checked on every
+check, and installation runs all native smoke probes regardless of these switches.
 If `lcom4 = false`, passing `--lcom_files` (even `""`) is a configuration error
 (exit 2); when enabled, full, selected and empty-string coverage work as below.
 Installation migrates existing `.eryx/readability.toml`, `.eryx/scope.toml` and

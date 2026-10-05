@@ -14,7 +14,7 @@ from eryx._common import EryxError, load_toml
 from eryx import _policy
 from eryx.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from eryx.consumer_policy.consumer_policy import ConsumerPolicy
-from eryx.check_selection_utils import OPTIONAL_JOBS
+from eryx.check_selection_utils import CHECK_DEFAULTS
 from offline_fixtures import create_repo, managed_bytes
 
 
@@ -86,7 +86,9 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
     def test_each_new_switch_requires_a_boolean_and_unknown_jobs_fail(self):
         path = self.root / ".eryx/config.toml"
         original = path.read_text(encoding="utf-8")
-        for key in OPTIONAL_JOBS:
+        for key in CHECK_DEFAULTS:
+            if key == "constructor_purity":
+                continue
             with self.subTest(key=key):
                 path.write_text(original.replace(f"{key} = true", f"{key} = 1"),
                                 encoding="utf-8")

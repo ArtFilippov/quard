@@ -99,28 +99,29 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files
     if lcom_files is None or source_files:
         add_worker("lcom4", "lcom4", source_files)
-    clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
-                         if path.endswith(".py"))
-    eligible = [path for path in clone_files if len((root / path).read_text(
-        encoding="utf-8").splitlines()) >= 5]
-    # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
-    config = run_dir / "jscpd-config.json"
-    write_json(config, {}, root)
-    # Normalization changes jscpd's exact-clone search on larger scopes. Keep the
-    # original native exact pass independent so it cannot lose Type 1 findings.
-    for name, kind, flags in (("jscpd", "exact", []),
-                              ("jscpd-renamed", "renamed",
-                               ["--ignore-identifiers", "--ignore-literals"]),
-                              ("jscpd-similar", "similar", ["--max-gap-lines", "2"])):
-        output_dir = run_dir / "raw" if name == "jscpd" else run_dir / "raw" / name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,
-                     "json_file": output_dir / "jscpd-report.json",
-                     "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore",
-                              "--absolute", "--kind", kind, *flags, "--mode", "strict",
-                              "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
-                              "--reporters", "json", "--output", str(output_dir), "--exit-code",
-                              "1", *clone_files]})
+    if enabled["duplicate_detection"]:
+        clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
+                             if path.endswith(".py"))
+        eligible = [path for path in clone_files if len((root / path).read_text(
+            encoding="utf-8").splitlines()) >= 5]
+        # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
+        config = run_dir / "jscpd-config.json"
+        write_json(config, {}, root)
+        # Normalization changes jscpd's exact-clone search on larger scopes. Keep the
+        # original native exact pass independent so it cannot lose Type 1 findings.
+        for name, kind, flags in (("jscpd", "exact", []),
+                                  ("jscpd-renamed", "renamed",
+                                   ["--ignore-identifiers", "--ignore-literals"]),
+                                  ("jscpd-similar", "similar", ["--max-gap-lines", "2"])):
+            output_dir = run_dir / "raw" if name == "jscpd" else run_dir / "raw" / name
+            output_dir.mkdir(parents=True, exist_ok=True)
+            jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,
+                         "json_file": output_dir / "jscpd-report.json",
+                         "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore",
+                                  "--absolute", "--kind", kind, *flags, "--mode", "strict",
+                                  "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
+                                  "--reporters", "json", "--output", str(output_dir), "--exit-code",
+                                  "1", *clone_files]})
     full_scope = sorted(files["production"] + files["tests"])
     for key, name in (("method_decorators", "method-decorators"),
                       ("instance_fields", "instance-fields"),
@@ -146,13 +147,15 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         jobs.append({"name": "constructor-purity", "tool": "constructor-purity",
                      "argv": [sys.executable, str(tool_dir() / "_constructor_purity_worker.py"),
                               "--manifest", str(manifest)]})
-    jobs.append({"name": "pyright", "tool": "pyright", "argv": [
-        sys.executable, "-m", "pyright", "--project", str(root / "pyrightconfig.json"),
-        "--pythonpath", sys.executable, "--outputjson"]})
-    doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])
-    jobs.append({"name": "pydoclint", "tool": "pydoclint", "argv": [binary("pydoclint"),
-                 "--config", str(root / "pyproject.toml"), "--quiet",
-                 "--show-filenames-in-every-violation-message=True", *doc_roots]})
+    if enabled["pyright"]:
+        jobs.append({"name": "pyright", "tool": "pyright", "argv": [
+            sys.executable, "-m", "pyright", "--project", str(root / "pyrightconfig.json"),
+            "--pythonpath", sys.executable, "--outputjson"]})
+    if enabled["pydoclint"]:
+        doc_roots = ["src"] + (["tests"] if (root / "tests").is_dir() else [])
+        jobs.append({"name": "pydoclint", "tool": "pydoclint", "argv": [binary("pydoclint"),
+                     "--config", str(root / "pyproject.toml"), "--quiet",
+                     "--show-filenames-in-every-violation-message=True", *doc_roots]})
     if architecture_ready:
         for name, command in (("tach", "check"), ("tach-external", "check-external")):
             jobs.append({"name": name, "tool": name,
