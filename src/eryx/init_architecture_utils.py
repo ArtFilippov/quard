@@ -41,6 +41,8 @@ def main() -> int:
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--accept", action="store_true", help="Accept the reviewed native tach.toml (does not suppress any violations)")
     parser.add_argument("--force", action="store_true", help="Replace an existing Tach configuration with a fresh draft")
+    _ = parser.add_argument("--contract-only", action="store_true",
+                            help="Draft contract-only boundaries without syncing imports")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
@@ -48,7 +50,8 @@ def main() -> int:
         entry.require_runtime()
         with repo_lock(root):
             event, details = ConfiguredArchitectureDraft(root).initialize(accept=args.accept,
-                                                                          force=args.force)
+                                                                          force=args.force,
+                                                                          contract_only=args.contract_only)
             entry.emit_event(event, json_output=args.json, **details, exit_code=0)
             return 0
     except Exception as exc:

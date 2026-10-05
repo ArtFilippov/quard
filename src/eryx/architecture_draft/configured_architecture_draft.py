@@ -14,6 +14,7 @@ from eryx._common import (EryxError, atomic_write, capture, load_toml, read_json
 from eryx._policy import ALLOWED_LAYERS, LAYER_DIRS, LAYERS, exclude_globs
 from eryx._reports import normalize
 from eryx.architecture_draft.architecture_draft import ArchitectureDraft
+from eryx.architecture_draft.contract_boundary_utils import contract_boundaries
 from eryx.clean_architecture_layers.configured_clean_architecture_layers import (
     ConfiguredCleanArchitectureLayers,
 )
@@ -46,13 +47,12 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
         return name
 
     @override
-    def draft(self) -> tuple[dict[str, Any], list[str]]:
+    def draft(self, *, contract_only: bool = False) -> tuple[dict[str, Any], list[str]]:
         policy = ConfiguredConsumerPolicy(self._root)
         scope = policy.scope()
-        package = self.package_name()
         files = policy.files()["production"]
         # Infer only conventional directory labels, never communities from a graph.
-        modules: dict[str, str] = {package: "Domain"}
+        modules: dict[str, str] = {self.package_name(): "Domain"}
         notes: list[str] = []
         for filename in files:
             parts = Path(filename).parts[1:]
@@ -95,7 +95,14 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
                      + "only. Write actual allowed exports in tach.toml.")
         notes.append("tach sync records current imports, including undesirable ones. "
                      + "cannot_depend_on and layer checks remain active.")
-        return config, notes
+        return self._contract_draft(config, files) if contract_only else (config, notes)
+
+    def _contract_draft(self, config: dict[str, Any], files: list[str]
+                        ) -> tuple[dict[str, Any], list[str]]:
+        contract_boundaries(self._root, files, config)
+        return config, ["Contract-only boundaries come from discovered local contracts and " +
+                        "folder ownership. Review tach.toml before acceptance; " +
+                        "do not run tach sync."]
 
     @override
     def validate(self) -> dict[str, Any]:
@@ -138,7 +145,8 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
         return config
 
     @override
-    def initialize(self, *, accept: bool = False, force: bool = False
+    def initialize(self, *, accept: bool = False, force: bool = False,
+                   contract_only: bool = False
                    ) -> tuple[str, dict[str, Any]]:
         root = self._root
         path = root / "tach.toml"
@@ -176,18 +184,20 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
                 "next_command": (
                     "uv run --locked --group dev python eryx/init_architecture.py --accept"),
             }
-        config, notes = self.draft()
+        config, notes = self.draft(contract_only=contract_only)
         atomic_write(path, "# Review before accepting; module boundaries are "
                      + "convention-based, not inferred communities.\n"
                      + tomlkit.dumps(config), root)
         if ready.exists():
             ready.unlink()
-        result = capture([tool_binary("tach"), "sync"], root)
-        atomic_write(root / ".eryx/logs/init-sync.log",
-                     result["stdout"] + "\n" + result["stderr"], root)
-        if result["error"] or result["exit_code"] != 0:
-            raise EryxError("TACH_SYNC_FAILED", "Draft tach.toml exists but sync failed. "
-                            + "See .eryx/logs/init-sync.log. Do not mark it ready until corrected.")
+        if not contract_only:
+            result = capture([tool_binary("tach"), "sync"], root)
+            atomic_write(root / ".eryx/logs/init-sync.log",
+                         result["stdout"] + "\n" + result["stderr"], root)
+            if result["error"] or result["exit_code"] != 0:
+                raise EryxError("TACH_SYNC_FAILED", "Draft tach.toml exists but sync failed. "
+                                + "See .eryx/logs/init-sync.log. Do not mark it ready "
+                                + "until corrected.")
         config = load_toml(path)
         ConfiguredCleanArchitectureLayers().sync(root, config)
         ConfiguredConsumerPolicy(root).apply()

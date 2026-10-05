@@ -56,6 +56,16 @@ are not automatically approved. Acceptance records a reviewed configuration, not
 a violations baseline. After changing layers, repeat `--accept`; never sync before
 routine checks. A project without accepted architecture cannot pass.
 
+For a standalone consumer with local contracts in their required folders, opt in to
+file-level contract-only Tach boundaries with
+`python eryx/init_architecture.py --contract-only --force --json`. Review the
+resulting `tach.toml`, then run the ordinary `--accept`. This draft uses discovered
+production files, contract declarations and folder ownership. It exposes only local
+contracts (including verified package re-exports), keeps implementation and utility
+imports within their owning contract folder, and declares only eligible dependencies
+actually used by source. It does not run `tach sync`; forbidden imports remain
+violations. The default draft and existing reviewed configurations are unchanged.
+
 ## Daily commands
 
 ```bash
