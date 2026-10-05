@@ -1,4 +1,4 @@
-# Editable consumer settings. Run eryx/apply.py after changing readability or scope.
+# Editable consumer settings. Run quard/apply.py after changing readability or scope.
 # The required Pylint profile always runs; checks below select optional independent jobs.
 [checks]
 constructor_purity = false
@@ -56,7 +56,7 @@ max_try_statements = 3
 [scope]
 exclude_directory_names = [
   ".git", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
-  ".ruff_cache", ".tox", ".nox", ".eryx", "node_modules", "build", "dist",
+  ".ruff_cache", ".tox", ".nox", ".quard", "node_modules", "build", "dist",
   "vendor", "vendored", "_vendor", "generated", "_generated", "migrations",
 ]
 # Under src/ these directories use the test profile; root tests/ is always tested.

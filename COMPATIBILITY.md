@@ -1,7 +1,7 @@
-# Совместимость Eryx 1.0.0
+# Совместимость Quard 1.0.0
 
 Историческое происхождение: установленный Python Quality 1.0.0 в tai.
-Ниже сохранены обоснования исправлений; актуальные команды используют Eryx.
+Ниже сохранены обоснования исправлений; актуальные команды используют Quard.
 
 Поставка установлена в tai 2026-09-21. Реальные smoke-тесты установщика прошли;
 версии инструментов сохранены в `tools.json`. В полном прогоне на проекте выявлены
@@ -20,7 +20,7 @@
 Регрессии проверяются настоящим Pylint в изолированных временных проектах:
 
 ```bash
-uv run --locked --group dev python -B -m unittest discover -s eryx/tests
+uv run --locked --group dev python -B -m unittest discover -s quard/tests
 ```
 
 Тесты проверяют первый запуск с новым каталогом отчёта, сохранение native JSON,
@@ -28,12 +28,12 @@ uv run --locked --group dev python -B -m unittest discover -s eryx/tests
 а также отсутствие ошибки на вызове с явно заданной кодировкой.
 
 Для обычной установки клона используйте `uv sync --locked --group dev`. При обновлении
-Eryx исправления входят в версионируемый код инструмента. Установщик не изменяет
-`eryx/check.py` и `eryx/_pylint_worker.py`. После обновления
+Quard исправления входят в версионируемый код инструмента. Установщик не изменяет
+`quard/check.py` и `quard/_pylint_worker.py`. После обновления
 Pylint пересмотрите необходимость обёртки и выполните регрессионные тесты и полный check.
 
 Исторически после выделения контрактов, выполнения, I/O и сборки `tach.toml` tai
-содержал 97 файловых границ. При выделении Eryx принято уже 109 модулей; источник
+содержал 97 файловых границ. При выделении Quard принято уже 109 модулей; источник
 истины — конфигурация потребителя, а не это историческое описание.
 Зависимости сверены с импортами; интерфейсы пакетов соответствуют `__all__`,
 листовые модули экспортируют публичные символы. Строгая матрица слоёв сохранена:
@@ -46,7 +46,7 @@ Infrastructure → UseCase для всех соответствующих фай
 Выделенный нативный адаптер `attacks.fitd.probe` остаётся в Infrastructure.
 `init_architecture.py` сохраняет Bootstrap при передаче карты clean-architecture-
 плагину: прежняя подмена на Interface теряла разрешённые связи сборки с адаптерами.
-`tests/eryx/clean_architecture_layers/test_configured_clean_architecture_layers.py` закрепляет сохранение всех пяти слоёв,
+`tests/quard/clean_architecture_layers/test_configured_clean_architecture_layers.py` закрепляет сохранение всех пяти слоёв,
 приоритет точных модулей и сохранение посторонних настроек/комментариев при повторной
 генерации карты.
 Назначение структуры описано в корневом `README.md`. `architecture.ready.json`
@@ -60,8 +60,8 @@ Infrastructure → UseCase для всех соответствующих фай
 его и `Configurable` из подсчёта R0901; `FITD`, `IterativeProbe` и собственные
 промежуточные классы учитываются. `max_parents = 3` сохранён. Это согласованная
 политика внешнего каркаса, а не исправление ошибки Pylint. Она отражена в
-`pyproject.toml` потребителя. В Eryx garak отсутствует в общих defaults;
-тестовый профиль синхронизируется через `eryx/apply.py`, повторная установка
+`pyproject.toml` потребителя. В Quard garak отсутствует в общих defaults;
+тестовый профиль синхронизируется через `quard/apply.py`, повторная установка
 сохраняет native `ignored-parents` проекта.
 
 W9201 продолжает проверять публичный фасад. Native checker уже пропускает
@@ -203,13 +203,13 @@ W9201 продолжает проверять публичный фасад. Nat
   только названные `*Protocol`, по-прежнему проверяются на E1111/E1128. Патч
   ограничен версией 4.0.8 и устанавливается тем же `install_pylint_protocol_compat()`.
 
-`tests/eryx/architecture_compatibility/test_pinned_architecture_compatibility.py` запускает настоящий Pylint в отдельных процессах
+`tests/quard/architecture_compatibility/test_pinned_architecture_compatibility.py` запускает настоящий Pylint в отдельных процессах
 на временных пакетах: сравнивает проблемные примеры с непатченным плагином и
 проверяет отрицательные случаи. Это изолирует singleton-конфигурацию плагина и
 проверяет установку патча до загрузки plugins, включая повторный вызов installer.
 
 ```bash
-uv run --locked --group dev python -B -m unittest discover -s tests/eryx/architecture_compatibility -v
+uv run --locked --group dev python -B -m unittest discover -s tests/quard/architecture_compatibility -v
 uv run --locked --group dev python -B -m unittest discover -s tests -v
 ```
 

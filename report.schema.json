@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:eryx-report:v1",
-  "title": "Eryx Report v1",
+  "$id": "urn:quard-report:v1",
+  "title": "Quard Report v1",
   "type": "object",
   "required": ["schema_version", "status", "exit_code", "summary", "diagnostics"],
   "properties": {
-    "schema_version": {"const": "eryx-report/v1"},
-    "eryx": {"type": "object", "required": ["commit", "dirty"], "properties": {"commit": {"type": ["string", "null"]}, "dirty": {"type": ["boolean", "null"]}}},
+    "schema_version": {"const": "quard-report/v1"},
+    "quard": {"type": "object", "required": ["commit", "dirty"], "properties": {"commit": {"type": ["string", "null"]}, "dirty": {"type": ["boolean", "null"]}}},
     "status": {"enum": ["passed", "violations", "error"]},
     "exit_code": {"enum": [0, 1, 2]},
     "run_id": {"type": "string"},

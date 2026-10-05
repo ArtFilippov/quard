@@ -1,24 +1,24 @@
-# Eryx
+# Quard
 
 Pinned native Python analysis for Linux `uv` projects with a `src/` layout.
-Named after *Eryx jayakari*. Tools run in the **consumer's environment**;
-Eryx is versioned independently and normally attached as a Git submodule.
+Tools run in the **consumer's environment**. Quard is versioned independently
+and normally attached as a Git submodule.
 
 ## Install
 
 From the consumer root (Python >= 3.12 and `uv` required):
 
 ```bash
-git submodule add git@github.com:ArtFilippov/eryx.git eryx
-bash eryx/install.sh --project .
+git submodule add git@github.com:ArtFilippov/quard.git quard
+bash quard/install.sh --project .
 ```
 
 The installer pins dev dependencies, updates the consumer lockfile, synchronizes
-its environment, initializes `.eryx/` and native configs, then runs real analyzer
-smoke tests. It does not copy or modify Eryx sources. Inspect a plan with:
+its environment, initializes `.quard/` and native configs, then runs real analyzer
+smoke tests. It does not copy or modify Quard sources. Inspect a plan with:
 
 ```bash
-bash eryx/install.sh --project . --dry-run --json
+bash quard/install.sh --project . --dry-run --json
 ```
 
 Reinstall with the same command after updating the gitlink. Project limits, scope,
@@ -31,10 +31,10 @@ Application files and root `AGENTS.md` are never generated.
 
 Pass optional dependencies explicitly on first install, e.g. `--extra qwen`.
 Repeat `--extra` for multiple extras. This selection is recorded in
-`.eryx/installation.json` and reused on reinstallation. Keep the same extras on
+`.quard/installation.json` and reused on reinstallation. Keep the same extras on
 ordinary `uv sync`/`uv run` commands to retain those dependencies.
 
-Managed files are restored on failure; logs stay under `.eryx/logs/`. The uv cache
+Managed files are restored on failure; logs stay under `.quard/logs/`. The uv cache
 and virtual environment are not transactional: resync the restored lockfile if needed.
 Dry-run writes no consumer files; uv bootstrap may populate its external cache.
 Single projects are supported; uv workspaces and source symlinks are rejected.
@@ -42,8 +42,8 @@ Single projects are supported; uv workspaces and source symlinks are rejected.
 ### Generated architecture
 
 On a new project without `tach.toml` or an accepted architecture marker, install
-selects Eryx-managed contract-only boundaries. Commit
-`.eryx/architecture.generated.json` and the installer's `/tach.toml` Git ignore
+selects Quard-managed contract-only boundaries. Commit
+`.quard/architecture.generated.json` and the installer's `/tach.toml` Git ignore
 rule. The root `tach.toml` is generated from discovered production files, local
 contracts and folder ownership; install, apply and check restore it when missing or
 modified. Correct files are left untouched. Fresh clones need only sync dependencies
@@ -68,9 +68,9 @@ Existing consumer-owned Tach configurations remain on the reviewed-policy path:
 Installation does **not** accept reviewed architecture. For a reviewed project:
 
 ```bash
-uv run --locked --group dev python eryx/init_architecture.py --json
+uv run --locked --group dev python quard/init_architecture.py --json
 # Review/edit tach.toml: boundaries, layers, allowed dependencies, public exports.
-uv run --locked --group dev python eryx/init_architecture.py --accept --json
+uv run --locked --group dev python quard/init_architecture.py --accept --json
 ```
 
 Legacy draft generation supports one package beneath `src/`, classifies conventional
@@ -82,7 +82,7 @@ routine checks. A reviewed project without accepted architecture cannot pass.
 
 For a legacy reviewable draft with local contracts in their required folders, use
 file-level contract-only Tach boundaries with
-`python eryx/init_architecture.py --contract-only --force --json`. Review the
+`python quard/init_architecture.py --contract-only --force --json`. Review the
 resulting `tach.toml`, then run the ordinary `--accept`. This draft uses discovered
 production files, contract declarations and folder ownership. It exposes only local
 contracts (including verified package re-exports), keeps implementation and utility
@@ -93,13 +93,13 @@ violations. The default draft and existing reviewed configurations are unchanged
 ## Daily commands
 
 ```bash
-uv run --locked --group dev python eryx/check.py
-uv run --locked --group dev python eryx/check.py --json
-# Edit .eryx/config.toml ([checks], [readability.*], [scope]), then:
-uv run --locked --group dev python eryx/apply.py --json
+uv run --locked --group dev python quard/check.py
+uv run --locked --group dev python quard/check.py --json
+# Edit .quard/config.toml ([checks], [readability.*], [scope]), then:
+uv run --locked --group dev python quard/apply.py --json
 ```
 
-Select independent jobs under `[checks]` in `.eryx/config.toml`:
+Select independent jobs under `[checks]` in `.quard/config.toml`:
 
 | Setting (default) | Job |
 |---|---|
@@ -138,8 +138,8 @@ consumer-owned. All pinned tools are still installed and version-checked on ever
 check, and installation runs all native smoke probes regardless of these switches.
 If `lcom4 = false`, passing `--lcom_files` (even `""`) is a configuration error
 (exit 2); when enabled, full, selected and empty-string coverage work as below.
-Installation migrates existing `.eryx/readability.toml`, `.eryx/scope.toml` and
-`.eryx/checks.toml` into the single configuration (constructor purity defaults
+Installation migrates existing `.quard/readability.toml`, `.quard/scope.toml` and
+`.quard/checks.toml` into the single configuration (constructor purity defaults
 to false), then removes those three files. It retains existing limits, test
 overrides and scope. Check/apply before migration fail with exit 2 and instruct
 you to reinstall. Installation rollback restores the original files on failure.
@@ -150,7 +150,7 @@ Every command accepts `--project` (defaults to the current directory). A separat
 clone or a differently named submodule works with the consumer's interpreter:
 
 ```bash
-uv run --locked --group dev python /path/to/eryx/check.py --project .
+uv run --locked --group dev python /path/to/quard/check.py --project .
 ```
 
 Check supports `--serial`, `--timeout 900` (per analyzer) and
@@ -253,13 +253,13 @@ After any change in a greenfield project, run the normal check with `--lcom_file
 set to the changed Python files, or `--lcom_files ""` when no Python files changed:
 
 ```bash
-uv run --locked --group dev python eryx/check.py --lcom_files "src/example.py tests/test_example.py"
-uv run --locked --group dev python eryx/check.py --lcom_files ""
+uv run --locked --group dev python quard/check.py --lcom_files "src/example.py tests/test_example.py"
+uv run --locked --group dev python quard/check.py --lcom_files ""
 ```
 
 Pass project-relative `.py` paths under `src/` or `tests/`, separated by whitespace;
 quote individual paths containing spaces inside the argument. Paths must exist and
-belong to Eryx's discovered, non-excluded source scope. Repeated paths are checked
+belong to Quard's discovered, non-excluded source scope. Repeated paths are checked
 once. Only LCOM4 is narrowed: Pylint, Pyright, pydoclint and Tach keep their normal
 project-wide coverage. An empty argument marks LCOM4 **skipped**, not passed.
 The report's `coverage.lcom4` records the requested value, selected paths and
@@ -268,7 +268,7 @@ paths successfully analyzed; `tools` records the LCOM4 job status.
 Run the **full check without `--lcom_files` after changes and in CI**:
 
 ```bash
-uv run --locked --group dev python eryx/check.py
+uv run --locked --group dev python quard/check.py
 ```
 
 | Exit | Meaning |
@@ -278,10 +278,10 @@ uv run --locked --group dev python eryx/check.py
 | 2 | Configuration/version/init failure, crash, timeout or parser failure |
 
 Every native severity fails the check. Unknown failed output never becomes success.
-Full diagnostics and per-tool statuses: `.eryx/reports/latest.json`. Archived reports
-and raw stdout/stderr/native JSON: `.eryx/reports/<run-id>/`. The report contains
-`eryx.commit` and `eryx.dirty` for the **running checkout** (null when unavailable).
-Schemas: `eryx-report/v1` in `report.schema.json`, events: `eryx-event/v1`.
+Full diagnostics and per-tool statuses: `.quard/reports/latest.json`. Archived reports
+and raw stdout/stderr/native JSON: `.quard/reports/<run-id>/`. The report contains
+`quard.commit` and `quard.dirty` for the **running checkout** (null when unavailable).
+Schemas: `quard-report/v1` in `report.schema.json`, events: `quard-event/v1`.
 Positions are one-based; unavailable positions are null. Diagnostics retain native
 rule IDs or explicit adapter categories, stable fingerprints and tool/profile identity.
 
@@ -289,8 +289,8 @@ rule IDs or explicit adapter categories, stable fingerprints and tool/profile id
 
 ```text
 consumer/
-  eryx/                    # immutable gitlink; tool code, pins, defaults, tests
-  .eryx/                   # versioned consumer settings and integration state
+  quard/                    # immutable gitlink; tool code, pins, defaults, tests
+  .quard/                   # versioned consumer settings and integration state
     config.toml              # editable check selection, readability and scope
     architecture.generated.json  # generated-policy selection on new installs
     architecture.ready.json      # legacy reviewed-policy acceptance
@@ -307,9 +307,9 @@ consumer/
   tach.toml                # ignored when generated; committed when consumer-owned
 ```
 
-Commit `.gitmodules`, the Eryx gitlink, `.eryx/` settings and consumer-owned native
+Commit `.gitmodules`, the Quard gitlink, `.quard/` settings and consumer-owned native
 configs. Generated `tach.toml` is ignored; commit its selection marker instead.
-Ignore only runtime directories, not `.eryx/` wholesale. Analyzer caches and logs
+Ignore only runtime directories, not `.quard/` wholesale. Analyzer caches and logs
 are consumer-owned; uv retains its normal package cache. Tach may use `.tach/` in
 the consumer. A normal install/check/apply/accept leaves the tool checkout clean.
 
@@ -318,28 +318,28 @@ git clone --recurse-submodules git@github.com:OWNER/CONSUMER.git
 # Or in an existing clone:
 git submodule update --init --recursive
 uv sync --locked --group dev
-uv run --locked --group dev python eryx/check.py
+uv run --locked --group dev python quard/check.py
 ```
 
-Legacy installations are migrated by reading their project settings into `.eryx/`
+Legacy installations are migrated by reading their project settings into `.quard/`
 when missing. Remove the legacy scripts and self-extracting delivery from the
 consumer after verifying migration. See [ORIGIN.md](ORIGIN.md).
 
 ## Development and integration
 
-Reproduce and fix in the Eryx checkout. Add a standalone regression fixture
-without consumer source dependencies. A separate Eryx clone with `--project`
-works identically. Run Eryx tests and the consumer's checks/runtime tests. From
+Reproduce and fix in the Quard checkout. Add a standalone regression fixture
+without consumer source dependencies. A separate Quard clone with `--project`
+works identically. Run Quard tests and the consumer's checks/runtime tests. From
 the consumer:
 
 ```bash
-uv run --locked --group dev python -B -m unittest discover -s eryx/tests
+uv run --locked --group dev python -B -m unittest discover -s quard/tests
 ```
 
-Tests also need `jsonschema`, supplied by Eryx's own dev group.
+Tests also need `jsonschema`, supplied by Quard's own dev group.
 
-When updating a consumer, pin a reachable Eryx commit, reinstall if configs or
-dependencies changed, and run the consumer checks. Keep Eryx and consumer
+When updating a consumer, pin a reachable Quard commit, reinstall if configs or
+dependencies changed, and run the consumer checks. Keep Quard and consumer
 histories separate.
 
 Standalone development:
@@ -350,15 +350,15 @@ uv run --locked --group dev python -B -m unittest discover -s tests -v
 uv run --locked --group dev python check.py
 ```
 
-Eryx's implementation lives in `src/eryx/`. Root Python commands are compatibility
-entry points for existing consumer integrations. The checkout has generated
-architecture under `.eryx/`, so a full check from here analyzes its production modules
-and tests; the resulting report is in this checkout's `.eryx/reports/latest.json`.
+Quard's implementation lives in `src/quard/`. Root Python commands are consumer
+entry points. The checkout has generated
+architecture under `.quard/`, so a full check from here analyzes its production modules
+and tests; the resulting report is in this checkout's `.quard/reports/latest.json`.
 Consumer checks still write reports and caches only inside the selected consumer.
 
 CI runs offline orchestration tests and real compatibility regressions on isolated
 public fixtures; `LifecycleTests` is always skipped. Access to `tai` is not needed.
-Eryx's lockfile fixes its test environment; consumer lockfiles fix theirs.
+Quard's lockfile fixes its test environment; consumer lockfiles fix theirs.
 
 Profile/limits: [PROFILE.md](PROFILE.md). Compatibility rationale and provenance:
 [COMPATIBILITY.md](COMPATIBILITY.md). Agent instructions: [AGENTS.md](AGENTS.md).

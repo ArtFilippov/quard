@@ -1,4 +1,4 @@
-# Edit .eryx/readability.toml, then run: uv run --locked --group dev python eryx/apply.py
+# Edit .quard/readability.toml, then run: uv run --locked --group dev python quard/apply.py
 # Length means Pylint's own metrics, NOT an AST-independent line count.
 [production]
 max_line_length = 100

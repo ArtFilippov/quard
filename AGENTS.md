@@ -1,4 +1,4 @@
-# Eryx agent instructions
+# Quard agent instructions
 
 Read `README.md`, `PROFILE.md` and `COMPATIBILITY.md` before changing analyzer policy
 or version-specific patches. Preserve native diagnostics: do not filter failures,
@@ -9,27 +9,27 @@ Consumer commands (from its root; add `--extra qwen` when that environment uses 
 ```bash
 git submodule update --init --recursive
 uv sync --locked --group dev
-uv run --locked --group dev python eryx/check.py
-uv run --locked --group dev python eryx/apply.py --json
-uv run --locked --group dev python eryx/init_architecture.py --accept --json  # reviewed configurations only
+uv run --locked --group dev python quard/check.py
+uv run --locked --group dev python quard/apply.py --json
+uv run --locked --group dev python quard/init_architecture.py --accept --json  # reviewed configurations only
 ```
 
 Fresh installs select generated contract-only architecture: commit
-`.eryx/architecture.generated.json` and the installer-added `/tach.toml` ignore
+`.quard/architecture.generated.json` and the installer-added `/tach.toml` ignore
 rule. Install/apply/check regenerate root `tach.toml` from source without syncing
 or accepting imports. Existing reviewed configurations keep explicit acceptance;
-use `init_architecture.py` for that flow. Edit readability/scope in `.eryx/`;
+use `init_architecture.py` for that flow. Edit readability/scope in `.quard/`;
 other native configs remain consumer-owned. Every
 entry point accepts `--project`, defaulting to the current working directory.
-Keep Eryx code, pins, defaults and schema independent from the consumer root.
+Keep Quard code, pins, defaults and schema independent from the consumer root.
 
-Reports: `.eryx/reports/latest.json` and archived raw logs alongside each report.
+Reports: `.quard/reports/latest.json` and archived raw logs alongside each report.
 Exit 0 means all checks passed, 1 means violations, 2 means config/tool failure.
 Inspect `tools[*].status` and `is_infrastructure_error`; report actual exit codes
 and unresolved diagnostics. Do not describe tool failures as a passing check.
-Install failure details: `.eryx/logs/install-error.json` and `install.log`.
+Install failure details: `.quard/logs/install-error.json` and `install.log`.
 
-After tool changes, run from the Eryx checkout:
+After tool changes, run from the Quard checkout:
 
 ```bash
 uv sync --locked --group dev
@@ -41,13 +41,13 @@ This includes native regression and real installation/smoke tests. Test fixtures
 must not require access to a private consumer. Run the affected consumer's full
 static and relevant runtime checks too. Keep ordinary install/check/apply/accept
 writes inside the selected project; verify consumer submodules remain clean.
-The Eryx checkout is also a configured project: its full check covers `src/eryx/`
-and `tests/`, with reports in this checkout's `.eryx/`. Its root Tach configuration
+The Quard checkout is also a configured project: its full check covers `src/quard/`
+and `tests/`, with reports in this checkout's `.quard/`. Its root Tach configuration
 uses the generated policy; run `check.py` to restore an absent `tach.toml`.
 
 Develop directly in a consumer submodule or separate clone. Reproduce, fix, add
 an autonomous regression, and test. Keep the tool and consumer histories separate;
-pin a reachable Eryx commit when updating the consumer gitlink.
+pin a reachable Quard commit when updating the consumer gitlink.
 
 ## Agent skills
 

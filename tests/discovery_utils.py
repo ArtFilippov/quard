@@ -18,7 +18,7 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
         unittest.TestSuite: The suite with all mirrored tests included.
     """
     del pattern
-    root = Path(__file__).resolve().parent / "eryx"
+    root = Path(__file__).resolve().parent / "quard"
     sys.path.insert(0, str(root.parents[1] / "src"))
     for group in ("contract_analysis", "folder_analysis", "test_placement_analysis",
                   "method_analysis", "cohesion_analysis", "field_ownership",

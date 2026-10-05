@@ -5,36 +5,15 @@ violations baseline. Follow-up issues #63–#68 own the repairs. A lower total
 does not mean that a new diagnostic is pre-existing; an unchanged count does
 not mean that the same locations still fail.
 
-## Reproduce
+## Recorded comparison
 
-The last commit before the class migration is `04c61de` (#43); migration
-starts at `49cc9ec` (#44). The after revision measured here is `cc0a3d9`.
-Both revisions have the same `uv.lock`, `tools.json`, readability/scope/checks
-settings and Python 3.12.14. The after revision adds a Domain mapping for
-`report_parsing` and explicitly reviews its Tach boundary. The two reports
-therefore represent their respective reviewed architecture configurations,
-not an auto-synced Tach graph. Run from the Eryx checkout:
-
-```bash
-git worktree add --detach /tmp/opencode/eryx-pre-migration 04c61de
-# In /tmp/opencode/eryx-pre-migration:
-uv sync --locked --group dev --python 3.12.14
-uv run --locked --group dev python check.py --json
-# In the current Eryx checkout (at cc0a3d9 for this comparison):
-uv sync --locked --group dev --python 3.12.14
-uv run --locked --group dev python check.py --json
-```
-
-Each check returns **1**. The ignored `.eryx/reports/latest.json` in each
-checkout points to archived reports and raw stdout/stderr beneath its own
-`.eryx/reports/<run-id>/`; no consumer or tool source was written by a check.
-No `tach sync` or baseline is involved. Inspect original positions and
-messages with:
-
-```bash
-jq -r '.diagnostics[] | [.job,.rule,.path,(.line|tostring),.symbol,.message] | @tsv' .eryx/reports/latest.json
-jq -r '.tools[] | [.name,.status,(.exit_code|tostring),(.error // "-")] | @tsv' .eryx/reports/latest.json
-```
+The measurements compare the last revision before the class migration (#43)
+with a revision after it (#44 and follow-ups), using the same `uv.lock`,
+`tools.json`, readability/scope/checks settings and Python 3.12.14. The later
+revision adds a Domain mapping for `report_parsing` and explicitly reviews its
+Tach boundary. These are recorded results from the respective reviewed
+architecture configurations, not an auto-synced Tach graph or a baseline.
+Both checks returned **1**; no consumer or tool source was written by a check.
 
 | Job | Before status/exit | After status/exit |
 | --- | --- | --- |
@@ -92,13 +71,9 @@ Pylint production `C0301` **329→342**, `R0904` **5→8**, `W9202` **12→27**;
 Pyright unknown-member **981→879** and unknown-argument **446→331**.
 Many of the latter counts refer to old code relocated under a new path.
 
-For a focused follow-up, select a rule and inspect both reports, then use
-`git diff 04c61de..cc0a3d9 -- <old-path> <new-path>` to establish the owner
-and whether the offending statement changed. For example:
-
-```bash
-jq -r '.diagnostics[] | select(.rule == "R0903" or .rule == "W9202") | [.rule,.path,.line,.message] | @tsv' .eryx/reports/latest.json
-```
+For a focused follow-up, select a rule and compare the two recorded reports,
+then inspect the source diff to establish the owner and whether the offending
+statement changed.
 
 This inventory records the current native failures for the follow-on slices;
 it does **not** mark the old unresolved native diagnostics as passing, change

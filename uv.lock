@@ -69,7 +69,7 @@ wheels = [
 ]
 
 [[package]]
-name = "eryx"
+name = "quard"
 version = "1.0.0"
 source = { virtual = "." }
 dependencies = [

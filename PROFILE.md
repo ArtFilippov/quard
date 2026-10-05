@@ -1,6 +1,6 @@
 # Native analysis profile
 
-Eryx 1.0.0 preserves the original strict profile. Exact tool pins live in
+Quard 1.0.0 preserves the original strict profile. Exact tool pins live in
 `tools.json`; top-level versions are verified on every check. Consumers control
 their native configs except generated contract-only `tach.toml`; there is no hidden
 violations baseline.
@@ -37,11 +37,11 @@ violations baseline.
   the native report and streams are archived.
   Set `duplicate_detection = false` under `[checks]` to skip all three jobs; the
   Pylint profile and its duplicate-code rule are unaffected.
-* **LCOM4**: Eryx's basic AST-based class cohesion check, run as its own job.
+* **LCOM4**: Quard's basic AST-based class cohesion check, run as its own job.
 * **Constructor purity (opt-in)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including
   nested classes. It is unaffected by `--lcom_files`; stubs have no checked body.
-* **Non-instance methods**: Eryx's source-positioned `NON_INSTANCE_METHOD` rule rejects
+* **Non-instance methods**: Quard's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
   on consumer-owned classes, independently of the native analyzers and LCOM4.
   `MISSING_INSTANCE_RECEIVER` rejects plain class-body methods without a mandatory
@@ -217,13 +217,13 @@ violations baseline.
   remain allowed.
 
 Production is `src/`; tests are `tests/` and the test directory basenames configured
-in `.eryx/config.toml` under `[scope]`. Exclusions match **exact directory basenames**,
+in `.quard/config.toml` under `[scope]`. Exclusions match **exact directory basenames**,
 not substrings:
 `generated_models` is not `generated`. Discovered excluded directories appear in
 reports. `.pyi` files are checked by Pyright, both method rules, class contracts
 and outer classes; other tools use their native scope. `__init__.py` is included. Root scripts and
-notebooks are outside the consumer's source scope. In the Eryx checkout, its own
-`src/eryx/` and `tests/` are analyzed; its autonomous test suite verifies execution.
+notebooks are outside the consumer's source scope. In the Quard checkout, its own
+`src/quard/` and `tests/` are analyzed; its autonomous test suite verifies execution.
 When `lcom4 = true`, `check.py --lcom_files` narrows only LCOM4 to explicitly
 selected, existing `.py` files in that scope; `--lcom_files ""` skips LCOM4.
 Without the option, full LCOM4 coverage is retained. When `lcom4 = false`,
@@ -292,7 +292,7 @@ separate method/property-accessor/class evidence for source, companion stubs and
 signatures, plus effective restricted targets and marking origins. The normalized
 report uses the ordinary report schema and archived raw logs.
 
-Consumers supply the marker; Eryx has no runtime decorator API. Use a generic
+Consumers supply the marker; Quard has no runtime decorator API. Use a generic
 identity function so Pyright retains class identity, callable signatures and binding:
 
 ```python
@@ -304,13 +304,13 @@ For Python 3.12+, this works for methods and classes. A stub may declare the sam
 signature with `...`. Source recognition requires a synchronous function named
 `encapsulated_only` whose only executable statement returns its sole positional
 argument (an optional docstring is allowed). Explicit imports of that named marker
-from opaque external modules use the same identity convention; Eryx cannot verify
+from opaque external modules use the same identity convention; Quard cannot verify
 their runtime implementation. Local bindings, imported module references, simple
 aliases and consumer re-exports resolve at declaration time. Shadowed, reassigned,
 conditional and unresolved customer bindings do not establish the marker. A name
 or attribute spelling alone is insufficient. Recognized markers preserve method
 receiver checks, field/method classification and decorated class identity in the
-existing Eryx workers; they grant no exemption from native or other Eryx diagnostics.
+existing Quard workers; they grant no exemption from native or other Quard diagnostics.
 
 An explicit restricted invocation qualifies only through the proven current
 method's first positional instance receiver (regardless of its spelling), an
@@ -460,10 +460,10 @@ their diagnostics. Ordinary reports, manifests and logs stay in the chosen consu
 
 ## Constructor purity
 
-Set `constructor_purity = true` under `[checks]` in the consumer's `.eryx/config.toml` to enable
+Set `constructor_purity = true` under `[checks]` in the consumer's `.quard/config.toml` to enable
 this independent job on ordinary full checks. The default is `false`, including
 when migrating an older installation with no `checks.toml`. The other independent
-Eryx job switches are documented in [README.md](README.md#daily-commands) and default
+Quard job switches are documented in [README.md](README.md#daily-commands) and default
 to `true` even on upgrades. Malformed or unknown settings fail as configuration errors (exit 2).
 Disabled checks appear as `skipped` with a null exit code in the report; no
 manifest or worker is started. Reinstallation preserves an existing opt-in.
@@ -562,8 +562,8 @@ failures are infrastructure errors (exit 2), not passing results.
 
 ## Readability
 
-Edit `[readability.production]` and `[readability.tests]` in `.eryx/config.toml`,
-then run `eryx/apply.py` in the consumer environment. Edit `[scope]` there too;
+Edit `[readability.production]` and `[readability.tests]` in `.quard/config.toml`,
+then run `quard/apply.py` in the consumer environment. Edit `[scope]` there too;
 unapplied scope fails with `SCOPE_NOT_APPLIED`.
 Unapplied limits fail with `READABILITY_NOT_APPLIED`; invalid TOML, unknown names,
 booleans/nonpositive limits and contradictory bounds are errors.
@@ -608,7 +608,7 @@ only adds NumPy checks; it does not prove Google default-value consistency.
 `pylint.extensions.docparams` collides with the architecture plugin's W900x/W901x
 IDs and is not loaded. Pylint docstyle and pydoclint cover documentation without
 claiming identical rule sets. The discovered catalog and policy notes are saved
-in `.eryx/pylint-catalog.json` and `.eryx/policy-notes.json`.
+in `.quard/pylint-catalog.json` and `.quard/policy-notes.json`.
 
 Production disables mandatory docstrings and four checks explicitly delegated to
 Pyright: reimported, undefined-variable, used-before-assignment and
@@ -643,7 +643,7 @@ package exports are `api.py` and its public symbols, not all implementation.
 Tach's public import surface and typing.Protocol are distinct contracts.
 
 New installations without existing Tach architecture select a generated contract-only
-root `tach.toml`. The tracked marker is `.eryx/architecture.generated.json`; the
+root `tach.toml`. The tracked marker is `.quard/architecture.generated.json`; the
 root config is ignored and restored by install, apply and check. Existing reviewed
 configurations remain consumer-owned. The optional legacy
 `init_architecture.py --contract-only` draft creates an explicit Tach

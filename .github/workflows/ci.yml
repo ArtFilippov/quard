@@ -1,4 +1,4 @@
-name: Eryx
+name: Quard
 on:
   push:
     branches: [main]

@@ -10,7 +10,7 @@ missing or conflicting origin remains unknown and fails closed.
 
 An explicitly imported external symbol or a member of an external module has
 external provenance. A member called through a receiver with a proven external
-type annotation also crosses that boundary. Such calls are opaque: Eryx cannot
+type annotation also crosses that boundary. Such calls are opaque: Quard cannot
 determine whether an external symbol is a class, function or callable instance
 without inspecting its implementation or declarations. They qualify as eager
 calls while their arguments and keyword values are checked recursively. An
@@ -18,7 +18,7 @@ unknown receiver, a customer import that cannot be resolved, and an unqualified
 unknown name do not establish external provenance. Ordinary builtin functions
 other than the four approved validators remain explicitly denied.
 
-Eryx reads discovered customer source to establish origins but does not import
+Quard reads discovered customer source to establish origins but does not import
 or execute it. It never reads external source, stubs or type declarations to
 classify external callable kind. Exact external-type annotations on parameters
 and local or direct receiver fields provide receiver evidence; arbitrary return

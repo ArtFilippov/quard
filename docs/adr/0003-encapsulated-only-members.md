@@ -32,7 +32,7 @@ dispatch remains pending.
 - Structural resemblance alone does not propagate a Protocol's markers to an
   unrelated implementation. Access through a marked Protocol annotation is
   checked against that contract.
-- Consumers define or import the identity marker. Eryx supplies no runtime
+- Consumers define or import the identity marker. Quard supplies no runtime
   decorator API. Marker resolution respects aliases, re-exports, shadowing and
   reassignment; recognition must preserve class identity and instance-method
   binding in existing checks.

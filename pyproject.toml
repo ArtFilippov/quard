@@ -1,5 +1,5 @@
 [project]
-name = "eryx"
+name = "quard"
 version = "1.0.0"
 description = "Pinned native Python analysis for uv/src projects"
 requires-python = ">=3.12"
@@ -40,7 +40,7 @@ fail-under = 0
 fail-on = ["I"]
 recursive = true
 py-version = "3.12"
-ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.eryx|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"]
+ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"]
 
 [tool.pylint.messages_control]
 enable = ["all"]
@@ -89,8 +89,8 @@ max-try-statements = 1
 
 [tool.pyright]
 include = ["src", "tests"]
-exclude = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".eryx/**", "**/.eryx/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
-ignore = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".eryx/**", "**/.eryx/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
+exclude = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".quard/**", "**/.quard/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
+ignore = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".quard/**", "**/.quard/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
 typeCheckingMode = "strict"
 pythonPlatform = "Linux"
 extraPaths = ["src"]
@@ -131,7 +131,7 @@ extraPaths = ["src"]
 [tool.pydoclint]
 style = "google"
 quiet = true
-exclude = "(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.eryx|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"
+exclude = "(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"
 skip-checking-short-docstrings = false
 skip-checking-private-functions = false
 skip-checking-raises = false
@@ -166,541 +166,541 @@ Interface = ["interfaces", "interface"]
 Bootstrap = ["bootstrap", "composition"]
 
 [[tool.clean-arch.layers]]
-module = "eryx.clean_architecture_layers.configured_clean_architecture_layers"
+module = "quard.clean_architecture_layers.configured_clean_architecture_layers"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_compatibility.pinned_architecture_compatibility"
+module = "quard.architecture_compatibility.pinned_architecture_compatibility"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_compatibility.architecture_compatibility"
+module = "quard.architecture_compatibility.architecture_compatibility"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.clean_architecture_layers.clean_architecture_layers"
+module = "quard.clean_architecture_layers.clean_architecture_layers"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_draft.configured_architecture_draft"
+module = "quard.architecture_draft.configured_architecture_draft"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_draft.generated_architecture_utils"
+module = "quard.architecture_draft.generated_architecture_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.marker_binding_analysis.marker_binding_analysis"
+module = "quard.marker_binding_analysis.marker_binding_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.test_placement_analysis.test_placement_analysis"
+module = "quard.test_placement_analysis.test_placement_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_operation_model.field_operation_model"
+module = "quard.field_operation_model.field_operation_model"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_draft.contract_boundary_utils"
+module = "quard.architecture_draft.contract_boundary_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.consumer_policy.configured_consumer_policy"
+module = "quard.consumer_policy.configured_consumer_policy"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.constructor_analysis.constructor_analysis"
+module = "quard.constructor_analysis.constructor_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.constructor_analysis.constructor_checker"
+module = "quard.constructor_analysis.constructor_checker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_analysis.cohesion_worker_utils"
+module = "quard.cohesion_analysis.cohesion_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_references.cohesion_references"
+module = "quard.cohesion_references.cohesion_references"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.constructor_origins.constructor_origins"
+module = "quard.constructor_origins.constructor_origins"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.contract_worker_utils"
+module = "quard.contract_analysis.contract_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.dependency_type_utils"
+module = "quard.contract_analysis.dependency_type_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.dispatch_site_model.dispatch_site_model"
+module = "quard.dispatch_site_model.dispatch_site_model"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_type_analysis.field_type_analysis"
+module = "quard.field_type_analysis.field_type_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.installation.transactional_installation"
+module = "quard.installation.transactional_installation"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.marker_binding_analysis.marker_bindings"
+module = "quard.marker_binding_analysis.marker_bindings"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.test_placement_analysis.placement_utils"
+module = "quard.test_placement_analysis.placement_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.test_placement_analysis.test_placement"
+module = "quard.test_placement_analysis.test_placement"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.ancestry_traversal.ancestry_traversal"
+module = "quard.ancestry_traversal.ancestry_traversal"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_draft.architecture_draft"
+module = "quard.architecture_draft.architecture_draft"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_references.method_references"
+module = "quard.cohesion_references.method_references"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_operation_model.field_operation"
+module = "quard.field_operation_model.field_operation"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_operation_model.operation_utils"
+module = "quard.field_operation_model.operation_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restricted_targets.restricted_targets"
+module = "quard.restricted_targets.restricted_targets"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_analysis.cohesion_analysis"
+module = "quard.cohesion_analysis.cohesion_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_analysis.declaration_utils"
+module = "quard.cohesion_analysis.declaration_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.contract_analysis"
+module = "quard.contract_analysis.contract_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.report_parsing.native_report_parser"
+module = "quard.report_parsing.native_report_parser"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.constructor_analysis.checker_utils"
+module = "quard.constructor_analysis.checker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.dependency_types"
+module = "quard.contract_analysis.dependency_types"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.folder_ownership"
+module = "quard.contract_analysis.folder_ownership"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.class_stores_utils"
+module = "quard.field_ownership.class_stores_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_type_analysis.evidence_utils"
+module = "quard.field_type_analysis.evidence_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.outer_classes.parsed_outer_classes"
+module = "quard.outer_classes.parsed_outer_classes"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.constructor_origins.origins_utils"
+module = "quard.constructor_origins.origins_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.dispatch_site_model.dispatch_site"
+module = "quard.dispatch_site_model.dispatch_site"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_type_analysis.type_evidence"
+module = "quard.field_type_analysis.type_evidence"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restricted_calls.restricted_calls"
+module = "quard.restricted_calls.restricted_calls"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_runner.native_check_runner"
+module = "quard.check_runner.native_check_runner"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.contract_utils"
+module = "quard.contract_analysis.contract_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.test_placement"
+module = "quard.contract_analysis.test_placement"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.folder_analysis.folder_ownership"
+module = "quard.folder_analysis.folder_ownership"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._free_function_placement_worker"
+module = "quard._free_function_placement_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_analysis.scoring_utils"
+module = "quard.cohesion_analysis.scoring_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.consumer_policy.consumer_policy"
+module = "quard.consumer_policy.consumer_policy"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.field_ownership"
+module = "quard.field_ownership.field_ownership"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.ownership_utils"
+module = "quard.field_ownership.ownership_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.folder_analysis.folder_analysis"
+module = "quard.folder_analysis.folder_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.marker_analysis.marker_analysis"
+module = "quard.marker_analysis.marker_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.method_analysis.method_analysis"
+module = "quard.method_analysis.method_analysis"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_analysis.declarations"
+module = "quard.cohesion_analysis.declarations"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.encapsulated_only_worker_utils"
+module = "quard.encapsulated_only_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.bindings_utils"
+module = "quard.field_ownership.bindings_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.free_function_placement_utils"
+module = "quard.free_function_placement_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.report_parsing.report_parsing"
+module = "quard.report_parsing.report_parsing"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restricted_targets.resolution"
+module = "quard.restricted_targets.resolution"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_job.captured_check_job"
+module = "quard.check_job.captured_check_job"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.class_stores"
+module = "quard.field_ownership.class_stores"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.folder_analysis.folder_utils"
+module = "quard.folder_analysis.folder_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.instance_fields_worker_utils"
+module = "quard.instance_fields_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.marker_analysis.marker_index"
+module = "quard.marker_analysis.marker_index"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.method_analysis.declarations"
+module = "quard.method_analysis.declarations"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.ancestry_traversal.ancestry"
+module = "quard.ancestry_traversal.ancestry"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.constructor_origins.origins"
+module = "quard.constructor_origins.origins"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.contract_analysis.contracts"
+module = "quard.contract_analysis.contracts"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.outer_classes.outer_classes"
+module = "quard.outer_classes.outer_classes"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restriction_agreement_utils"
+module = "quard.restriction_agreement_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._constructor_purity_worker"
+module = "quard._constructor_purity_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_initialization_utils"
+module = "quard.field_initialization_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.outer_classes_worker_utils"
+module = "quard.outer_classes_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._encapsulated_only_worker"
+module = "quard._encapsulated_only_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._method_decorators_worker"
+module = "quard._method_decorators_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.architecture_compat_utils"
+module = "quard.architecture_compat_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_runner.check_runner"
+module = "quard.check_runner.check_runner"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_runner.runner_utils"
+module = "quard.check_runner.runner_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.cohesion_analysis.classes"
+module = "quard.cohesion_analysis.classes"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_access.field_access"
+module = "quard.field_access.field_access"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.ownership"
+module = "quard.field_ownership.ownership"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.installation.installation"
+module = "quard.installation.installation"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restricted_calls.ancestry"
+module = "quard.restricted_calls.ancestry"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._contract_folders_worker"
+module = "quard._contract_folders_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._dependency_types_worker"
+module = "quard._dependency_types_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.accesses"
+module = "quard.field_ownership.accesses"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_ownership.bindings"
+module = "quard.field_ownership.bindings"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.method_declaration_utils"
+module = "quard.method_declaration_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._class_contracts_worker"
+module = "quard._class_contracts_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._instance_fields_worker"
+module = "quard._instance_fields_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.init_architecture_utils"
+module = "quard.init_architecture_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restricted_report_utils"
+module = "quard.restricted_report_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._test_placement_worker"
+module = "quard._test_placement_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.restricted_calls.calls"
+module = "quard.restricted_calls.calls"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._field_initialization"
+module = "quard._field_initialization"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._outer_classes_worker"
+module = "quard._outer_classes_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._restricted_agreement"
+module = "quard._restricted_agreement"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_selection_utils"
+module = "quard.check_selection_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.field_access.accesses"
+module = "quard.field_access.accesses"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._architecture_compat"
+module = "quard._architecture_compat"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._constructor_origins"
+module = "quard._constructor_origins"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._restricted_reports"
+module = "quard._restricted_reports"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_job.check_job"
+module = "quard.check_job.check_job"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.pylint_worker_utils"
+module = "quard.pylint_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.config_drift_utils"
+module = "quard.config_drift_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._field_operations"
+module = "quard._field_operations"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._restricted_calls"
+module = "quard._restricted_calls"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.init_architecture"
+module = "quard.init_architecture"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.tach_worker_utils"
+module = "quard.tach_worker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._pylint_worker"
+module = "quard._pylint_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.report_parsing"
+module = "quard.report_parsing"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._lcom4_worker"
+module = "quard._lcom4_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.install_utils"
+module = "quard.install_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.runtime_error"
+module = "quard.runtime_error"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.runtime_utils"
+module = "quard.runtime_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._field_types"
+module = "quard._field_types"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._tach_worker"
+module = "quard._tach_worker"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.marker_utils"
+module = "quard.marker_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.policy_utils"
+module = "quard.policy_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.report_utils"
+module = "quard.report_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.apply_utils"
+module = "quard.apply_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.audit_utils"
+module = "quard.audit_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check_utils"
+module = "quard.check_utils"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._markers"
+module = "quard._markers"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._reports"
+module = "quard._reports"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._common"
+module = "quard._common"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._policy"
+module = "quard._policy"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.install"
+module = "quard.install"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx._audit"
+module = "quard._audit"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.apply"
+module = "quard.apply"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx.check"
+module = "quard.check"
 name = "Domain"
 
 [[tool.clean-arch.layers]]
-module = "eryx"
+module = "quard"
 name = "Domain"

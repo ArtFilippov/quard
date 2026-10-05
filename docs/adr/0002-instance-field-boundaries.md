@@ -1,6 +1,6 @@
 # Keep stored instance fields behind their owner
 
-Eryx rejects a proven direct read, assignment or deletion of a consumer-defined
+Quard rejects a proven direct read, assignment or deletion of a consumer-defined
 stored instance field outside the class that declares it, in production and tests.
 This also covers literal-name built-in `getattr`, `setattr` and `delattr` calls,
 and literal-key access through a proven instance's `__dict__` or `vars` result,

@@ -1,6 +1,6 @@
 # Favor instance-bound behavior over class-level APIs
 
-Eryx rejects recognizable built-in static and class methods in consumer
+Quard rejects recognizable built-in static and class methods in consumer
 production and test code, including stubs, because behavior should belong to
 objects with instance-bound responsibilities rather than class-level APIs. This
 choice trades the convenience of static factories and class utilities for an

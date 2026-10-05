@@ -1,15 +1,15 @@
-# Eryx domain context
+# Quard domain context
 
 ## Required Pylint profile
 
 The **required Pylint profile** is the always-on production and test analysis
-configured by Eryx. Its native diagnostics remain active regardless of optional
+configured by Quard. Its native diagnostics remain active regardless of optional
 check selection. Consumer-owned native options are retained when settings are applied.
 
 ## Selectable check
 
-A **selectable check** is an independent Eryx job that a consumer can enable in
-`.eryx/config.toml` under `[checks]`. Currently only `constructor_purity` is
+A **selectable check** is an independent Quard job that a consumer can enable in
+`.quard/config.toml` under `[checks]`. Currently only `constructor_purity` is
 selectable; disabled jobs are reported as skipped, not passed.
 
 ## Source scope
@@ -25,7 +25,7 @@ A **customer class** is a class declared in a consumer's discovered production o
 test `.py` or `.pyi` scope, including nested and function-local declarations.
 Its explicitly inherited contract describes the interface it implements or the
 external type it extends. A locally declared Protocol or abstract interface is
-itself a contract declaration. An external base is opaque: Eryx does not inspect
+itself a contract declaration. An external base is opaque: Quard does not inspect
 its source. An implicit inheritance from `object` is not an explicit contract;
 writing `class Name(object)` is explicit.
 

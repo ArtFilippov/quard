@@ -9,9 +9,9 @@ from typing import Any
 
 import tomlkit
 
-from eryx import _common, _policy, init_architecture
+from quard import _common, _policy, init_architecture
 
-ERYX = Path(__file__).resolve().parents[1]
+QUARD = Path(__file__).resolve().parents[1]
 CATALOG = {
     "message_ids": ["R0915", "R1260", "W9001", "W9003", "W9101", "W9102", "W9201",
                     "W9301", "W9501"],
@@ -35,19 +35,19 @@ WORKERS = {
 
 EMPTY_OUTPUT = {
     "pyright": '{"generalDiagnostics": []}',
-    **{name: '{"eryx_' + name.replace("-", "_") + '_adapter": 1, ' +
+    **{name: '{"quard_' + name.replace("-", "_") + '_adapter": 1, ' +
               '"diagnostics": [], "execution_error": null}'
        for name in WORKERS.values() if name != "encapsulated-only"},
-    "encapsulated-only": '{"eryx_encapsulated_only_adapter": 1, "diagnostics": [], ' +
+    "encapsulated-only": '{"quard_encapsulated_only_adapter": 1, "diagnostics": [], ' +
                          '"execution_error": null, "declarations": [], "classes": [], ' +
                          '"effective_targets": {}}',
 }
 
 
 def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None:
-    (root / ".eryx").mkdir()
-    shutil.copy2(ERYX / "defaults/config.toml", root / ".eryx/config.toml")
-    setting = root / ".eryx/config.toml"
+    (root / ".quard").mkdir()
+    shutil.copy2(QUARD / "defaults/config.toml", root / ".quard/config.toml")
+    setting = root / ".quard/config.toml"
     setting.write_text(setting.read_text(encoding="utf-8").replace(
         "dependency_types = true", "dependency_types = false"), encoding="utf-8")
     (root / "src/demo/domain").mkdir(parents=True)
@@ -63,13 +63,13 @@ def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None
     (root / "pyproject.toml").write_text(
         '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=3.12,<3.15"\n' +
         'dependencies = []\n\n[tool.unrelated]\nvalue = "retain"\n', encoding="utf-8")
-    _common.write_json(root / ".eryx/pylint-catalog.json", CATALOG)
+    _common.write_json(root / ".quard/pylint-catalog.json", CATALOG)
     if configured:
         _policy.configure(root, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
     if ready:
         draft, _ = init_architecture.draft_configuration(root)
         _common.atomic_write(root / "tach.toml", tomlkit.dumps(draft))
-        _common.write_json(root / ".eryx/architecture.ready.json", {"accepted": True})
+        _common.write_json(root / ".quard/architecture.ready.json", {"accepted": True})
 
 
 def native_result(argv: list[str], *, stdout: str = "", stderr: str = "",
@@ -90,7 +90,7 @@ def fake_tools(failures: dict[str, dict[str, Any]] | None = None
     seen: list[str] = []
 
     def fake(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
-        name = next((job for script, job in WORKERS.items() if str(ERYX / script) in argv), None)
+        name = next((job for script, job in WORKERS.items() if str(QUARD / script) in argv), None)
         if name is None:
             if "--manifest" in argv:
                 name = ("pylint-tests" if "tests" in argv[argv.index("--manifest") + 1]
