@@ -13,9 +13,8 @@ import unittest
 import tomlkit
 
 if TYPE_CHECKING:
-    from quard._common import QuardError, capture, load_toml, write_json
+    from quard._common import QuardError, capture, load_toml
     from quard.policy_utils import configure
-    from quard.architecture_draft.generated_architecture_utils import IDENTITY
     from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
     from quard.check_runner.native_check_runner import NativeCheckRunner
     from quard.folder_analysis.folder_ownership import FolderOwnership
@@ -32,8 +31,6 @@ if not TYPE_CHECKING:
     QuardError = common.QuardError
     capture = common.capture
     load_toml = common.load_toml
-    write_json = common.write_json
-    IDENTITY = import_module("quard.architecture_draft.generated_architecture_utils").IDENTITY
     ConfiguredArchitectureDraft = import_module(
         "quard.architecture_draft.configured_architecture_draft").ConfiguredArchitectureDraft
     run = import_module("quard.tach_worker_utils").run
@@ -142,8 +139,7 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertEqual(load_toml(root / "tach.toml")["exact"], True)
 
     def main_fixture(self, root: Path) -> tuple[Path, Path, Path]:
-        create_repo(root, ready=False)
-        write_json(root / ".quard/architecture.generated.json", IDENTITY)
+        create_repo(root)
         configure(root)
         (root / "src/demo/domain/api.py").write_text("")
         (root / "tests/test_value.py").write_text("")
@@ -378,6 +374,7 @@ class TestArchitectureDraft(unittest.TestCase):
             named.write_text(named.read_text().replace("class NamedEnvelope(ReaderEnvelope)",
                                                         "class NamedEnvelope(ReaderImpl)"))
             named.write_text("from demo.reader.impl import ReaderImpl\n" + named.read_text())
+            self.main_check(root)
             report = check()
             self.assertEqual(report["exit_code"], 1, report["diagnostics"])
             self.assertIn("ENVELOPE_INHERITANCE", {item["rule"] for item in

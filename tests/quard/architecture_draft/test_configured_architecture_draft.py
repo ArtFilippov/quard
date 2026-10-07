@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from quard.architecture_draft.generated_architecture_utils import (
         IDENTITY, generated, regenerate,
     )
+    from quard.architecture_draft.generated_selection_utils import LEGACY_IDENTITY
     from quard.audit_utils import discover_plugins
     from quard.check_runner.native_check_runner import NativeCheckRunner
     from quard.installation.transactional_installation import TransactionalInstallation
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
 else:
     generated_policy = import_module("quard.architecture_draft.generated_architecture_utils")
     IDENTITY = generated_policy.IDENTITY
+    LEGACY_IDENTITY = import_module(
+        "quard.architecture_draft.generated_selection_utils").LEGACY_IDENTITY
     generated = generated_policy.generated
     regenerate = generated_policy.regenerate
     discover_plugins = import_module("quard.audit_utils").discover_plugins
@@ -361,6 +364,143 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         self.assertEqual(tool_tach.read_bytes() if tool_tach.exists() else None,
                          original_tool)
         self.assertEqual(self.install_generated_fixture(root)["modified_files"], [])
+
+    def test_existing_version_one_generated_boundaries_are_retained(self):
+        root = self.generated_fixture()
+        write_json(root / ".quard/architecture.generated.json", LEGACY_IDENTITY)
+        expected, _ = ConfiguredArchitectureDraft(root).draft(
+            contract_only=True, validate_ownership=False)
+        self.assertTrue(regenerate(root))
+        self.assertEqual(load_toml(root / "tach.toml"), expected)
+        self.assertFalse(regenerate(root))
+        self.assertEqual(read_json(root / ".quard/architecture.generated.json"), LEGACY_IDENTITY)
+
+    def multi_package_fixture(self, root: Path) -> Path:
+        create_repo(root, ready=False)
+        (root / "src/demo/domain/api.py").write_text("")
+        (root / "tests/test_value.py").write_text("")
+        for folder in ("src/placeholder", "src/demo/arbitrary", "src/other",
+                       "src/other/group", "src/other/group/deep"):
+            target = root / folder
+            target.mkdir(exist_ok=True, parents=True)
+            (target / "__init__.py").write_text("")
+        service = root / "src/demo/arbitrary/service.py"
+        declaration = ("from typing import Protocol\n\n" +
+                       "class Service(Protocol):\n" +
+                       "    def first(self, value: str) -> str: ...\n" +
+                       "    def second(self, value: str) -> str: ...\n")
+        service.write_text(declaration)
+        service.with_suffix(".pyi").write_text(declaration)
+        sender = root / "src/demo/arbitrary/sender.py"
+        sender.write_text(
+            "from typing import override\nfrom demo.arbitrary.service import Service\n\n" +
+            "class Sender(Service):\n" +
+            "    def __init__(self) -> None:\n" +
+            "        super().__init__()\n" +
+            "        self._prefix: str = 'ready:'\n\n" +
+            "    @override\n" +
+            "    def first(self, value: str) -> str:\n" +
+            "        return self.second(value)\n\n" +
+            "    @override\n" +
+            "    def second(self, value: str) -> str:\n" +
+            "        return self._prefix + value\n")
+        sender.with_suffix(".pyi").write_text(
+            "from typing import override\nfrom demo.arbitrary.service import Service\n\n" +
+            "class Sender(Service):\n" +
+            "    @override\n" +
+            "    def first(self, value: str) -> str: ...\n" +
+            "    @override\n" +
+            "    def second(self, value: str) -> str: ...\n")
+        (root / "src/other/group/main.py").write_text(
+            "from demo.arbitrary.service import Service as PublicService\n" +
+            "__all__ = ['PublicService']\n")
+        alias = root / "src/other/group/deep/aliases.py"
+        alias.write_text("from demo.arbitrary.service import Service as PublicService\n" +
+                         "__all__ = ['PublicService']\n")
+        utility = root / "src/other/group/deep/operations_utils.py"
+        utility.write_text("from other.group.deep.aliases import PublicService\n\n" +
+                           "def inspect(service: PublicService) -> str:\n" +
+                           "    return service.first('ok')\n")
+        utility.with_suffix(".pyi").write_text(
+            "from other.group.deep.aliases import PublicService\n\n" +
+            "def inspect(service: PublicService) -> str: ...\n")
+        installed = self.install_generated_fixture(root)
+        self.assertFalse(installed["architecture_initialization_required"])
+        self.assertTrue(generated(root))
+        logs = root / ".quard/logs/install-probes"
+        plugins, catalog = discover_plugins(root, logs)
+        write_json(root / ".quard/pylint-catalog.json", catalog)
+        configure(root, initial=True, plugins=plugins, catalog=catalog)
+        return utility
+
+    def test_generated_directory_groups_full_consumer_check(self):
+        with TemporaryDirectory(prefix="quard-multi-package-") as directory:
+            root = Path(directory)
+            utility = self.multi_package_fixture(root)
+            report = NativeCheckRunner().run(root)
+            self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
+                             (0, 0), report["diagnostics"])
+            self.assertTrue(all(job["status"] in {"passed", "skipped"} for job in report["tools"]))
+            config = load_toml(root / "tach.toml")
+            modules = {item["path"]: item for item in config["modules"]}
+            self.assertEqual(modules["other.group.main"]["layer"], "Contract")
+            self.assertEqual(modules["other.group.deep.operations_utils"]["layer"],
+                             "Infrastructure")
+            self.assertEqual(modules["other.group.deep.aliases"]["layer"], "Contract")
+            self.assertEqual(modules["demo.arbitrary.sender"]["layer"], "Infrastructure")
+            self.assertEqual(modules["other.group.deep.operations_utils"]["depends_on"],
+                             ["other.group.deep.aliases"])
+            self.assertEqual(modules["other.group.deep.aliases"]["depends_on"],
+                             ["demo.arbitrary.service"])
+            self.assertIn("placeholder", modules)
+            self.assertEqual(regenerate(root), False)
+            expected = (root / "tach.toml").read_bytes()
+            (root / "tach.toml").write_text("exact = false\n")
+            with patch.object(sys, "argv", ["apply.py", "--project", str(root), "--json"]):
+                self.assertEqual(apply_utils.main(), 0)
+            self.assertEqual((root / "tach.toml").read_bytes(), expected)
+            (root / "tach.toml").unlink()
+            self.assertEqual(NativeCheckRunner().run(root)["exit_code"], 0)
+            self.assertEqual((root / "tach.toml").read_bytes(), expected)
+            execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); " +
+                                 "from other.group.deep.operations_utils import inspect; " +
+                                 "from demo.arbitrary.sender import Sender; " +
+                                 "assert inspect(Sender()) == 'ready:ok'"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
+            for suffix in (".py", ".pyi"):
+                direct = root / f"src/root{suffix}"
+                direct.write_text("from typing import Protocol\nclass Root(Protocol): ...\n")
+                rejected = NativeCheckRunner().run(root)
+                self.assertEqual((rejected["exit_code"],
+                                  rejected["summary"]["infrastructure_errors"]), (1, 0),
+                                 rejected["diagnostics"])
+                self.assertTrue(any(d["rule"] == "SOURCE_ROOT_LAYOUT" and
+                                    d["path"] == f"src/root{suffix}" and
+                                    d["line"] == d["column"] == 1
+                                    for d in rejected["diagnostics"]))
+                self.assertEqual(next(job for job in rejected["tools"] if job["name"] ==
+                                      "contract-folders")["status"], "violations")
+                direct.unlink()
+
+            (root / "src/root.txt").write_text("unrelated")
+            self.assertEqual(NativeCheckRunner().run(root)["exit_code"], 0)
+            (root / "src/root.txt").unlink()
+            utility.write_text(utility.read_text() +
+                               "from demo.domain import api\n")
+            rejected = NativeCheckRunner().run(root)
+            self.assertEqual((rejected["exit_code"],
+                              rejected["summary"]["infrastructure_errors"]), (1, 0),
+                             rejected["diagnostics"])
+            self.assertEqual((next(job for job in rejected["tools"] if job["name"] == "tach")
+                              ["status"], next(job for job in rejected["tools"] if job["name"] ==
+                              "tach")["exit_code"]), ("violations", 1))
+            self.assertTrue(any(d["tool"] == "tach" and d["path"] ==
+                                "src/other/group/deep/operations_utils.py"
+                                for d in rejected["diagnostics"]))
+            self.assertNotIn("demo.domain.api", next(item for item in
+                             load_toml(root / "tach.toml")["modules"] if item["path"] ==
+                             "other.group.deep.operations_utils")["depends_on"])
 
     def test_generated_forbidden_imports_keep_real_tach_failure(self):
         root = self.generated_fixture()

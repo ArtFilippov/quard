@@ -7,6 +7,11 @@ import json
 from pathlib import Path
 import re
 
+from quard._common import read_json
+from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER, generated
+
+SOURCE_ROOT = "src"
+SOURCE_ROOT_DEPTH = 2
 
 def snake_case(name: str) -> str:
     """Convert a class name, including acronym boundaries, to a folder name."""
@@ -31,7 +36,16 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
-    diagnostics.extend(FolderOwnership(trees).folder_violations())
+    if generated(root) and read_json(root / MARKER) == IDENTITY:
+        for path in sorted(trees):
+            if (Path(path).parts[0] == SOURCE_ROOT
+                    and len(Path(path).parts) == SOURCE_ROOT_DEPTH):
+                diagnostics.append({
+                    "rule": "SOURCE_ROOT_LAYOUT", "path": path, "line": 1, "column": 1,
+                    "symbol": Path(path).name,
+                    "message": f"{path}: place Python files inside a source directory."})
+    else:
+        diagnostics.extend(FolderOwnership(trees).folder_violations())
     return diagnostics, error
 
 

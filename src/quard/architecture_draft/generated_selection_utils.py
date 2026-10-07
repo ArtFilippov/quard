@@ -7,7 +7,8 @@ from quard._common import QuardError, read_json, write_json
 
 
 MARKER = ".quard/architecture.generated.json"
-IDENTITY = {"policy": "contract-only", "version": 1}
+IDENTITY = {"policy": "contract-only", "version": 2}
+LEGACY_IDENTITY = {"policy": "contract-only", "version": 1}
 
 
 def generated(root: Path) -> bool:
@@ -25,7 +26,7 @@ def generated(root: Path) -> bool:
     path = root / MARKER
     if not path.exists():
         return False
-    if read_json(path) != IDENTITY:
+    if read_json(path) not in (IDENTITY, LEGACY_IDENTITY):
         raise QuardError("INVALID_GENERATED_ARCHITECTURE",
                          f"Invalid generated policy marker: {path}")
     return True

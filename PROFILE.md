@@ -114,7 +114,7 @@ violations baseline.
   pass. Source and companion stubs are counted separately, across production and
   tests, independently of LCOM4 selection. Parse and worker failures are
   infrastructure errors; raw worker output and job status appear in the report.
-* **Contract folders**: `CONTRACT_FOLDER` requires each discovered local Protocol or
+* **Contract folders** (reviewed and generated version 1): `CONTRACT_FOLDER` requires each discovered local Protocol or
   abstract-interface class to reside in a folder and module whose names are the
   class name converted to snake_case (for example, `HTTPPort` in
   `http_port/http_port.py` or `.pyi`). `IMPLEMENTATION_FOLDER` requires classes with
@@ -647,7 +647,13 @@ Tach's public import surface and typing.Protocol are distinct contracts.
 
 New installations without existing Tach architecture select a generated contract-only
 root `tach.toml`. The tracked marker is `.quard/architecture.generated.json`; the
-root config is ignored and restored by install, apply and check. Existing reviewed
+root config is ignored and restored by install, apply and check. Generated boundaries
+support multiple import packages, empty facades and nearest-directory groups for
+source and stubs. Contract-only declarations and proven aliases retain Contract
+roles; ordinary utilities remain Infrastructure, regardless of module names.
+Python files directly under `src/` receive a layout violation. Existing version-1
+generated selections keep their previous boundaries until the tracked marker is
+explicitly updated to version 2. Existing reviewed
 configurations remain consumer-owned. The optional legacy
 `init_architecture.py --contract-only` draft creates an explicit Tach
 module for each discovered production file or package, including nested folders and

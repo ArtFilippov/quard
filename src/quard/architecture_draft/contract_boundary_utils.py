@@ -8,23 +8,15 @@ from typing import Any
 
 from quard._common import QuardError
 from quard._policy import ALLOWED_LAYERS
+from quard.architecture_draft.boundary_source_utils import (
+    PACKAGE_FILE, destination, parse_trees, source_imports,
+)
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_ownership import FolderOwnership
 
 
-PACKAGE_FILE = "__init__"
 STUB_SUFFIX = ".pyi"
 MAIN_FOLDER = "main"
-
-
-def _trees(root: Path, files: list[str]) -> dict[str, ast.Module]:
-    trees: dict[str, ast.Module] = {}
-    for path in files:
-        try:
-            trees[path] = ast.parse((root / path).read_text(encoding="utf-8"), filename=path)
-        except (OSError, UnicodeError, SyntaxError) as exc:
-            raise QuardError("CONTRACT_BOUNDARY_SOURCE_ERROR", f"{path}: {exc}") from exc
-    return trees
 
 
 def _owners(paths: dict[str, str], ownership: FolderOwnership,
@@ -74,25 +66,6 @@ def _public_contracts(trees: dict[str, ast.Module], ownership: FolderOwnership,
         contracts.setdefault(module, set()).update(_package_contracts(module, tree, ownership,
                                                                        names))
     return contracts
-
-
-def _imports(name: str, path: str, tree: ast.Module) -> list[str]:
-    package = name if Path(path).stem == PACKAGE_FILE else name.rpartition(".")[0]
-    targets: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            targets.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            parts = package.split(".")
-            prefix = parts[:len(parts) - node.level + 1] if node.level else []
-            source = ".".join([*prefix, node.module] if node.module else prefix)
-            targets.extend(source + "." + alias.name for alias in node.names)
-    return targets
-
-
-def _destination(path: str, paths: dict[str, str]) -> str | None:
-    return next((module for module in sorted(paths, key=len, reverse=True)
-                 if path == module or path.startswith(module + ".")), None)
 
 
 def _assembly_modules(paths: dict[str, str], ownership: FolderOwnership,
@@ -154,17 +127,17 @@ def _dependencies(name: str, sources: tuple[dict[str, ast.Module], dict[str, str
     allowed: set[str] = set()
     if Path(sources[1][name]).suffix == STUB_SUFFIX:
         return []  # Tach checks source imports, not imports found only in stubs.
-    for target in _imports(name, sources[1][name], sources[0][sources[1][name]]):
+    for target in source_imports(name, sources[1][name], sources[0][sources[1][name]]):
         resolved = ownership.provenance(target)
-        destination = _destination(target, sources[1]) or _destination(resolved, sources[1])
-        if destination is None or destination == name:
+        target_module = destination(target, sources[1]) or destination(resolved, sources[1])
+        if target_module is None or target_module == name:
             continue
-        assembles = (name in assembly[0] and (destination in assembly[0]
-                     or resolved == destination and destination in assembly[1]
-                     or resolved.rpartition(".")[2] in assembly[1].get(destination, set())))
-        if ((owners.get(name) is not None and owners.get(name) == owners.get(destination))
+        assembles = (name in assembly[0] and (target_module in assembly[0]
+                      or resolved == target_module and target_module in assembly[1]
+                      or resolved.rpartition(".")[2] in assembly[1].get(target_module, set())))
+        if ((owners.get(name) is not None and owners.get(name) == owners.get(target_module))
                 or ownership.is_contract(resolved) or assembles):
-            allowed.add(destination)
+            allowed.add(target_module)
     return sorted(allowed)
 
 
@@ -242,7 +215,7 @@ def contract_boundaries(root: Path, files: list[str], draft: dict[str, Any],
     Raises:
         QuardError: Source parsing or contract folder ownership failed.
     """
-    trees = _trees(root, files)
+    trees = parse_trees(root, files, "CONTRACT_BOUNDARY_SOURCE_ERROR")
     ownership = FolderOwnership(trees)
     if validate_ownership and (violations := ownership.folder_violations()):
         first = violations[0]

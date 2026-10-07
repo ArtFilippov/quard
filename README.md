@@ -45,22 +45,29 @@ On a new project without `tach.toml` or an accepted architecture marker, install
 selects Quard-managed contract-only boundaries. Commit
 `.quard/architecture.generated.json` and the installer's `/tach.toml` Git ignore
 rule. The root `tach.toml` is generated from discovered production files, local
-contracts and folder ownership; install, apply and check restore it when missing or
-modified. Correct files are left untouched. Fresh clones need only sync dependencies
+contracts and nearest-directory ownership across multiple import packages; install,
+apply and check restore it when missing or modified. Correct files are left untouched.
+Fresh clones need only sync dependencies
 and run check. No manual acceptance or routine `tach sync` is required. Only eligible
-source imports become exact dependency declarations; imports of private
-implementations and utilities outside their contract folder remain native Tach
-violations. Files anywhere under a production `main/` folder or a direct contract
-`envelopes/` folder may assemble concrete implementations from any contract folder,
+source imports become exact dependency declarations; unauthorized imports of concrete
+implementations and private utilities remain native Tach violations. Files anywhere
+under a production `main/` folder or a direct group's `envelopes/` folder may assemble
+concrete implementations from other groups,
 including type-only imports and companion stubs. Other modules' utilities stay
-private. The generated policy also checks annotated parameters, stored fields
+private. Ordinary modules named `main.py` do not gain assembly privileges. A Python
+file or stub directly under `src/` receives a positioned layout violation; other
+file types do not. Empty package facades and extra import packages are supported.
+Existing version-1 generated selections keep their previous boundaries; migrate
+explicitly by updating the tracked marker to version 2 before running apply or check.
+The generated policy also checks annotated parameters, stored fields
 and returns on customer classes in source and stubs: concrete classes from
 other modules require local contract types. Own types and `Self` are allowed;
 `main/` and `envelopes/` may name concrete types. Explicit customer type
 references that cannot be resolved receive separate diagnostics.
 Free functions and assembly classes may live under
-`main/`; placement checks continue outside it. Folder violations remain visible to
-the independent checker. Malformed
+`main/`; placement checks continue outside it. The generated version-2 folder job
+reports source-root layout; reviewed and generated version-1 projects retain their
+contract-name folder diagnostics. Malformed
 source and regeneration failures are configuration errors (exit 2).
 
 Generated projects run Pylint core and configured official extensions without the
