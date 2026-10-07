@@ -14,6 +14,10 @@ import tomlkit
 from quard._common import QuardError, atomic_write, load_toml, read_json, safe_target
 from quard.check_selection_utils import (DEPENDENCY_TYPES, architecture_defaults,
                                         validate_architecture_checks, validate_checks)
+from quard.architecture_draft.generated_selection_utils import generated
+from quard.pylint_config_utils import (LEGACY_PLUGIN, official_plugins,
+                                      clean_config as render_clean_config,
+                                      policy_notes as render_policy_notes)
 
 LIMIT_MAP = {
     "max_line_length": ("format", "max-line-length"),
@@ -278,12 +282,7 @@ def pydoclint_config(scope: dict[str, list[str]]) -> dict[str, Any]:
 
 
 def clean_config() -> dict[str, Any]:
-    # Important: in the actual 1.2.2 source this is Layer -> patterns, not the
-    # opposite direction shown by some README examples.
-    mapping: dict[str, list[str]] = {}
-    for name, layer in LAYER_DIRS.items():
-        mapping.setdefault(layer, []).append(name)
-    return {"project_type": "generic", "visibility_enforcement": True, "layer_map": mapping}
+    return render_clean_config(LAYER_DIRS)
 
 
 def test_pylint(base: dict[str, Any], limits: dict[str, int], catalog: dict[str, Any]) -> dict[str, Any]:
@@ -291,26 +290,14 @@ def test_pylint(base: dict[str, Any], limits: dict[str, int], catalog: dict[str,
     apply_limits(config, limits)
     disabled = list(dict.fromkeys(config.get("messages_control", {}).get("disable", []) + list(TEST_DISABLED)))
     available_ids = set(catalog.get("message_ids", []))
-    disabled += [name for name in TEST_ARCH_DISABLED if name in available_ids]
+    if LEGACY_PLUGIN in config.get("main", {}).get("load-plugins", []):
+        disabled += [name for name in TEST_ARCH_DISABLED if name in available_ids]
     config.setdefault("messages_control", {})["disable"] = disabled
     return config
 
 
 def policy_notes(plugins: list[str]) -> dict[str, Any]:
-    return {
-        "production_disabled": PRODUCTION_DISABLED,
-        "test_additional_disabled": TEST_DISABLED,
-        "test_architecture_disabled_if_registered": TEST_ARCH_DISABLED,
-        "pyright_disabled": {"reportImportCycles": "Pylint cyclic-import checks Python module cycles."},
-        "official_extensions_loaded": [x for x in plugins if x.startswith("pylint.extensions.")],
-        "official_extension_not_loaded": {"pylint.extensions.docparams": "Message-ID collisions with the clean-architecture plugin; Google docstrings validated by pydoclint, docstyle by Pylint. Not a claim of identical rule sets."},
-        "kept_partial_overlaps": ["unused-variable/import: scopes differ", "protected access: inference and types differ",
-                                  "clean-arch-dependency and Tach: class-level and module-level checks differ"],
-        "deferred": ["Blanket ban on internal comments", "Function length in physical lines",
-                     "Automatic dependency-community discovery", "Universal Protocol/ABC-only proof"],
-        "not_provided": ["Formatter", "Natural-language spell checking (requires Enchant and dictionaries)",
-                         "Runtime tests", "Dependency vulnerability scanner"],
-    }
+    return render_policy_notes(plugins, PRODUCTION_DISABLED, TEST_DISABLED, TEST_ARCH_DISABLED)
 
 
 def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = None,
@@ -325,6 +312,9 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     except Exception as exc:
         raise QuardError("INVALID_PYPROJECT", str(exc)) from exc
     tool = doc.setdefault("tool", {})
+    managed = generated(root)
+    if managed and plugins is not None:
+        plugins = official_plugins(plugins)
     if initial:
         if not plugins:
             raise QuardError("MISSING_PLUGINS", "Discover installed Pylint extensions before configuring.")
@@ -333,7 +323,8 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         tool.setdefault("pylint", base_pylint(plugins, scope))
         tool.setdefault("pyright", pyright_config(scope, files))
         tool.setdefault("pydoclint", pydoclint_config(scope))
-        tool.setdefault("clean-arch", clean_config())
+        if not managed:
+            tool.setdefault("clean-arch", clean_config())
         tool["pylint"].setdefault("main", {})["load-plugins"] = plugins
         native_pyright = root / "pyrightconfig.json"
         if native_pyright.exists():
@@ -342,6 +333,16 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
                     tool["pyright"][key] = value
     elif "pylint" not in tool:
         raise QuardError("NOT_INSTALLED", "Missing [tool.pylint]; run the installer first.")
+    if managed:
+        # Reinstall/apply migrates previously generated five-layer Pylint configs.
+        if not initial:
+            native_catalog: dict[str, Any] = (catalog if catalog is not None else
+                                              read_json(root / ".quard/pylint-catalog.json"))
+            tool["pylint"].setdefault("main", {})["load-plugins"] = official_plugins(
+                native_catalog["plugins"])
+        removed_layer_map = tool.pop("clean-arch", None) is not None
+    else:
+        removed_layer_map = False
     apply_limits(tool["pylint"], limits["production"])
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]
@@ -358,6 +359,8 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     if catalog is None:
         catalog = read_json(root / ".quard/pylint-catalog.json")
     rendered_project = tomlkit.dumps(doc)
+    if removed_layer_map:
+        rendered_project = rendered_project.rstrip("\n") + "\n"
     plain = tomllib.loads(rendered_project)["tool"]["pylint"]
     tests = {"tool": {"pylint": test_pylint(plain, limits["tests"], catalog)}}
     outputs: dict[str, str] = {

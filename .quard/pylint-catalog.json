@@ -1,6 +1,6 @@
 {
   "excluded_extension": "pylint.extensions.docparams",
-  "excluded_reason": "message-ID collisions with clean_architecture_linter",
+  "excluded_reason": "Google docstrings are validated by pydoclint; reviewed mode also has plugin message-ID collisions",
   "message_ids": [
     "C0103",
     "C0104",
@@ -426,23 +426,7 @@
     "W4904",
     "W4905",
     "W4906",
-    "W6001",
-    "W9001",
-    "W9003",
-    "W9004",
-    "W9005",
-    "W9006",
-    "W9007",
-    "W9009",
-    "W9010",
-    "W9011",
-    "W9101",
-    "W9102",
-    "W9201",
-    "W9202",
-    "W9301",
-    "W9401",
-    "W9501"
+    "W6001"
   ],
   "messages": [
     {
@@ -2144,70 +2128,6 @@
     {
       "id": "W6001",
       "symbol": "deprecated-typing-alias"
-    },
-    {
-      "id": "W9001",
-      "symbol": "clean-arch-dependency"
-    },
-    {
-      "id": "W9003",
-      "symbol": "clean-arch-visibility"
-    },
-    {
-      "id": "W9004",
-      "symbol": "clean-arch-resources"
-    },
-    {
-      "id": "W9005",
-      "symbol": "clean-arch-delegation"
-    },
-    {
-      "id": "W9006",
-      "symbol": "clean-arch-demeter"
-    },
-    {
-      "id": "W9007",
-      "symbol": "naked-return-violation"
-    },
-    {
-      "id": "W9009",
-      "symbol": "missing-abstraction-violation"
-    },
-    {
-      "id": "W9010",
-      "symbol": "clean-arch-god-file"
-    },
-    {
-      "id": "W9011",
-      "symbol": "clean-arch-folder-structure"
-    },
-    {
-      "id": "W9101",
-      "symbol": "fragile-test-mocks"
-    },
-    {
-      "id": "W9102",
-      "symbol": "private-method-test"
-    },
-    {
-      "id": "W9201",
-      "symbol": "contract-integrity-violation"
-    },
-    {
-      "id": "W9202",
-      "symbol": "concrete-method-stub"
-    },
-    {
-      "id": "W9301",
-      "symbol": "di-enforcement-violation"
-    },
-    {
-      "id": "W9401",
-      "symbol": "domain-mutability-violation"
-    },
-    {
-      "id": "W9501",
-      "symbol": "anti-bypass-violation"
     }
   ],
   "plugins": [
@@ -2234,7 +2154,6 @@
     "pylint.extensions.redefined_variable_type",
     "pylint.extensions.set_membership",
     "pylint.extensions.typing",
-    "pylint.extensions.while_used",
-    "clean_architecture_linter"
+    "pylint.extensions.while_used"
   ]
 }

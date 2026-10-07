@@ -7,53 +7,11 @@ from typing import Any, cast
 
 import tomlkit
 
-from quard._common import QuardError, atomic_write, read_json, write_json
+from quard._common import atomic_write
 from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
-from quard.clean_architecture_layers.configured_clean_architecture_layers import (
-    ConfiguredCleanArchitectureLayers,
-)
+from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER, generated, select
 
-
-MARKER = ".quard/architecture.generated.json"
-IDENTITY = {"policy": "contract-only", "version": 1}
-
-
-def generated(root: Path) -> bool:
-    """Check the versioned policy selection, rejecting unknown formats.
-
-    Args:
-        root (Path): Selected project root.
-
-    Returns:
-        bool: Whether generated policy is selected.
-
-    Raises:
-        QuardError: The marker has an unrecognized schema.
-    """
-    path = root / MARKER
-    if not path.exists():
-        return False
-    if read_json(path) != IDENTITY:
-        raise QuardError("INVALID_GENERATED_ARCHITECTURE",
-                        f"Invalid generated policy marker: {path}")
-    return True
-
-
-def select(root: Path) -> bool:
-    """Select generation for a fresh install; keep existing native policies.
-
-    Args:
-        root (Path): Selected project root.
-
-    Returns:
-        bool: Whether this installation uses generated architecture.
-    """
-    if generated(root):
-        return True
-    if (root / "tach.toml").exists() or (root / ".quard/architecture.ready.json").exists():
-        return False
-    _ = write_json(root / MARKER, IDENTITY, root)
-    return True
+__all__ = ["IDENTITY", "MARKER", "generated", "select", "render", "regenerate"]
 
 
 def render(root: Path) -> tuple[dict[str, Any], str]:
@@ -73,7 +31,7 @@ def render(root: Path) -> tuple[dict[str, Any], str]:
 
 
 def regenerate(root: Path) -> bool:
-    """Restore the managed config and native layer map when selected.
+    """Restore the managed Tach config when selected.
 
     Args:
         root (Path): Selected project root.
@@ -83,7 +41,6 @@ def regenerate(root: Path) -> bool:
     """
     if not generated(root):
         return False
-    config, content = render(root)
+    _, content = render(root)
     changed = atomic_write(root / "tach.toml", content, root)
-    ConfiguredCleanArchitectureLayers().sync(root, config)
     return changed

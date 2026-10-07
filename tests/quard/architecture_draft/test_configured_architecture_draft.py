@@ -21,14 +21,21 @@ from quard.architecture_draft.configured_architecture_draft import ConfiguredArc
 from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
 
 if TYPE_CHECKING:
-    from quard.architecture_draft.generated_architecture_utils import generated, regenerate
+    from quard.architecture_draft.generated_architecture_utils import (
+        IDENTITY, generated, regenerate,
+    )
+    from quard.audit_utils import discover_plugins
     from quard.check_runner.native_check_runner import NativeCheckRunner
     from quard.installation.transactional_installation import TransactionalInstallation
+    from quard.policy_utils import configure
     from quard import apply_utils, install as entry
 else:
     generated_policy = import_module("quard.architecture_draft.generated_architecture_utils")
+    IDENTITY = generated_policy.IDENTITY
     generated = generated_policy.generated
     regenerate = generated_policy.regenerate
+    discover_plugins = import_module("quard.audit_utils").discover_plugins
+    configure = import_module("quard.policy_utils").configure
     NativeCheckRunner = import_module("quard.check_runner.native_check_runner").NativeCheckRunner
     TransactionalInstallation = import_module(
         "quard.installation.transactional_installation").TransactionalInstallation
@@ -216,6 +223,91 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         (root / "src/demo/client.py").write_text(
             "from demo.port.port import Port\n", encoding="utf-8")
         return root
+
+    def test_generated_pylint_upgrade_removes_old_plugin_and_map(self):
+        root = self.generated_fixture()
+        write_json(root / ".quard/architecture.generated.json", IDENTITY)
+        project = root / "pyproject.toml"
+        before = project.read_bytes()
+        self.assertTrue(regenerate(root))
+        self.assertEqual(project.read_bytes(), before)
+        stale = NativeCheckRunner().run(root)
+        self.assertEqual(stale["exit_code"], 2)
+        self.assertEqual(next(job for job in stale["tools"] if job["name"] ==
+                              "pylint-production")["status"], "error")
+        self.assertTrue(any(d["is_infrastructure_error"] for d in stale["diagnostics"]))
+        configure(root)
+        tool = load_toml(project)["tool"]
+        self.assertNotIn("clean-arch", tool)
+        for config in (tool["pylint"], load_toml(root / ".quard/pylint-tests.toml")[
+                "tool"]["pylint"]):
+            self.assertNotIn("clean_architecture_linter", config["main"]["load-plugins"])
+            self.assertFalse(set(config["messages_control"]["disable"]) & {"W9001", "W9201"})
+
+    def test_real_pylint_profiles_in_generated_and_reviewed_full_checks(self):
+        for managed in (False, True):
+            with self.subTest(generated=managed), TemporaryDirectory(
+                    prefix="quard-pylint-mode-") as directory:
+                root = Path(directory) if managed else self.root
+                if managed:
+                    create_repo(root, ready=False)
+                    write_json(root / ".quard/architecture.generated.json", IDENTITY)
+                reviewed_tach = (root / "tach.toml").read_bytes() if not managed else None
+                reviewed_layers = (load_toml(root / "pyproject.toml")["tool"]["clean-arch"]
+                                   if not managed else None)
+                source = root / "src/demo/domain/api.py"
+                source.write_text("import socket\nfrom typing import Protocol\n" +
+                                  "class Port(Protocol):\n    def fetch(self) -> int: ...\n",
+                                  encoding="utf-8")
+                (root / "src/demo/client.py").write_text("from demo.domain import api\n",
+                                                          encoding="utf-8")
+                (root / "src/demo/domain/small.py").write_text(
+                    "class Small(object):\n    def fetch(self) -> int:\n        return 1\n",
+                    encoding="utf-8")
+                (root / "tests/test_value.py").write_text("import pathlib\n", encoding="utf-8")
+                logs = root / ".quard/logs/install-probes"
+                logs.mkdir(parents=True, exist_ok=True)
+                plugins, catalog = discover_plugins(root, logs)
+                write_json(root / ".quard/pylint-catalog.json", catalog)
+                configure(root, initial=True, plugins=plugins, catalog=catalog)
+                if reviewed_tach is not None:
+                    self.assertEqual((root / "tach.toml").read_bytes(), reviewed_tach)
+                production = load_toml(root / "pyproject.toml")["tool"]
+                if reviewed_layers is not None:
+                    self.assertEqual(production["clean-arch"], reviewed_layers)
+                tests = load_toml(root / ".quard/pylint-tests.toml")["tool"]["pylint"]
+                for config in (production["pylint"], tests):
+                    self.assertEqual("clean_architecture_linter" in config["main"]["load-plugins"],
+                                     not managed)
+                self.assertEqual("clean-arch" in production, not managed)
+                self.assertEqual(any(code.startswith("W9") for code in catalog["message_ids"]),
+                                 not managed)
+
+                report = NativeCheckRunner().run(root)
+                self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+                self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                                 report["diagnostics"])
+                jobs = {job["name"]: job for job in report["tools"]}
+                for name in ("pylint-production", "pylint-tests"):
+                    self.assertEqual(jobs[name]["status"], "violations", jobs[name])
+                    self.assertIsInstance(jobs[name]["exit_code"], int)
+                    self.assertGreater(jobs[name]["exit_code"], 0)
+                for name in ("tach", "tach-external"):
+                    self.assertIn(jobs[name]["status"], {"passed", "violations"})
+                    self.assertIn(jobs[name]["exit_code"], {0, 1})
+                rules = {(item["tool"], item["rule"], item["path"])
+                         for item in report["diagnostics"]}
+                self.assertIn(("pylint", "W0611", "src/demo/domain/api.py"), rules)
+                self.assertIn(("pylint", "W0611", "tests/test_value.py"), rules)
+                self.assertIn(("pylint", "R0903", "src/demo/domain/small.py"), rules)
+                self.assertEqual(any(item["rule"] == "W9004" for item in report["diagnostics"]),
+                                 not managed)
+                self.assertFalse(any(item["rule"] in {"E1111", "R0903"}
+                                     and item["path"] == "src/demo/domain/api.py"
+                                     for item in report["diagnostics"]))
+                if reviewed_tach is not None:
+                    self.assertEqual((root / "tach.toml").read_bytes(), reviewed_tach)
+                self.assertEqual(read_json(root / ".quard/reports/latest.json")["exit_code"], 1)
 
     def install_generated_fixture(self, root: Path) -> dict[str, Any]:
         policy = import_module("quard.consumer_policy.configured_consumer_policy")

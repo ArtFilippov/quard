@@ -7,8 +7,7 @@
   ],
   "kept_partial_overlaps": [
     "unused-variable/import: scopes differ",
-    "protected access: inference and types differ",
-    "clean-arch-dependency and Tach: class-level and module-level checks differ"
+    "protected access: inference and types differ"
   ],
   "not_provided": [
     "Formatter",
@@ -17,7 +16,7 @@
     "Dependency vulnerability scanner"
   ],
   "official_extension_not_loaded": {
-    "pylint.extensions.docparams": "Message-ID collisions with the clean-architecture plugin; Google docstrings validated by pydoclint, docstyle by Pylint. Not a claim of identical rule sets."
+    "pylint.extensions.docparams": "Google docstrings validated by pydoclint, docstyle by Pylint; reviewed mode also has plugin message-ID collisions. Not a claim of identical rule sets."
   },
   "official_extensions_loaded": [
     "pylint.extensions.bad_builtin",
@@ -66,23 +65,5 @@
     "too-few-public-methods": "Test containers and fakes may expose one operation.",
     "unused-argument": "Fixtures can be requested only for their side effects."
   },
-  "test_architecture_disabled_if_registered": [
-    "W9001",
-    "W9003",
-    "W9004",
-    "W9005",
-    "W9006",
-    "W9007",
-    "W9009",
-    "W9010",
-    "W9011",
-    "W9012",
-    "W9013",
-    "W9015",
-    "W9102",
-    "W9201",
-    "W9202",
-    "W9301",
-    "W9601"
-  ]
+  "test_architecture_disabled_if_registered": []
 }

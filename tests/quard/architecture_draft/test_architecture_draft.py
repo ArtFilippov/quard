@@ -14,6 +14,7 @@ import tomlkit
 
 if TYPE_CHECKING:
     from quard._common import QuardError, capture, load_toml, write_json
+    from quard.policy_utils import configure
     from quard.architecture_draft.generated_architecture_utils import IDENTITY
     from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
     from quard.check_runner.native_check_runner import NativeCheckRunner
@@ -41,6 +42,7 @@ if not TYPE_CHECKING:
     FolderOwnership = import_module("quard.folder_analysis.folder_ownership").FolderOwnership
     free_functions = import_module("quard.free_function_placement_utils").analyze
     NativeCheckRunner = import_module("quard.check_runner.native_check_runner").NativeCheckRunner
+    configure = import_module("quard.policy_utils").configure
 
 
 class TestArchitectureDraft(unittest.TestCase):
@@ -142,6 +144,7 @@ class TestArchitectureDraft(unittest.TestCase):
     def main_fixture(self, root: Path) -> tuple[Path, Path, Path]:
         create_repo(root, ready=False)
         write_json(root / ".quard/architecture.generated.json", IDENTITY)
+        configure(root)
         (root / "src/demo/domain/api.py").write_text("")
         (root / "tests/test_value.py").write_text("")
         pkg = root / "src/demo"

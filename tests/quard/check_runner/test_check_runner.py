@@ -239,7 +239,7 @@ class TestCheckRunner(unittest.TestCase):
                 self.assertIn("pylint-production", seen)
                 self.assertIn("DOC101", {d["rule"] for d in report["diagnostics"]})
 
-    def test_generated_switches_regenerate_layers_even_without_tach(self):
+    def test_generated_switches_regenerate_tach_even_without_tach_job(self):
         write_json(self.root / ".quard/architecture.generated.json", IDENTITY)
         for tach in (False, True):
             for dependency in (False, True):

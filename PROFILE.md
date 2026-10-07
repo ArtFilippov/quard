@@ -9,9 +9,12 @@ violations baseline.
 
 * **Pylint 4.0.8**: core and every discovered official extension except docparams.
   Readability, naming, exceptions, logging, inference, duplicates and import cycles.
-* **clean-architecture-linter-plugin 1.2.2**: architecture, DI, Protocol, I/O and
-  structural heuristics. This is an Alpha plugin, not a universal correctness proof.
-  Narrow version-guarded compatibility patches are documented in `COMPATIBILITY.md`.
+* **clean-architecture-linter-plugin 1.2.2**: reviewed-policy projects retain
+  architecture, DI, Protocol, I/O and structural heuristics. Generated-policy
+  projects do not load this legacy five-layer plugin in either Pylint profile or
+  maintain its layer map. Plugin-only messages are absent, not passing checks.
+  Both modes retain pinned Pylint Protocol fixes; reviewed mode retains the
+  version-guarded plugin fixes in `COMPATIBILITY.md`.
 * **Pyright 1.1.414** with its Node runtime: strict plus the additional diagnostics
   in `_policy.PYRIGHT_EXTRA`. Cycles are assigned to Pylint.
 * **Tach 0.35.1**: both internal and external checks, explicit module/public API

@@ -63,7 +63,12 @@ Free functions and assembly classes may live under
 the independent checker. Malformed
 source and regeneration failures are configuration errors (exit 2).
 
-Existing consumer-owned Tach configurations remain on the reviewed-policy path:
+Generated projects run Pylint core and configured official extensions without the
+legacy clean-architecture plugin or its layer map. Protocol compatibility fixes
+still apply. Reinstall to migrate an older generated Pylint configuration; apply
+also restores the generated profile. Plugin-only W9xxx findings are not checks in
+generated mode. Existing consumer-owned Tach configurations remain on the
+reviewed-policy path:
 
 Installation does **not** accept reviewed architecture. For a reviewed project:
 
@@ -124,8 +129,8 @@ to `true` on generated projects and `false` on reviewed projects, including upgr
 Explicitly enabling it on a reviewed project is a configuration error (exit 2).
 `tach` defaults to `true`; disabling it skips both Tach jobs and removes the
 Tach-only acceptance requirement for reviewed projects. Generated architecture
-still regenerates `tach.toml` and the mandatory Pylint layer map even with Tach
-disabled. With Tach enabled, reviewed projects still require acceptance.
+still regenerates `tach.toml` even with Tach disabled. With Tach enabled,
+reviewed projects still require acceptance.
 Other new switches default to `true` on fresh installations and upgrades; explicit
 values survive reinstallation. Missing new keys use those defaults until upgrade.
 All values must be booleans; unknown keys fail

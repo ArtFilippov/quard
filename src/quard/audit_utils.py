@@ -7,7 +7,6 @@ from importlib import metadata
 from pathlib import Path
 import re
 import sys
-sys.dont_write_bytecode = True
 import tempfile
 from typing import Any
 
@@ -16,9 +15,13 @@ import tomlkit
 from quard._common import (QuardError, atomic_write, capture, emit_event, error_exit,
                       load_toml, read_json, require_runtime, project_dir, tool_binary,
                       tool_dir, write_json)
+from quard.architecture_draft.generated_selection_utils import generated
 from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from quard._reports import normalize
 from quard.init_architecture import sync_clean_arch
+from quard.pylint_config_utils import LEGACY_PLUGIN
+
+sys.dont_write_bytecode = True
 
 
 def probe(argv: list[str], cwd: Path, label: str, log_root: Path) -> dict[str, Any]:
@@ -38,7 +41,9 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
     extensions = sorted(set(re.findall(r"\bpylint\.extensions\.[A-Za-z][A-Za-z0-9_]*", result["stdout"])))
     if not {"pylint.extensions.mccabe", "pylint.extensions.broad_try_clause"}.issubset(extensions):
         raise QuardError("PYLINT_DISCOVERY_FAILED", "Required mccabe/broad_try_clause extensions were not discovered.")
-    plugins = [name for name in extensions if name != "pylint.extensions.docparams"] + ["clean_architecture_linter"]
+    plugins = [name for name in extensions if name != "pylint.extensions.docparams"]
+    if not generated(root):
+        plugins.append(LEGACY_PLUGIN)
     result = probe(base + ["--load-plugins=" + ",".join(plugins), "--list-msgs"], root, "pylint-catalog", log_root)
     text = result["stdout"] + "\n" + result["stderr"]
     if result["exit_code"] != 0 or "Traceback (most recent call last)" in text:
@@ -48,11 +53,13 @@ def discover_plugins(root: Path, log_root: Path) -> tuple[list[str], dict[str, A
     if not pairs:
         pairs = re.findall(r"([a-z][a-z0-9-]+) \(([A-Z]\d{4})\)", result["stdout"])
     ids = sorted({message_id for _, message_id in pairs})
-    if not {"R0915", "R1260", "W9001", "W9201", "W9301"}.issubset(ids):
+    if (not {"R0915", "R1260"}.issubset(ids)
+            or (not generated(root) and not {"W9001", "W9201", "W9301"}.issubset(ids))):
         raise QuardError("INCOMPLETE_CHECKER_CATALOG", "Required standard/architecture checker IDs are missing; inspect the installed plugin release.")
     catalog = {"plugins": plugins, "message_ids": ids,
                "messages": [{"id": code, "symbol": symbol} for symbol, code in sorted(set(pairs), key=lambda pair: pair[1])],
-               "excluded_extension": "pylint.extensions.docparams", "excluded_reason": "message-ID collisions with clean_architecture_linter"}
+               "excluded_extension": "pylint.extensions.docparams", "excluded_reason":
+               "Google docstrings are validated by pydoclint; reviewed mode also has plugin message-ID collisions"}
     return plugins, catalog
 
 
@@ -99,7 +106,8 @@ class Probe:
         write_json(manifest, [source.relative_to(fixture).as_posix()])
         pylint_json = fixture / "pylint.json"
         result = probe([sys.executable, str(tool_dir() / "_pylint_worker.py"), "--manifest", str(manifest),
-                        "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json)], fixture, "pylint-smoke", log_root)
+                        "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json),
+                        *(["--generated"] if generated(root) else [])], fixture, "pylint-smoke", log_root)
         normalized = normalize("pylint", result, fixture, pylint_json)
         if normalized["status"] == "error" or not any(d["rule"] == "W0611" for d in normalized["diagnostics"]):
             raise QuardError("PYLINT_SMOKE_FAILED", "Configured Pylint/plugins failed on a small fixture. See .quard/logs/install-probes/pylint-smoke.*.log")
@@ -165,7 +173,8 @@ class Probe:
         normalized = normalize("tach-external", result, fixture)
         if normalized["status"] != "passed":
             raise QuardError("TACH_EXTERNAL_SMOKE_FAILED", "The native external-dependency command failed on a project with no external imports. See install-probes.")
-    return {"pylint_plugin_load": "passed", "pylint_config_and_fixture": "passed",
+    return {("pylint_extension_load" if generated(root) else "pylint_plugin_load"): "passed",
+            "pylint_config_and_fixture": "passed",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
             "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected"}

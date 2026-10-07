@@ -4,10 +4,12 @@ import argparse
 from functools import wraps
 import json
 import sys
-sys.dont_write_bytecode = True
 from pathlib import Path
+import tomllib
+sys.dont_write_bytecode = True
 
-from quard._architecture_compat import install_architecture_compat
+from quard._architecture_compat import install_architecture_compat, install_pylint_protocol_compat
+from quard.pylint_config_utils import LEGACY_PLUGIN
 
 
 def patch_pathlib_alias_check() -> None:
@@ -41,13 +43,23 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--output", required=True)
+    _ = parser.add_argument("--generated", action="store_true")
     args = parser.parse_args()
     files = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     if not files:
         raise ValueError("No files for Pylint")
+    if args.generated:
+        with Path(args.config).open("rb") as stream:
+            configured = tomllib.load(stream)["tool"]["pylint"]["main"]["load-plugins"]
+        if LEGACY_PLUGIN in configured:
+            raise ValueError("Generated Pylint config still loads the legacy plugin; "
+                             + "reinstall Quard or run apply.py to migrate both profiles.")
     from pylint.lint import Run
     patch_pathlib_alias_check()
-    install_architecture_compat()
+    if args.generated:
+        install_pylint_protocol_compat()
+    else:
+        install_architecture_compat()
     result = Run(["--rcfile=" + args.config, "--output-format=json2", "--output=" + args.output,
                   "--jobs=1", *files], exit=False)
     return result.linter.msg_status

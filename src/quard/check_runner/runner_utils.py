@@ -107,10 +107,12 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         output = run_dir / "raw" / f"pylint-{profile}.json"
         write_json(manifest, python_files, root)
         config = root / ("pyproject.toml" if profile == "production" else ".quard/pylint-tests.toml")
+        argv = [sys.executable, str(tool_dir() / "_pylint_worker.py"),
+                "--manifest", str(manifest), "--config", str(config), "--output", str(output)]
+        if (root / ".quard/architecture.generated.json").exists():
+            argv.append("--generated")
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
-                     "argv": [sys.executable, str(tool_dir() / "_pylint_worker.py"),
-                              "--manifest", str(manifest), "--config", str(config),
-                              "--output", str(output)], "json_file": output})
+                     "argv": argv, "json_file": output})
     source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files
     if lcom_files is None or source_files:
         add_worker("lcom4", "lcom4", source_files)
