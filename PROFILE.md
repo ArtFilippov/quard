@@ -667,6 +667,14 @@ conflicting or concrete exports (including factory values and `__all__` entries)
 receive positioned generated folder findings even without an importer. Tach exposes
 only proven contract names and does not authorize concrete facade imports for
 assembly; assembly imports implementations from their defining modules.
+Generated exact file-level dependencies permit Contract and Infrastructure modules to
+import only Contract modules (or external packages), including within the same group.
+Whole-module imports qualify only for proven Contract modules; an Infrastructure module
+import would also expose its private utilities. Envelopes may import Contract,
+Infrastructure and Envelopes, and Bootstrap may import those three roles, but neither
+may depend on Bootstrap peers. Only observed eligible source imports become explicit
+dependencies; empty dependency lists remain explicit. Tach's exact/unused, cycles,
+type-checking imports and external job are retained.
 The generated version-2 folder job checks production source and stub declarations
 for mixed Contract/Infrastructure modules, source/stub role conflicts, unresolved
 local ancestry, and cross-group implementations missing a directly inherited

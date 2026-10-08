@@ -21,9 +21,11 @@ EXPORTS = "__all__"
 CONTRACT_EXPORT = "contract"
 CONCRETE_EXPORT = "concrete"
 ROLES = ["Bootstrap", "Envelopes", "Infrastructure", "Contract"]
+CONTRACT_ROLE = "Contract"
+BOOTSTRAP_ROLE = "Bootstrap"
 ALLOWED_ROLES = {
     "Contract": {"Contract"},
-    "Infrastructure": {"Contract", "Infrastructure"},
+    "Infrastructure": {"Contract"},
     "Envelopes": {"Contract", "Infrastructure", "Envelopes"},
     "Bootstrap": {"Contract", "Infrastructure", "Envelopes"},
 }
@@ -113,24 +115,33 @@ def _exports(trees: dict[str, ast.Module], ownership: GeneratedOwnership
 
 
 def _eligible(name: str, reference: tuple[str, str, str], ownership: GeneratedOwnership,
-               areas: dict[str, tuple[str, str]], *, exports: dict[str, dict[str, set[str]]],
-               facades: set[str]
-               ) -> bool:
+                *, exports: dict[str, dict[str, set[str]]], facades: set[str],
+                roles: dict[str, str]
+                ) -> bool:
     target_module, target, resolved = reference
+    if roles[target_module] not in ALLOWED_ROLES[roles[name]]:
+        return False
+    if target == target_module:
+        # A module-level Infrastructure import can access its private utilities.
+        # Assembly imports the proven concrete symbol from its defining module.
+        return roles[target_module] == CONTRACT_ROLE
     symbol = target.removeprefix(target_module + ".").partition(".")[0]
     target_exports = exports.get(target_module, {})
     if target_module in facades:
-        return symbol in target_exports.get(CONTRACT_EXPORT, set())
-    if ownership.is_contract(resolved) or symbol in target_exports.get(CONTRACT_EXPORT, set()):
+        return (roles[target_module] == CONTRACT_ROLE and
+                symbol in target_exports.get(CONTRACT_EXPORT, set()))
+    if (roles[target_module] == CONTRACT_ROLE and
+            (ownership.is_contract(resolved) or
+             symbol in target_exports.get(CONTRACT_EXPORT, set()))):
         return True
-    assembly = areas[name][1] in {MAIN_FOLDER, ENVELOPES_FOLDER}
-    return (assembly and areas[target_module][1] != MAIN_FOLDER
+    assembly = roles[name] in {"Bootstrap", "Envelopes"}
+    return (assembly and roles[target_module] != BOOTSTRAP_ROLE
             and symbol in target_exports.get(CONCRETE_EXPORT, set()))
 
 
 def _dependencies(name: str, sources: dict[str, tuple[str, ast.Module]],
-                  ownership: GeneratedOwnership, areas: dict[str, tuple[str, str]],
-                  *, exports: dict[str, dict[str, set[str]]], facades: set[str]) -> list[str]:
+                   ownership: GeneratedOwnership, *, exports: dict[str, dict[str, set[str]]],
+                   facades: set[str], roles: dict[str, str]) -> list[str]:
     allowed: set[str] = set()
     if sources[name][0].endswith(".py"):
         for target in source_imports(name, *sources[name]):
@@ -138,20 +149,22 @@ def _dependencies(name: str, sources: dict[str, tuple[str, ast.Module]],
             target_module = destination(target, sources) or destination(resolved, sources)
             if target_module is None or target_module == name:
                 continue
-            if _eligible(name, (target_module, target, resolved), ownership, areas,
-                         exports=exports, facades=facades):
+            if _eligible(name, (target_module, target, resolved), ownership,
+                         exports=exports, facades=facades, roles=roles):
                 allowed.add(target_module)
     return sorted(allowed)
 
 
 def _interfaces(name: str, areas: dict[str, tuple[str, str]],
-                exports: dict[str, dict[str, set[str]]], assembly: set[str]
-                ) -> list[dict[str, Any]]:
+                 exports: dict[str, dict[str, set[str]]], assembly: set[str],
+                 *, roles: dict[str, str]
+                 ) -> list[dict[str, Any]]:
     source = ["^" + re.escape(name) + "$"]
     public = exports.get(name, {})
     interfaces: list[dict[str, Any]] = [{
         "from": source, "expose": ["^" + re.escape(symbol) + "$"
-                                   for symbol in sorted(public.get(CONTRACT_EXPORT, set()))]}]
+                                   for symbol in sorted(public.get(CONTRACT_EXPORT, set()))]
+        if roles[name] == CONTRACT_ROLE else []}]
     if assembly and public.get(CONCRETE_EXPORT):
         viewers = sorted(viewer for viewer in assembly if viewer != name and not (
             areas[viewer][1] == ENVELOPES_FOLDER and areas[name][1] == MAIN_FOLDER))
@@ -186,12 +199,13 @@ def _boundaries(trees: dict[str, ast.Module], ownership: GeneratedOwnership,
     interfaces: list[dict[str, Any]] = []
     for name in sorted(sources):
         modules.append({"path": name, "layer": roles[name],
-                        "depends_on": _dependencies(name, sources, ownership, areas,
-                                                    exports=exports, facades=facades),
+                         "depends_on": _dependencies(name, sources, ownership,
+                                                     exports=exports, facades=facades,
+                                                     roles=roles),
                         "cannot_depend_on": sorted(other for other in sources if other != name
                                                     and roles[other] not in ALLOWED_ROLES[
                                                         roles[name]])})
-        interfaces.extend(_interfaces(name, areas, exports, assembly))
+        interfaces.extend(_interfaces(name, areas, exports, assembly, roles=roles))
     return modules, interfaces
 
 

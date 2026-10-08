@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from importlib import import_module
+import json
 import sys
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, override
@@ -934,6 +935,163 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         self.assertTrue(any(d["tool"] == "tach" and d["path"] == "src/demo/client.py"
                             for d in report["diagnostics"]), report["diagnostics"])
         self.assertEqual(read_json(root / ".quard/reports/latest.json")["exit_code"], 1)
+
+    def test_generated_exact_role_matrix_uses_real_tach_on_full_consumer(self):
+        with TemporaryDirectory(prefix="quard-native-roles-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            contract = root / "src/demo/arbitrary/service.py"
+            implementation = root / "src/demo/arbitrary/sender.py"
+            utility = root / "src/other/group/deep/operations_utils.py"
+            bootstrap = root / "src/other/group/deep/main/wire.py"
+            bootstrap.parent.mkdir()
+            bootstrap.write_text("from demo.arbitrary.sender import Sender\n"
+                                 "result = Sender().first('ok')\n")
+
+            def check() -> dict[str, Any]:
+                report = NativeCheckRunner().run(root)
+                self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                                 report["diagnostics"])
+                return report
+
+            clean = check()
+            self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
+            execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                                 + "from other.group.deep.main.wire import result; "
+                                 + "assert result == 'ready:ok'"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+            self.assertEqual({job["name"]: job["status"] for job in clean["tools"]}[
+                "tach-external"], "passed")
+            config = load_toml(root / "tach.toml")
+            modules = {item["path"]: item for item in config["modules"]}
+            self.assertTrue(config["exact"])
+            self.assertFalse(config["ignore_type_checking_imports"])
+            self.assertEqual(config["root_module"], "forbid")
+            self.assertTrue(all("depends_on" in module for module in modules.values()))
+            self.assertEqual(modules["demo.arbitrary.service"]["depends_on"], [])
+            self.assertEqual(modules["other.group.deep.operations_utils"]["depends_on"],
+                             ["other.group.deep.aliases"])
+            self.assertEqual(modules["other.group.deep.main.wire"]["depends_on"],
+                             ["demo.arbitrary.sender"])
+            self.assertIn("demo.arbitrary.sender",
+                          modules["other.group.deep.operations_utils"]["cannot_depend_on"])
+            self.assertNotIn("demo.arbitrary.sender", modules[
+                "other.group.deep.operations_utils"]["depends_on"])
+            self.assertFalse(any(item.get("utility") or item.get("unchecked") for item in
+                                 modules.values()))
+            self.assertEqual(next(item["expose"] for item in config["interfaces"] if
+                                  item["from"] == [r"^demo\.arbitrary\.sender$"]), [])
+            self.assertEqual(next(item["expose"] for item in config["interfaces"] if
+                                  item["from"] == [r"^demo\.arbitrary\.service$"]),
+                             ["^Service$"])
+            expected = (root / "tach.toml").read_bytes()
+            self.assertFalse(regenerate(root))
+            self.assertEqual((root / "tach.toml").read_bytes(), expected)
+
+            utility_stub = utility.with_suffix(".pyi")
+            original_utility = utility.read_text()
+            original_utility_stub = utility_stub.read_text()
+            for file in (utility, utility_stub):
+                file.write_text(file.read_text().replace(
+                    "from other.group.deep.aliases import PublicService",
+                    "from demo.arbitrary import service as service_module").replace(
+                        "PublicService", "service_module.Service"))
+            module_import = check()
+            self.assertEqual(module_import["exit_code"], 0, module_import["diagnostics"])
+            self.assertEqual(next(item["depends_on"] for item in load_toml(
+                root / "tach.toml")["modules"] if item["path"] ==
+                "other.group.deep.operations_utils"), ["demo.arbitrary.service"])
+            utility.write_text(original_utility)
+            utility_stub.write_text(original_utility_stub)
+            self.assertEqual(check()["exit_code"], 0)
+
+            for file, addition in (
+                (utility, "\nfrom demo.arbitrary.sender import Sender\n"),
+                (utility, "\nimport demo.arbitrary.sender\n"),
+                (implementation, "\nfrom demo.arbitrary.sender_peer import Peer\n"),
+                (contract, "\nfrom demo.arbitrary.sender import Sender\n"),
+                (utility, "\nfrom typing import TYPE_CHECKING\n"
+                 "if TYPE_CHECKING:\n    from demo.arbitrary.sender import Sender\n"),
+                (bootstrap, "\nfrom other.group.deep.main.other import Other\n"),
+            ):
+                with self.subTest(file=file, addition=addition):
+                    if file == implementation:
+                        peer = file.with_name("sender_peer.py")
+                        peer.write_text("class Peer(object):\n    pass\n")
+                    elif file == bootstrap:
+                        peer = file.with_name("other.py")
+                        peer.write_text("class Other(object):\n    pass\n")
+                    else:
+                        peer = None
+                    before = file.read_text()
+                    file.write_text(before + addition)
+                    try:
+                        failed = check()
+                        self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                        tach = next(job for job in failed["tools"] if job["name"] == "tach")
+                        self.assertEqual((tach["status"], tach["exit_code"]),
+                                         ("violations", 1), failed["diagnostics"])
+                        self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                            str(file.relative_to(root)) and item["line"] > 0
+                                            for item in failed["diagnostics"]),
+                                        failed["diagnostics"])
+                        changed = {item["path"]: item for item in
+                                   load_toml(root / "tach.toml")["modules"]}
+                        self.assertEqual(changed[file.relative_to(root / "src").with_suffix(
+                            "").as_posix().replace("/", ".")]["depends_on"],
+                                         modules[file.relative_to(root / "src").with_suffix(
+                                             "").as_posix().replace("/", ".")]["depends_on"])
+                    finally:
+                        file.write_text(before)
+                        if peer is not None:
+                            peer.unlink()
+
+            self.assertEqual(check()["exit_code"], 0)
+            original_contract = contract.read_text()
+            contract.write_text(original_contract +
+                                "\nfrom other.group.deep.aliases import PublicService\n")
+            cyclic = check()
+            self.assertEqual(cyclic["exit_code"], 1, cyclic["diagnostics"])
+            self.assertEqual(next(job for job in cyclic["tools"] if job["name"] == "tach")[
+                "status"], "violations")
+            self.assertTrue(any(item["job"] == "tach" and item["rule"] ==
+                                "cyclic-dependency" for item in cyclic["diagnostics"]),
+                            cyclic["diagnostics"])
+            contract.write_text(original_contract)
+            self.assertEqual(check()["exit_code"], 0)
+            root_file = root / "src/direct.py"
+            root_file.write_text("from demo.arbitrary.service import Service\n")
+            root_failure = check()
+            self.assertEqual(root_failure["exit_code"], 1, root_failure["diagnostics"])
+            self.assertTrue(any(item["rule"] == "SOURCE_ROOT_LAYOUT" and item["path"] ==
+                                "src/direct.py" for item in root_failure["diagnostics"]),
+                            root_failure["diagnostics"])
+            root_file.unlink()
+            original_utility = utility.read_text()
+            utility.write_text(original_utility + "\nimport tomlkit\n")
+            external = check()
+            self.assertEqual(external["exit_code"], 1, external["diagnostics"])
+            self.assertEqual(next(job for job in external["tools"] if job["name"] ==
+                                  "tach-external")["status"], "violations")
+            self.assertTrue(any(item["job"] == "tach-external" and item["path"] ==
+                                str(utility.relative_to(root)) for item in
+                                external["diagnostics"]), external["diagnostics"])
+            utility.write_text(original_utility)
+            self.assertEqual(check()["exit_code"], 0)
+            # Exact/unused is checked by the pinned native adapter; regeneration
+            # deliberately removes this manually inserted unused declaration.
+            config = load_toml(root / "tach.toml")
+            next(item for item in config["modules"] if item["path"] ==
+                 "other.group.deep.operations_utils")["depends_on"].append(
+                     "demo.arbitrary.service")
+            (root / "tach.toml").write_text(tomlkit.dumps(config))
+            native = capture([sys.executable, str(QUARD / "_tach_worker.py"),
+                              "check"], root)
+            self.assertEqual(native["exit_code"], 1, native)
+            self.assertIn("unused-dependency", {item["rule"] for item in
+                          json.loads(native["stdout"])["diagnostics"]})
+            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual((root / "tach.toml").read_bytes(), expected)
 
     def test_generated_full_static_and_runtime_dependency_types(self):
         root = self.generated_fixture()

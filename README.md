@@ -58,7 +58,10 @@ re-export proven contracts directly, through aliases or through ancestor facades
 source and companion stub evidence must agree. Concrete classes and factory values
 cannot be exported, even when unused or listed in `__all__`. Import implementations
 from their defining modules in assembly; split out concrete facade exports during
-migration. Other modules' utilities stay private. Ordinary modules named `main.py`
+migration. Contract modules import only contracts; ordinary infrastructure modules
+import only contracts or external packages, even within their own folder. Source imports
+of whole contract modules are eligible, while assembly imports concrete symbols from
+their defining modules. Other modules' utilities stay private. Ordinary modules named `main.py`
 do not gain assembly privileges. A Python
 file or stub directly under `src/` receives a positioned layout violation; other
 file types do not. Empty package facades and extra import packages are supported.
