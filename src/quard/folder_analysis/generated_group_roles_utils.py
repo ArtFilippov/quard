@@ -9,42 +9,17 @@ from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 from quard.folder_analysis.generated_facades_utils import facade_evidence
+from quard.folder_analysis.generated_reference_utils import (
+    concrete_imports, concrete_references, other_declarations,
+)
 
 SOURCE_ROOT = "src"
-EXPORTS = "__all__"
-DECLARATION = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Assign, ast.AnnAssign, ast.AugAssign)
 EMPTY_NAMES: frozenset[str] = frozenset()
 
 
 def _location(path: str, node: ast.stmt, symbol: str) -> dict[str, object]:
     return {"path": path, "line": node.lineno, "column": node.col_offset + 1,
             "symbol": symbol}
-
-
-def other_declarations(path: str, tree: ast.Module,
-                       ownership: GeneratedOwnership) -> list[ast.stmt]:
-    """Find definitions incompatible with a contract-only module.
-
-    Args:
-        path (str): Source or stub path.
-        tree (ast.Module): Parsed module.
-        ownership (GeneratedOwnership): Local declaration index.
-
-    Returns:
-        list[ast.stmt]: Concrete definitions in the module.
-    """
-    declarations: list[ast.stmt] = []
-    for node in tree.body:
-        if not isinstance(node, DECLARATION):
-            continue
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)):
-            name = node.targets[0].id
-            if (name == EXPORTS or ownership.export_contract(
-                    f"{module_name(path)}.{name}")):
-                continue
-        declarations.append(node)
-    return declarations
 
 
 def _mixed(path: str, tree: ast.Module, declared: list[tuple[str, ast.ClassDef]],
@@ -128,6 +103,22 @@ def _implementation(path: str, name: str, node: ast.ClassDef,
     return results
 
 
+def _concrete_bases(path: str, name: str, node: ast.ClassDef,
+                    ownership: GeneratedOwnership) -> list[dict[str, object]]:
+    if area(path)[1] != ORDINARY:
+        return []
+    results: list[dict[str, object]] = []
+    for base in node.bases:
+        parent = ownership.resolved(name, base, path)
+        if ownership.node_for(parent) is None or ownership.is_contract(parent):
+            continue
+        results.append({**_location(path, base, node.name),
+                        "rule": "CONCRETE_IMPLEMENTATION_BASE",
+                        "message": f"{name}: {parent} is a concrete implementation; "
+                                   + "inherit a contract instead."})
+    return results
+
+
 def _stub_role(path: str, name: str, node: ast.ClassDef,
                declarations: dict[str, list[tuple[str, ast.ClassDef]]],
                ownership: FolderAnalysis) -> list[dict[str, object]]:
@@ -196,6 +187,8 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
             continue
         declared = declarations.get(path, [])
         results.extend(_value_imports(path, tree, ownership))
+        results.extend(concrete_imports(path, tree, trees, ownership))
+        results.extend(concrete_references(path, tree, ownership))
         for value in ownership.value_evidence.get(path, []):
             if value.declaration is None:
                 results.append({**_location(path, value.assignment,
@@ -232,5 +225,6 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
                                 "message": f"{name}: external base evidence conflicts or is unproved "
                                            + "in source or stub."})
             results.extend(_stub_role(path, name, node, declarations, ownership))
+            results.extend(_concrete_bases(path, name, node, ownership))
             results.extend(_implementation(path, name, node, ownership))
     return results

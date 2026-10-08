@@ -116,6 +116,10 @@ violations baseline.
   `CONCRETE_VALUE_DEPENDENCY`, even when found only in a stub; native Tach retains
   its separate source-import findings. Shadowed, unresolved and conflicting factory
   evidence receives positioned generated folder diagnostics.
+  Generated version-2 ordinary modules also receive positioned folder findings for
+  concrete imports in source or stubs (including `TYPE_CHECKING`), direct concrete
+  bases and concrete value references even within one file or group. Own-class references,
+  contracts and assembly areas remain permitted; tests retain composition freedom.
 * **Outer classes**: `MULTIPLE_OUTER_CLASSES` reports each outer class when a
   discovered `.py` or `.pyi` file contains more than one. Nested classes are allowed;
   a class inside a function counts unless enclosed by a class. Files without classes

@@ -16,8 +16,8 @@ from quard.architecture_draft.group_area_utils import (
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 from quard.folder_analysis.generated_facades_utils import facade_evidence
+from quard.folder_analysis.generated_reference_utils import contract_only
 
-EXPORTS = "__all__"
 CONTRACT_EXPORT = "contract"
 CONCRETE_EXPORT = "concrete"
 ROLES = ["Bootstrap", "Envelopes", "Infrastructure", "Contract"]
@@ -40,37 +40,6 @@ def _sources(trees: dict[str, ast.Module]) -> dict[str, tuple[str, ast.Module]]:
     return sources
 
 
-def _contract_only(path: str, tree: ast.Module, ownership: GeneratedOwnership,
-                   contracts: set[str]) -> bool:
-    if any(source == path for _, _, source in ownership.all_declarations()):
-        if not all(ownership.declaration(item, source=(node, path)) for item, node, source
-                   in ownership.all_declarations() if source == path):
-            return False
-        from quard.folder_analysis.generated_group_roles_utils import other_declarations
-
-        module = module_name(path)
-        concrete_alias = any((target := ownership.provenance(
-                                 f"{module}.{alias.asname or alias.name}"))
-                             in ownership.nodes and target not in contracts
-                             for statement in tree.body if isinstance(statement, ast.ImportFrom)
-                             for alias in statement.names)
-        return not concrete_alias and not other_declarations(path, tree, ownership)
-    imports = [alias.asname or alias.name for node in tree.body
-               if isinstance(node, ast.ImportFrom) for alias in node.names]
-    other = [node for node in tree.body if not isinstance(node, ast.ImportFrom)
-             and not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-                      and isinstance(node.value.value, str))
-             and not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                      and isinstance(node.targets[0], ast.Name)
-                      and node.targets[0].id == EXPORTS)]
-    if other:
-        return False
-    if not imports:
-        return Path(path).stem == PACKAGE_FILE
-    name = module_name(path)
-    return all(ownership.export_contract(f"{name}.{alias}") for alias in imports)
-
-
 def _role(path: str, tree: ast.Module, ownership: GeneratedOwnership,
           contracts: set[str]) -> str:
     kind = area(path)[1]
@@ -79,7 +48,7 @@ def _role(path: str, tree: ast.Module, ownership: GeneratedOwnership,
         role = "Bootstrap"
     elif kind == ENVELOPES_FOLDER:
         role = "Envelopes"
-    elif _contract_only(path, tree, ownership, contracts):
+    elif contract_only(path, tree, ownership, contracts):
         role = "Contract"
     return role
 

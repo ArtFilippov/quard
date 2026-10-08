@@ -162,6 +162,8 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
     grouped = ((root / MARKER).exists() and read_json(root / MARKER) == IDENTITY)
     index = GeneratedOwnership(trees) if grouped else Contracts(trees)
     for owner in index.all_declarations():
+        if grouped and Path(owner[2]).parts[0] != _SOURCE_ROOT:
+            continue
         diagnostics.extend(_class_diagnostics(index, owner, grouped=grouped and
                                              Path(owner[2]).parts[0] == _SOURCE_ROOT and
                                               area(owner[2])[1] == ORDINARY))

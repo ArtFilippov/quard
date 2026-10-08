@@ -1120,6 +1120,152 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                             "assert isinstance(Client().build(Impl()), Impl)"], root, 10)
         self.assertEqual(executed["exit_code"], 0, executed)
 
+    def test_generated_semantic_boundaries_full_consumer(self):
+        with TemporaryDirectory(prefix="quard-semantic-boundaries-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            setting = root / ".quard/config.toml"
+            setting.write_text(setting.read_text().replace(
+                "dependency_types = false", "dependency_types = true"))
+            sender = root / "src/demo/arbitrary/sender.py"
+            stub = sender.with_suffix(".pyi")
+            utility = root / "src/other/group/deep/operations_utils.py"
+            utility_stub = utility.with_suffix(".pyi")
+            peer = root / "src/demo/arbitrary/peer_utils.py"
+            peer.write_text("def label() -> str:\n    return 'ready'\n")
+            assembly = root / "src/other/group/deep/main/wire.py"
+            assembly.parent.mkdir()
+            assembly.write_text("from demo.arbitrary.sender import Sender\n"
+                                "result = Sender().first('ok')\n")
+            tests = root / "tests/demo/arbitrary/test_sender.py"
+            tests.parent.mkdir(parents=True)
+            tests.write_text("import unittest\nfrom demo.arbitrary.sender import Sender\n\n"
+                             "class TestSender(unittest.TestCase):\n"
+                             "    def test_first(self) -> None:\n"
+                             "        self.assertEqual(Sender().first('ok'), 'ready:ok')\n")
+
+            def check() -> dict[str, Any]:
+                report = NativeCheckRunner().run(root)
+                self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                                 report["diagnostics"])
+                return report
+
+            clean = check()
+            self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
+            self.assertTrue(all(item["status"] in {"passed", "skipped"} for item in
+                                clean["tools"]))
+            execution = capture([sys.executable, "-m", "unittest", "discover", "-s",
+                                 "tests/demo/arbitrary", "-p", "test_sender.py"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
+            for file, addition, job, rule, native in (
+                (sender, "\nclass Child(Sender):\n    pass\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_BASE", False),
+                (stub, "\nclass Child(Sender): ...\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_BASE", False),
+                (sender, "\ninstance = Sender()\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_REFERENCE", False),
+                (sender, "\nAlias = Sender\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_REFERENCE", False),
+                (utility, "\nfrom demo.arbitrary.sender import Sender\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", True),
+                (utility_stub, "\nfrom demo.arbitrary.sender import Sender\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", False),
+                (utility_stub, "\nfrom demo.arbitrary.peer_utils import label\n",
+                 "contract-folders", "CONCRETE_IMPLEMENTATION_IMPORT", False),
+                (utility_stub, "\nfrom typing import TYPE_CHECKING\nif TYPE_CHECKING:\n"
+                 "    from demo.arbitrary.sender import Sender\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", False),
+                (peer, "from .sender import Sender as Peer\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", True),
+                (peer, "import demo.arbitrary.sender\n", "contract-folders",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", True),
+            ):
+                with self.subTest(file=file, rule=rule):
+                    original = file.read_text()
+                    file.write_text(original + addition)
+                    try:
+                        failed = check()
+                        self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                        responsible = next(item for item in failed["tools"] if item["name"] == job)
+                        self.assertEqual((responsible["status"], responsible["exit_code"]),
+                                         ("violations", 1))
+                        self.assertTrue(any(item["rule"] == rule and item["path"] ==
+                                            str(file.relative_to(root)) and item["line"] > 0 and
+                                            item["column"] > 0 and not item["is_infrastructure_error"]
+                                            for item in failed["diagnostics"]), failed["diagnostics"])
+                        if native:
+                            tach = next(item for item in failed["tools"] if item["name"] == "tach")
+                            self.assertEqual((tach["status"], tach["exit_code"]),
+                                             ("violations", 1))
+                            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                                str(file.relative_to(root)) for item in
+                                                failed["diagnostics"]))
+                    finally:
+                        file.write_text(original)
+
+            for file, addition in (
+                (sender, "\nclass Peer(Service):\n    pass\n"),
+                (stub, "\nclass Peer(Service): ...\n"),
+            ):
+                original = file.read_text()
+                file.write_text(original + addition)
+                annotated = file.read_text().replace("class Sender(Service):\n",
+                                                     "class Sender(Service):\n    peer: Peer\n")
+                file.write_text(annotated)
+                try:
+                    failed = check()
+                    self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                    dependency = next(item for item in failed["tools"] if item["name"] ==
+                                      "dependency-types")
+                    self.assertEqual((dependency["status"], dependency["exit_code"]),
+                                     ("violations", 1))
+                    self.assertTrue(any(item["rule"] == "CONCRETE_DEPENDENCY_TYPE" and
+                                        item["path"] == str(file.relative_to(root)) and
+                                        item["line"] > 0 for item in failed["diagnostics"]))
+                finally:
+                    file.write_text(original)
+
+            for file in (utility, utility_stub):
+                original = file.read_text()
+                file.write_text(original + "\ndef inspect_concrete("
+                                "value: 'demo.arbitrary.sender.Sender') -> "
+                                "'demo.arbitrary.sender.Sender': ...\n")
+                try:
+                    failed = check()
+                    self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                    dependency = next(item for item in failed["tools"] if item["name"] ==
+                                      "dependency-types")
+                    self.assertEqual((dependency["status"], dependency["exit_code"]),
+                                     ("violations", 1))
+                    matches = [item for item in failed["diagnostics"] if item["job"] ==
+                               "dependency-types" and item["path"] == str(file.relative_to(root))]
+                    self.assertEqual({item["symbol"] for item in matches},
+                                     {"inspect_concrete.inspect_concrete.value",
+                                      "inspect_concrete.inspect_concrete"})
+                    self.assertTrue(all(item["line"] > 0 and item["column"] > 0 and
+                                        not item["is_infrastructure_error"] for item in matches))
+                finally:
+                    file.write_text(original)
+
+            misplaced = tests.with_name("test_wrong.py")
+            misplaced.write_text(tests.read_text().replace("TestSender", "TestWrong"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertEqual(next(item for item in failed["tools"] if item["name"] ==
+                                  "test-placement")["status"], "violations")
+            misplaced.unlink()
+            original_tests = tests.read_text()
+            tests.write_text(original_tests + "\nclass TestExtra(unittest.TestCase):\n"
+                             "    def test_first(self) -> None: pass\n")
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertEqual(next(item for item in failed["tools"] if item["name"] ==
+                                  "outer-classes")["status"], "violations")
+            tests.write_text(original_tests)
+            restored = check()
+            self.assertEqual(restored["exit_code"], 0, restored["diagnostics"])
+
     def test_generated_native_error_is_not_mistaken_for_success(self):
         root = self.generated_fixture()
         self.install_generated_fixture(root)

@@ -94,6 +94,10 @@ Unproved or shadowed factories and conflicting source/stub value evidence are
 reported rather than granting contract visibility. For migration, split files with
 multiple factory values and move concrete assembly imports into `envelopes/` or
 `main/`.
+Generated version-2 ordinary modules also reject concrete class and module imports
+in source and stubs (including `TYPE_CHECKING`), direct concrete inheritance and
+concrete value references even within one file or group. Own-class references and proven
+contracts remain usable; tests can compose concrete implementations freely.
 Free functions and assembly classes may live under
 `main/`; placement checks continue outside it. The generated version-2 folder job
 reports source-root layout; reviewed and generated version-1 projects retain their
