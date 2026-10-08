@@ -46,6 +46,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(result["pydoclint_signature_error"], "detected")
         self.assertEqual(result["jscpd_exact_clone"], "detected")
         self.assertEqual(result["jscpd_renamed_clone"], "detected")
+        self.assertEqual(result["jscpd_similar_clone"], "detected")
         self.assertEqual(result["tach_undeclared_dependency"], "detected")
         self.assertEqual(tool_binary("pydoclint"),
                          str(Path(sys.executable).parent / "pydoclint"))

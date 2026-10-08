@@ -34,16 +34,19 @@ violations baseline.
   this same setting in the later in-memory integration. This minimum is distinct
   from Pylint's mandatory `min_similarity_lines` readability limit.
   With a separately installed, first-party `quard-clones==0.1.0` wheel and
-  `QUARD_CLONE_ENGINE=rust`, the exact and renamed jobs use the linked `cpd-core==0.1.20`,
+  `QUARD_CLONE_ENGINE=rust`, all three jobs use the linked `cpd-core==0.1.20`,
   `cpd-finder==0.1.20`, `cpd-tokenizer==0.1.19` and
   `cpd-reporter==0.1.21` crates in memory. Renamed uses strict native
   identifier and string/numeric literal normalization and keeps only native
   `renamed` clones. A normalized match which is still exact is Type 1, not
   a renamed finding; an isolated changed literal may be too short for the
-  shared minimum. Both archived native JSON reports add
+  shared minimum. All three archived native JSON reports add
   `engine` and `sourcePaths` evidence. The worker and parser verify version,
   accounting and original fragment text/locations; a mismatch fails with
-  exit 2 for the affected job without erasing peer results. Similar remains a pinned CLI run. See
+  exit 2 for the affected job without erasing peer results. Similar merges
+  native fragments only after each meets the shared minimum; its original
+  positions, native matched-token and duplicated-line counts, rounded score
+  and `gap` method stay in the archived JSON and diagnostics. See
   [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md).
   All jobs scan the same discovered `.py` files across production
   and tests, not `.pyi` stubs (unsupported by its Python format), irrespective

@@ -161,6 +161,26 @@ class Probe:
         if (normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2
                 or {d["rule"] for d in normalized["diagnostics"]} != {"RENAMED_CLONE"}):
             raise QuardError("JSCPD_SMOKE_FAILED", "jscpd did not detect both renamed-clone fragments. See install-probes.")
+        first_part = ("def calculate(value):\n    alpha = value + 17\n"
+                      "    beta = alpha * 3\n    gamma = beta - 4\n    delta = gamma / 2\n")
+        last_part = ("    left = value + 71\n    right = left * 8\n"
+                     "    total = right - 6\n    adjusted = total / 9\n    return adjusted\n")
+        (fixture / clone_paths[0]).write_text(first_part + "    extra = 1\n" + last_part,
+                                              encoding="utf-8")
+        (fixture / clone_paths[1]).write_text(first_part + "    extra = 2\n" + last_part,
+                                              encoding="utf-8")
+        command[command.index("--kind") + 1] = "similar"
+        command[command.index("--min-lines") + 1] = "3"
+        command[command.index("--ignore-identifiers"):command.index("--mode")] = [
+            "--max-gap-lines", "2"]
+        result = probe(command, fixture, "jscpd-similar-smoke", log_root)
+        normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
+        if (normalized["status"] != "violations" or not normalized["diagnostics"]
+                or {d["rule"] for d in normalized["diagnostics"]} != {"SIMILAR_CLONE"}
+                or any(d["native_details"].get("method") != "gap" or not
+                       0 < d["native_details"].get("similarity", 0) < 1
+                       for d in normalized["diagnostics"])):
+            raise QuardError("JSCPD_SMOKE_FAILED", "jscpd did not detect a native gap clone. See install-probes.")
         modules = [{"path": path, "depends_on": []} for path in ("quardprobe", "quardprobe.first", "quardprobe.second")]
         tach = {"source_roots": ["src"], "root_module": "forbid", "exact": True,
                 "respect_gitignore": False, "ignore_type_checking_imports": False, "modules": modules}
@@ -177,7 +197,8 @@ class Probe:
             "pylint_config_and_fixture": "passed",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
-            "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected"}
+            "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected",
+            "jscpd_similar_clone": "detected"}
 
 
 def audit(root: Path) -> dict[str, Any]:

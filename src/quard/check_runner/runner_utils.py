@@ -152,7 +152,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                     "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
                     "--reporters", "json", "--output", str(output_dir), "--exit-code",
                     "1", *clone_files]
-            engine = name != "jscpd-similar" and os.environ.get("QUARD_CLONE_ENGINE") == "rust"
+            engine = os.environ.get("QUARD_CLONE_ENGINE") == "rust"
             if engine:
                 manifest = run_dir / "clone-engine-files.json"
                 write_json(manifest, {"paths": eligible, "min_lines": min_lines}, root)

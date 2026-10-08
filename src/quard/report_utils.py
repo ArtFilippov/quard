@@ -637,11 +637,20 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
             or total["duplicatedTokens"] != sum(
                 clone.get("tokens", 0) for clone in raw["duplicates"] if isinstance(clone, dict))
             or total["duplicatedLines"] != sum(
-                clone.get("lines", 0) for clone in raw["duplicates"] if isinstance(clone, dict))):
+                clone.get("lines", 0) - clone.get("unmatchedLines", [0, 0])[0]
+                for clone in raw["duplicates"] if isinstance(clone, dict))):
         raise ValueError("Inconsistent native engine accounting")
     for clone in raw["duplicates"]:
         if not isinstance(clone, dict) or clone.get("kind") != expected_kind:
             raise ValueError("Unexpected native engine clone kind")
+        if expected_kind == JSCPD_SIMILAR:
+            _ = _jscpd_similarity(clone)
+            unmatched = clone.get("unmatchedLines")
+            if (not isinstance(unmatched, list) or len(unmatched) != 2
+                    or any(not _jscpd_integer(n, minimum=0) for n in unmatched)):
+                raise ValueError("Invalid native unmatched line counts")
+        elif clone.get("similarity") is not None or clone.get("method") is not None:
+            raise ValueError("Unexpected native similarity metadata")
         for key in ("firstFile", "secondFile"):
             side = clone.get(key)
             if not isinstance(side, dict):
@@ -670,6 +679,9 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
                     or end["position"] != len("".join(source_lines[:last - 1]).encode("utf-8"))
                     + end["column"]):
                 raise ValueError("Native fragment does not map to original source")
+            if expected_kind == JSCPD_SIMILAR and clone["unmatchedLines"][
+                    0 if key == "firstFile" else 1] >= last - first + 1:
+                raise ValueError("Invalid native matched line count")
         first_side = clone["firstFile"]
         first_lines = (Path(first_side["name"])).read_text(encoding="utf-8").splitlines()
         fragment = "\n".join(first_lines[first_side["startLoc"]["line"] - 1:

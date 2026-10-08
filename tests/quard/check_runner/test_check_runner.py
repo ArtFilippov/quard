@@ -26,10 +26,17 @@ from offline_fixtures import create_repo, fake_tools
 from rust_clone_engine_utils import (verify_cli_parity, verify_corrupt_report,
                                      verify_mismatched_engine, verify_missing_wheel,
                                      verify_real_full_check, verify_same_file_and_mapping,
-                                     verify_renamed_parity, verify_renamed_failure)
+                                     verify_renamed_parity, verify_renamed_failure,
+                                     verify_similar_parity, verify_similar_failure)
 
 
 class TestCheckRunner(unittest.TestCase):
+    def test_real_wheel_similar_cli_parity(self) -> None:
+        verify_similar_parity(self, self.root)
+
+    def test_real_wheel_similar_failure_keeps_peers(self) -> None:
+        verify_similar_failure(self, self.root)
+
     def test_real_wheel_renamed_cli_parity(self) -> None:
         verify_renamed_parity(self, self.root)
 

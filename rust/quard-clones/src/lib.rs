@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cpd_core::detect::{detect_prepared, PathFilters};
+use cpd_core::detect::{detect_prepared, merge_gapped_clones, PathFilters};
 use cpd_core::models::{CpdClone, KindFilter, SourceFile};
 use cpd_finder::orchestrate::{FilePreparer, RunConfig};
 use cpd_finder::statistics;
@@ -88,6 +88,10 @@ impl SourceSession {
         self.detect(KindFilter::Renamed, true)
     }
 
+    fn similar(&self) -> PyResult<String> {
+        self.detect(KindFilter::Similar, false)
+    }
+
     fn source_count(&self) -> usize {
         self.files.len()
     }
@@ -106,6 +110,13 @@ impl SourceSession {
             self.min_lines,
             &PathFilters::default(),
         );
+        // The CLI merges only constituent clones that already cleared the native
+        // detection minimum; filtering before merging would lose Type-3 matches.
+        let clones = if kind == KindFilter::Similar {
+            merge_gapped_clones(clones, 2)
+        } else {
+            clones
+        };
         let clones: Vec<CpdClone> = clones
             .into_iter()
             .filter(|clone| kind.matches(clone))
@@ -150,7 +161,10 @@ impl SourceSession {
         Ok(
             json!({"format": clone.format, "lines": first.end.line - first.start.line + 1,
                   "fragment": fragment, "tokens": clone.token_count, "firstFile": sides[0],
-                  "secondFile": sides[1], "isNew": clone.is_new, "kind": clone.kind.as_str()}),
+                  "secondFile": sides[1], "isNew": clone.is_new, "kind": clone.kind.as_str(),
+                  "unmatchedLines": clone.unmatched_lines,
+                  "similarity": clone.similarity_rounded(),
+                  "method": clone.similarity_method.map(|method| method.as_str())}),
         )
     }
 }

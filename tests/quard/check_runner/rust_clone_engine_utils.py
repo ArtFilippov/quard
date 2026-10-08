@@ -6,6 +6,7 @@ from collections.abc import Callable
 from functools import cache
 from importlib import util
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -138,7 +139,8 @@ def compare_cli(test: unittest.TestCase, root: Path, result: dict[str, Any], min
     Returns:
         dict[str, Any]: Archived native Rust JSON data.
     """
-    name = "jscpd" if kind == "exact" else "jscpd-renamed"
+    name = {"exact": "jscpd", "renamed": "jscpd-renamed",
+            "similar": "jscpd-similar"}[kind]
     job = next(item for item in result["tools"] if item["name"] == name)
     native = read_json(root / job["raw_output"]["native_json"])
     run_dir = root / result["report_path"].replace("/report.json", "")
@@ -149,6 +151,7 @@ def compare_cli(test: unittest.TestCase, root: Path, result: dict[str, Any], min
     command = [binary("jscpd"), "--config", str(run_dir / "jscpd-config.json"),
                "--no-gitignore", "--absolute", "--kind", kind,
                *(["--ignore-identifiers", "--ignore-literals"] if kind == "renamed" else []),
+               *(["--max-gap-lines", "2"] if kind == "similar" else []),
                "--mode", "strict",
                "--min-lines", str(minimum), "--min-tokens", "1", "--fail-on-empty",
                "--reporters", "json", "--output", str(output), "--exit-code", "1",
@@ -162,7 +165,138 @@ def compare_cli(test: unittest.TestCase, root: Path, result: dict[str, Any], min
     for key in ("kind", "lines", "tokens", "fragment", "firstFile", "secondFile"):
         test.assertEqual([item[key] for item in native["duplicates"]],
                          [item[key] for item in original["duplicates"]], key)
+    if kind == "similar":
+        for key in ("similarity", "method"):
+            test.assertEqual([item[key] for item in native["duplicates"]],
+                             [item[key] for item in original["duplicates"]], key)
     return native
+
+
+def verify_similar_parity(test: unittest.TestCase, root: Path) -> None:
+    """Real gap and clean scans agree with the CLI within one function.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated fixture consumer root.
+    """
+    top = ("    alpha = value + 17\n    beta = alpha * 3\n"
+           "    gamma = beta - 4\n    delta = gamma / 2\n")
+    bottom = ("    left = value + 71\n    right = left * 8\n"
+              "    total = right - 6\n    adjusted = total / 9\n")
+    first = root / "src/demo/first.py"
+    second = root / "tests/second.py"
+    for gap in (0, 1, 2, 5):
+        with test.subTest(gap=gap):
+            first.write_text("def calculate(value):\n" + top +
+                             bottom + "    return adjusted\n", encoding="utf-8")
+            second.write_text("def calculate(value):\n" + top +
+                              "".join(f"    inserted_{n} = {n}\n" for n in range(gap)) +
+                              bottom + "    return adjusted\n",
+                              encoding="utf-8")
+            result = report(root)
+            job = next(j for j in result["tools"] if j["name"] == "jscpd-similar")
+            native = compare_cli(test, root, result, 3, "similar")
+            test.assertIn("_clone_engine_worker.py", job["argv"][1])
+            test.assertEqual(job["status"], "violations" if 1 <= gap <= 2 else "passed")
+            test.assertEqual(bool(native["duplicates"]), 1 <= gap <= 2)
+            if 1 <= gap <= 2:
+                test.assertTrue(all(item["kind"] == "similar" and item["method"] == "gap"
+                                    and 0 < item["similarity"] < 1
+                                    for item in native["duplicates"]))
+                test.assertEqual({d["path"] for d in result["diagnostics"]
+                                  if d["rule"] == "SIMILAR_CLONE"},
+                                 {"src/demo/first.py", "tests/second.py"})
+                test.assertTrue(all(d["native_details"] in native["duplicates"]
+                                    and d["line"] >= 1 and d["column"] >= 1
+                                    for d in result["diagnostics"]
+                                    if d["rule"] == "SIMILAR_CLONE"))
+    setting = root / ".quard/config.toml"
+    setting.write_text(setting.read_text(encoding="utf-8").replace(
+        "min_lines = 3", "min_lines = 6"), encoding="utf-8")
+    second.write_text("def calculate(value):\n" + top + "    inserted = 91\n" +
+                      bottom + "    return adjusted\n", encoding="utf-8")
+    insufficient = report(root)
+    test.assertFalse(compare_cli(test, root, insufficient, 6, "similar")["duplicates"])
+    test.assertEqual(next(j for j in insufficient["tools"] if j["name"] == "jscpd-similar")[
+        "status"], "passed")
+    setting.write_text(setting.read_text(encoding="utf-8").replace(
+        "min_lines = 6", "min_lines = 3"), encoding="utf-8")
+    second.unlink()
+    first.write_text("def unique(value):\n    return value + 53\n", encoding="utf-8")
+    clean = report(root)
+    test.assertEqual(next(j for j in clean["tools"] if j["name"] == "jscpd-similar")[
+        "status"], "passed", clean["diagnostics"])
+    test.assertFalse(compare_cli(test, root, clean, 3, "similar")["duplicates"])
+
+
+def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
+    """Malformed native gap data or failed execution cannot hide peer results.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated fixture consumer root.
+    """
+    (root / "src/demo/first.py").write_text(SAMPLE, encoding="utf-8")
+    (root / "tests/second.py").write_text(SAMPLE, encoding="utf-8")
+    fake, _ = fake_tools({"pydoclint": {"stderr": "src/demo/first.py:1: DOC101: Issue\n",
+                                        "code": 1}})
+    python, _ = wheel()
+
+    def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+        if Path(argv[1]).name != "_clone_engine_worker.py":
+            return fake(argv, cwd, timeout)
+        result = capture([str(python), *argv[1:]], cwd, timeout)
+        if argv[-1] == "similar":
+            return {**result, "exit_code": 2, "stderr": "native similar failure"}
+        return result
+
+    with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):
+        result = NativeCheckRunner().run(root, lcom_files="", serial=True, timeout=60,
+                                         capture_fn=dispatch, versions_fn=versions)
+    jobs = {j["name"]: j for j in result["tools"]}
+    test.assertEqual((result["exit_code"], jobs["jscpd"]["status"],
+                      jobs["jscpd-renamed"]["status"], jobs["jscpd-similar"]["status"]),
+                     (2, "violations", "passed", "error"))
+    test.assertTrue({"EXACT_CLONE", "DOC101"} <= {d["rule"] for d in result["diagnostics"]})
+    test.assertTrue(any(d["is_infrastructure_error"] and d["job"] == "jscpd-similar"
+                        for d in result["diagnostics"]))
+    native = read_json(root / jobs["jscpd-similar"]["raw_output"]["native_json"])
+    test.assertEqual(native["sourcePaths"], [str(root / path) for path in read_json(
+        (root / result["report_path"]).parent / "clone-engine-files.json")["paths"]])
+    # A real gap finding supplies valid metadata and locations before corruption.
+    first = root / "src/demo/first.py"
+    second = root / "tests/second.py"
+    top = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n"
+           "    gamma = beta - 4\n    delta = gamma / 2\n")
+    bottom = ("    left = value + 71\n    right = left * 8\n"
+              "    total = right - 6\n    adjusted = total / 9\n")
+    first.write_text(top + "    extra = 1\n" + bottom + "    return adjusted\n",
+                     encoding="utf-8")
+    second.write_text(top + "    extra = 2\n" + bottom + "    return adjusted\n",
+                      encoding="utf-8")
+    valid = report(root)
+    similar = next(j for j in valid["tools"] if j["name"] == "jscpd-similar")
+    payload = read_json(root / similar["raw_output"]["native_json"])
+    test.assertTrue(payload["duplicates"], payload)
+    paths = read_json((root / valid["report_path"]).parent / "clone-engine-files.json")["paths"]
+    output = root / "invalid-gap.json"
+    for key, bad_value in (("similarity", None), ("similarity", math.nan),
+                           ("similarity", -0.1), ("similarity", 1.5),
+                           ("method", "ast"), ("unmatchedLines", [999, 0])):
+        with test.subTest(key=key, value=bad_value):
+            altered = json.loads(json.dumps(payload))
+            altered["duplicates"][0][key] = bad_value
+            output.write_text(json.dumps(altered), encoding="utf-8")
+            parsed = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
+                                         "error": None}, root, output, paths, True, "similar")
+            test.assertEqual(parsed["status"], "error")
+            test.assertTrue(any(d["is_infrastructure_error"] for d in parsed["diagnostics"]))
+    altered = json.loads(json.dumps(payload))
+    altered["duplicates"][0]["secondFile"]["endLoc"]["position"] += 1
+    output.write_text(json.dumps(altered), encoding="utf-8")
+    test.assertEqual(normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
+                                         "error": None}, root, output, paths, True,
+                               "similar")["status"], "error")
 
 
 def verify_cli_parity(test: unittest.TestCase, root: Path) -> None:
@@ -482,6 +616,7 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
         for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
             test.assertIn("native_json", jobs[name]["raw_output"])
         test.assertIn("_clone_engine_worker.py", jobs["jscpd-renamed"]["argv"][1])
+        test.assertIn("_clone_engine_worker.py", jobs["jscpd-similar"]["argv"][1])
         test.assertEqual(result["versions"]["quard-clones"], "0.1.0")
         return result
 
@@ -502,4 +637,18 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     renamed_result = check(1, exact_code=0)
     test.assertEqual({item["path"] for item in renamed_result["diagnostics"]
                       if item["rule"] == "RENAMED_CLONE"},
+                      {"src/demo/main/first.py", "src/demo/main/second.py"})
+    # A third real packaged-wheel scan proves Type-3 detection, not just output files.
+    beginning = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n"
+                 "    gamma = beta - 4\n    delta = gamma / 2\n")
+    ending = ("    left = value + 71\n    right = left * 8\n"
+              "    total = right - 6\n    adjusted = total / 9\n    return adjusted\n")
+    (consumer / "src/demo/main/first.py").write_text(beginning + "    extra = 1\n" + ending,
+                                                        encoding="utf-8")
+    (consumer / "src/demo/main/second.py").write_text(beginning + "    extra = 2\n" + ending,
+                                                         encoding="utf-8")
+    gap = check(1, exact_code=1)
+    test.assertEqual(next(j for j in gap["tools"] if j["name"] == "jscpd-similar")["status"],
+                     "violations")
+    test.assertEqual({d["path"] for d in gap["diagnostics"] if d["rule"] == "SIMILAR_CLONE"},
                      {"src/demo/main/first.py", "src/demo/main/second.py"})
