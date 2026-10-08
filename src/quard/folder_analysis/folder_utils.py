@@ -37,6 +37,8 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
     if generated(root) and read_json(root / MARKER) == IDENTITY:
+        from quard.folder_analysis.generated_group_roles_utils import analyze as group_roles
+
         for path in sorted(trees):
             if (Path(path).parts[0] == SOURCE_ROOT
                     and len(Path(path).parts) == SOURCE_ROOT_DEPTH):
@@ -44,6 +46,7 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                     "rule": "SOURCE_ROOT_LAYOUT", "path": path, "line": 1, "column": 1,
                     "symbol": Path(path).name,
                     "message": f"{path}: place Python files inside a source directory."})
+        diagnostics.extend(group_roles(trees, FolderOwnership(trees)))
     else:
         diagnostics.extend(FolderOwnership(trees).folder_violations())
     return diagnostics, error

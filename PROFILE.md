@@ -651,6 +651,12 @@ root config is ignored and restored by install, apply and check. Generated bound
 support multiple import packages, empty facades and nearest-directory groups for
 source and stubs. Contract-only declarations and proven aliases retain Contract
 roles; ordinary utilities remain Infrastructure, regardless of module names.
+The generated version-2 folder job checks production source and stub declarations
+for mixed Contract/Infrastructure modules, source/stub role conflicts, unresolved
+local ancestry, and cross-group implementations missing a directly inherited
+combined local contract. Multiple contracts in one directory and multiple
+same-group contract bases are permitted. Reviewed and generated version-1
+projects retain their original name-based folder checks.
 Python files directly under `src/` receive a layout violation. Existing version-1
 generated selections keep their previous boundaries until the tracked marker is
 explicitly updated to version 2. Existing reviewed

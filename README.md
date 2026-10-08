@@ -64,6 +64,13 @@ and returns on customer classes in source and stubs: concrete classes from
 other modules require local contract types. Own types and `Self` are allowed;
 `main/` and `envelopes/` may name concrete types. Explicit customer type
 references that cannot be resolved receive separate diagnostics.
+Generated version-2 folder analysis also proves roles from local Protocol and
+abstract-interface declarations: a directory may own multiple contracts and an
+implementation may inherit several of its own group's contracts. An implementation
+using contracts from another directory must directly inherit a combined contract
+declared in its own group that covers those contracts. Mixed contract/concrete
+modules, conflicting source/stub class roles and unresolved local bases receive
+positioned violations. Reviewed configurations keep their existing folder rules.
 Free functions and assembly classes may live under
 `main/`; placement checks continue outside it. The generated version-2 folder job
 reports source-root layout; reviewed and generated version-1 projects retain their

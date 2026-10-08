@@ -308,6 +308,8 @@ def parse_contract_folders(text: str, root: Path) -> tuple[list[dict[str, Any]],
     if error not in {None, "CONTRACT_FOLDERS_PARSE_ERROR", "CONTRACT_FOLDERS_EXECUTION_ERROR"}:
         raise ValueError("Unknown contract folder execution error")
     violations = {"CONTRACT_FOLDER", "IMPLEMENTATION_FOLDER", "COMPETING_LOCAL_BASES",
+                  "MIXED_MODULE_ROLES", "CONFLICTING_MODULE_ROLE", "CROSS_GROUP_CONTRACT",
+                  "UNRESOLVED_GROUP_OWNER",
                   "UNRESOLVED_FOLDER_OWNER", "ENVELOPE_FOLDER", "ENVELOPE_CLASS",
                    "ENVELOPE_FILE", "ENVELOPE_INHERITANCE", "SOURCE_ROOT_LAYOUT"}
     items = []

@@ -10,12 +10,12 @@ from quard._policy import discover_files, exclude_globs, read_scope
 from quard.architecture_draft.boundary_source_utils import (
     PACKAGE_FILE, destination, parse_trees, source_imports,
 )
+from quard.architecture_draft.group_area_utils import (
+    ENVELOPES_FOLDER, MAIN_FOLDER, ORDINARY, area,
+)
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_ownership import FolderOwnership
 
-MAIN_FOLDER = "main"
-ENVELOPES_FOLDER = "envelopes"
-ORDINARY = "ordinary"
 EXPORTS = "__all__"
 CONTRACT_EXPORT = "contract"
 CONCRETE_EXPORT = "concrete"
@@ -37,27 +37,21 @@ def _sources(trees: dict[str, ast.Module]) -> dict[str, tuple[str, ast.Module]]:
     return sources
 
 
-def _area(path: str) -> tuple[str, str]:
-    """Identify the nearest group and its assembly directory.
-
-    Args:
-        path (str): Relative Python source or stub path.
-
-    Returns:
-        tuple[str, str]: Group identity and assembly kind.
-    """
-    directories = Path(path).parts[1:-1]
-    if MAIN_FOLDER in directories:
-        return ".".join(directories[:directories.index(MAIN_FOLDER) + 1]), MAIN_FOLDER
-    if len(directories) > 1 and directories[-1] == ENVELOPES_FOLDER:
-        return ".".join(directories[:-1]), ENVELOPES_FOLDER
-    return ".".join(directories), ORDINARY
-
-
 def _contract_only(path: str, tree: ast.Module, ownership: FolderOwnership,
                    contracts: set[str]) -> bool:
-    if declared := [name for name, _, source in ownership.all_declarations() if source == path]:
-        return all(item in contracts for item in declared)
+    if any(source == path for _, _, source in ownership.all_declarations()):
+        if not all(ownership.declaration(item, source=(node, path)) for item, node, source
+                   in ownership.all_declarations() if source == path):
+            return False
+        from quard.folder_analysis.generated_group_roles_utils import other_declarations
+
+        module = module_name(path)
+        concrete_alias = any((target := ownership.provenance(
+                                 f"{module}.{alias.asname or alias.name}"))
+                             in ownership.nodes and target not in contracts
+                             for statement in tree.body if isinstance(statement, ast.ImportFrom)
+                             for alias in statement.names)
+        return not concrete_alias and not other_declarations(path, tree, ownership)
     imports = [alias.asname or alias.name for node in tree.body
                if isinstance(node, ast.ImportFrom) for alias in node.names]
     other = [node for node in tree.body if not isinstance(node, ast.ImportFrom)
@@ -76,7 +70,7 @@ def _contract_only(path: str, tree: ast.Module, ownership: FolderOwnership,
 
 def _role(path: str, tree: ast.Module, ownership: FolderOwnership,
           contracts: set[str]) -> str:
-    kind = _area(path)[1]
+    kind = area(path)[1]
     role = "Infrastructure"
     if kind == MAIN_FOLDER:
         role = "Bootstrap"
@@ -167,7 +161,7 @@ def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: FolderOwnershi
 def _boundaries(trees: dict[str, ast.Module], ownership: FolderOwnership,
                 sources: dict[str, tuple[str, ast.Module]]
                 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    areas = {name: _area(path) for name, (path, _) in sources.items()}
+    areas = {name: area(path) for name, (path, _) in sources.items()}
     roles = _roles(sources, ownership)
     exports = _exports(trees, ownership)
     assembly = {name for name in sources if areas[name][1] != ORDINARY}

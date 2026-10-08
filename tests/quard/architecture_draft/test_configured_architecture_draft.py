@@ -502,6 +502,158 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                              load_toml(root / "tach.toml")["modules"] if item["path"] ==
                              "other.group.deep.operations_utils")["depends_on"])
 
+    def test_generated_multiple_contracts_combined_groups_and_mixed_roles(self):
+        with TemporaryDirectory(prefix="quard-group-roles-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            group = root / "src/demo/arbitrary"
+            extra = group / "extra.py"
+            extra.write_text("from typing import Protocol\n"
+                             "class Extra(Protocol):\n    def third(self) -> str: ...\n")
+            extra.with_suffix(".pyi").write_text(extra.read_text())
+            sender = group / "sender.py"
+            sender_stub = sender.with_suffix(".pyi")
+            for file in (sender, sender_stub):
+                text = file.read_text().replace("class Sender(Service):", "class Sender(Service, Extra):")
+                text = text.replace("from typing import override\n", "from typing import override\n"
+                                    "from demo.arbitrary.extra import Extra\n")
+                text += "\n    @override\n    def third(self) -> str:\n"
+                text += "        return self.first('ok')\n" if file == sender else "        ...\n"
+                file.write_text(text)
+            remote = root / "src/other/group/deep"
+            combined = remote / "combined.py"
+            combined.write_text("from typing import Protocol\n"
+                                "from demo.arbitrary.service import Service\n"
+                                "class Combined(Service, Protocol):\n    pass\n")
+            combined.with_suffix(".pyi").write_text(combined.read_text())
+            bridge = remote / "bridge.py"
+            bridge.write_text("from typing import override\n"
+                              "from other.group.deep.combined import Combined\n"
+                              "class Bridge(Combined):\n"
+                              "    @override\n    def first(self, value: str) -> str:\n"
+                              "        return self.second(value).strip()\n"
+                              "    @override\n    def second(self, value: str) -> str:\n"
+                              "        return value\n")
+            bridge.with_suffix(".pyi").write_text(
+                "from typing import override\n"
+                "from other.group.deep.combined import Combined\n"
+                "class Bridge(Combined):\n"
+                "    @override\n    def first(self, value: str) -> str: ...\n"
+                "    @override\n    def second(self, value: str) -> str: ...\n")
+
+            def check() -> dict[str, Any]:
+                report = NativeCheckRunner().run(root)
+                self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                                 report["diagnostics"])
+                self.assertEqual(next(job for job in report["tools"] if job["name"] ==
+                                      "contract-folders")["exit_code"],
+                                 1 if any(item["tool"] == "contract-folders" for item in
+                                          report["diagnostics"]) else 0)
+                return report
+
+            clean = check()
+            self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
+            self.assertEqual(next(item for item in load_toml(root / "tach.toml")["modules"]
+                                  if item["path"] == "other.group.deep.combined")["layer"],
+                             "Contract")
+            self.assertEqual(next(item for item in load_toml(root / "tach.toml")["modules"]
+                                  if item["path"] == "demo.arbitrary.extra")["layer"],
+                             "Contract")
+            execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                                 + "from other.group.deep.bridge import Bridge; "
+                                 + "from demo.arbitrary.sender import Sender; "
+                                 + "assert Bridge().first(' hi ') == 'hi'; "
+                                 + "assert Sender().third() == 'ready:ok'"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
+            # A foreign contract alone cannot select the implementation's group.
+            before = bridge.read_text()
+            bridge.write_text(before.replace("class Bridge(Combined):", "class Bridge(Service):")
+                              .replace("from other.group.deep.combined import Combined",
+                                       "from demo.arbitrary.service import Service"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertTrue(any(item["rule"] == "CROSS_GROUP_CONTRACT" and
+                                item["path"] == "src/other/group/deep/bridge.py" and
+                                item["line"] == 3 and item["column"] == 1
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            bridge.write_text(before)
+
+            # Source and stubs are checked separately, even when the source passes.
+            stub = bridge.with_suffix(".pyi")
+            before_stub = stub.read_text()
+            stub.write_text(before_stub.replace("class Bridge(Combined):", "class Bridge(Service):")
+                            .replace("from other.group.deep.combined import Combined",
+                                     "from demo.arbitrary.service import Service"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertTrue(any(item["rule"] == "CROSS_GROUP_CONTRACT" and
+                                item["path"] == "src/other/group/deep/bridge.pyi"
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            stub.write_text(before_stub)
+
+            # A concrete class in the same module must not acquire a Contract role.
+            extra.write_text(extra.read_text() + "\nclass Accidental(Extra):\n"
+                             "    def third(self) -> str: return 'ok'\n")
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertTrue(any(item["rule"] == "MIXED_MODULE_ROLES" and
+                                item["path"] == "src/demo/arbitrary/extra.py" and
+                                item["line"] > 0 and item["column"] > 0
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            self.assertEqual(next(item for item in load_toml(root / "tach.toml")["modules"]
+                                  if item["path"] == "demo.arbitrary.extra")["layer"],
+                             "Infrastructure")
+            extra.write_text(extra.read_text().split("\nclass Accidental")[0] + "\n")
+
+            # A companion stub cannot redefine the source contract as concrete.
+            extra_stub = extra.with_suffix(".pyi")
+            original_stub = extra_stub.read_text()
+            extra_stub.write_text("class Extra(object):\n    def third(self) -> str: ...\n")
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertTrue(any(item["rule"] == "CONFLICTING_MODULE_ROLE" and
+                                item["path"] == "src/demo/arbitrary/extra.pyi" and
+                                item["line"] == item["column"] == 1
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            extra_stub.write_text(original_stub)
+
+            # An unresolved customer base must not select a group by guesswork.
+            bridge.write_text(before.replace("class Bridge(Combined):", "class Bridge(Combined, Ghost):")
+                              .replace("from other.group.deep.combined import Combined",
+                                       "from other.group.deep.combined import Combined\n"
+                                       "from demo.absent import Ghost"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1)
+            self.assertTrue(any(item["rule"] == "UNRESOLVED_GROUP_OWNER" and
+                                item["path"] == "src/other/group/deep/bridge.py"
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+
+    def test_reviewed_folder_rules_survive_generated_role_changes(self):
+        with TemporaryDirectory(prefix="quard-reviewed-roles-") as directory:
+            root = Path(directory)
+            create_repo(root)
+            config = (root / "tach.toml").read_bytes()
+            source = root / "src/demo/domain/api.py"
+            source.write_text("from typing import Protocol\n"
+                              "class AnyName(Protocol):\n    def read(self) -> str: ...\n")
+            (root / "src/demo/client.py").write_text("from demo.domain.api import AnyName\n")
+            logs = root / ".quard/logs/install-probes"
+            logs.mkdir(parents=True, exist_ok=True)
+            plugins, catalog = discover_plugins(root, logs)
+            write_json(root / ".quard/pylint-catalog.json", catalog)
+            configure(root, initial=True, plugins=plugins, catalog=catalog)
+            report = NativeCheckRunner().run(root)
+            self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+            self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                             report["diagnostics"])
+            self.assertTrue(any(item["rule"] == "CONTRACT_FOLDER" and
+                                item["path"] == "src/demo/domain/api.py"
+                                for item in report["diagnostics"]), report["diagnostics"])
+            self.assertFalse(any(item["rule"] == "MIXED_MODULE_ROLES"
+                                 for item in report["diagnostics"]))
+            self.assertEqual((root / "tach.toml").read_bytes(), config)
+
     def test_generated_forbidden_imports_keep_real_tach_failure(self):
         root = self.generated_fixture()
         self.install_generated_fixture(root)
