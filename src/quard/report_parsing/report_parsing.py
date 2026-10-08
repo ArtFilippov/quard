@@ -18,4 +18,5 @@ class ReportParsing(Protocol):
 
     def normalize(self, tool: str, result: dict[str, Any],
                   json_file: Path | None = None,
-                  expected_paths: list[str] | None = None) -> dict[str, Any]: ...
+                   expected_paths: list[str] | None = None,
+                   expected_engine: bool = False) -> dict[str, Any]: ...

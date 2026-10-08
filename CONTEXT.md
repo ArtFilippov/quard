@@ -19,6 +19,14 @@ selectable; disabled jobs are reported as skipped, not passed.
 `[scope]`. It applies to the native tools and independent jobs, regardless of
 optional check selection or per-change LCOM4 selection.
 
+## In-memory source session
+
+An **in-memory source session** owns Quard's discovered original Python source
+text and the pinned native engine's prepared token sources for a check run.
+The session does not execute or import consumer code or create prepared files.
+Its exact-clone pass counts the same physical source lines as the CLI; later
+prepared views will apply the shared minimum to eligible lines.
+
 ## Customer class
 
 A **customer class** is a class declared in a consumer's discovered production or

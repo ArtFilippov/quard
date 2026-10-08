@@ -33,6 +33,14 @@ violations baseline.
   CLI scans physical `.py` lines; prepared-view eligible-line counting will use
   this same setting in the later in-memory integration. This minimum is distinct
   from Pylint's mandatory `min_similarity_lines` readability limit.
+  With a separately installed, first-party `quard-clones==0.1.0` wheel and
+  `QUARD_CLONE_ENGINE=rust`, the exact job uses the linked `cpd-core==0.1.20`,
+  `cpd-finder==0.1.20`, `cpd-tokenizer==0.1.19` and
+  `cpd-reporter==0.1.21` crates in memory. The archived exact JSON adds
+  `engine` and `sourcePaths` evidence. The worker and parser verify version,
+  accounting and original fragment text/locations; a mismatch fails with
+  exit 2. Renamed and similar remain pinned CLI runs. See
+  [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md).
   All jobs scan the same discovered `.py` files across production
   and tests, not `.pyi` stubs (unsupported by its Python format), irrespective
   of LCOM4 selection.

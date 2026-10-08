@@ -229,6 +229,16 @@ Pylint's required `[readability.production] min_similarity_lines` limit and
 The current native CLI scans unprepared `.py` files; the threshold and its
 expected-source accounting use physical source lines. The later prepared-view
 integration will apply the same setting to eligible lines in that view.
+For developer comparison, build the locked `rust/quard-clones` wheel with
+`maturin build --manifest-path rust/quard-clones/Cargo.toml --locked --release`,
+install it into the selected consumer's uv environment, then set
+`QUARD_CLONE_ENGINE=rust` for a full check. The exact job then uses the pinned
+first-party Rust in-memory engine; renamed and similar continue through the
+CLI. The wheel contains native code; consumers need no Rust toolchain. A
+missing or mismatched wheel is an infrastructure error. See
+[ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md) for the report and
+version contract. Ordinary installs continue to use the three native CLI jobs
+until all three in-memory parity and installation gates are complete.
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "quard-clones"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "In-memory native clone engine for Quard"
+
+[tool.maturin]
+module-name = "quard_clones._native"
+python-source = "python"

@@ -1,0 +1,16 @@
+[package]
+name = "quard-clones"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+cpd-core = "=0.1.20"
+cpd-finder = "=0.1.20"
+cpd-reporter = "=0.1.21"
+cpd-tokenizer = "=0.1.19"
+pyo3 = { version = "=0.27.2", features = ["extension-module"] }
+serde_json = "=1.0.145"

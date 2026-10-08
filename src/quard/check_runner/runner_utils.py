@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from importlib import metadata
+import os
 from pathlib import Path
 import shlex
 import sys
@@ -11,6 +12,7 @@ from typing import Any
 from quard._common import QuardError, capture, read_json, tool_dir, write_json
 from quard._reports import diagnostic
 from quard.check_job.captured_check_job import CapturedCheckJob
+from quard.clone_engine_utils import EXPECTED
 from quard.check_selection_utils import architecture_defaults
 from quard.duplication_utils import read_duplication_min_lines
 
@@ -44,6 +46,17 @@ def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str
             message = (f"{name}: expected {required}, found {actual or 'not installed'}. "
                        "Run the installer or uv sync --locked --group dev.")
             problems.append(diagnostic("system", "TOOL_VERSION_MISMATCH", message,
+                                       is_infrastructure_error=True))
+    if os.environ.get("QUARD_CLONE_ENGINE") == "rust":
+        try:
+            actual = metadata.version("quard-clones")
+        except metadata.PackageNotFoundError:
+            actual = None
+        versions["quard-clones"] = actual
+        if actual != EXPECTED["quard-clones"]:
+            problems.append(diagnostic("system", "TOOL_VERSION_MISMATCH",
+                                       f"quard-clones: expected {EXPECTED['quard-clones']}, "
+                                       f"found {actual or 'not installed'}.",
                                        is_infrastructure_error=True))
     return versions, problems
 
@@ -134,13 +147,20 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                                   ("jscpd-similar", "similar", ["--max-gap-lines", "2"])):
             output_dir = run_dir / "raw" if name == "jscpd" else run_dir / "raw" / name
             output_dir.mkdir(parents=True, exist_ok=True)
+            argv = [binary("jscpd"), "--config", str(config), "--no-gitignore",
+                    "--absolute", "--kind", kind, *flags, "--mode", "strict",
+                    "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
+                    "--reporters", "json", "--output", str(output_dir), "--exit-code",
+                    "1", *clone_files]
+            if name == "jscpd" and os.environ.get("QUARD_CLONE_ENGINE") == "rust":
+                manifest = run_dir / "clone-engine-files.json"
+                write_json(manifest, {"paths": eligible, "min_lines": min_lines}, root)
+                argv = [sys.executable, str(tool_dir() / "_clone_engine_worker.py"),
+                        "--manifest", str(manifest), "--output",
+                        str(output_dir / "jscpd-report.json")]
             jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,
-                         "json_file": output_dir / "jscpd-report.json",
-                         "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore",
-                                  "--absolute", "--kind", kind, *flags, "--mode", "strict",
-                                  "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
-                                  "--reporters", "json", "--output", str(output_dir), "--exit-code",
-                                  "1", *clone_files]})
+                         "engine": name == "jscpd" and os.environ.get("QUARD_CLONE_ENGINE") == "rust",
+                         "json_file": output_dir / "jscpd-report.json", "argv": argv})
     full_scope = sorted(files["production"] + files["tests"])
     for key, name in (("method_decorators", "method-decorators"),
                       ("instance_fields", "instance-fields"),

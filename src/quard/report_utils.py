@@ -612,9 +612,52 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
     return items
 
 
-def parse_jscpd(payload: str, root: Path, expected_paths: list[str]) -> list[dict[str, Any]]:
+def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list[str]) -> None:
+    from quard.clone_engine_utils import EXPECTED
+
+    if raw.get("engine") != EXPECTED or raw.get("sourcePaths") != [str(root / path)
+                                                                 for path in expected_paths]:
+        raise ValueError("Missing or mismatched native engine/source evidence")
+    for clone in raw.get("duplicates", []):
+        if not isinstance(clone, dict) or clone.get("kind") != "exact":
+            raise ValueError("Unexpected exact-engine clone kind")
+        for key in ("firstFile", "secondFile"):
+            side = clone.get(key)
+            if not isinstance(side, dict):
+                raise ValueError("Missing native fragment")
+            path = relative_path(side.get("name"), root)
+            if path not in expected_paths:
+                raise ValueError("Native fragment outside source scope")
+            start = side.get("startLoc")
+            end = side.get("endLoc")
+            lines = (root / path).read_text(encoding="utf-8").splitlines()
+            if not isinstance(start, dict) or not isinstance(end, dict):
+                raise ValueError("Missing native source range")
+            first, last = start.get("line"), end.get("line")
+            if (not _jscpd_integer(first) or not _jscpd_integer(last) or last < first
+                    or last > len(lines) or not _jscpd_integer(start.get("column"), minimum=0)
+                    or not _jscpd_integer(end.get("column"), minimum=0)
+                    or start["column"] > len(lines[first - 1].encode("utf-8"))
+                    or end["column"] > len(lines[last - 1].encode("utf-8"))):
+                raise ValueError("Native fragment does not map to original source")
+        first_side = clone["firstFile"]
+        first_lines = (Path(first_side["name"])).read_text(encoding="utf-8").splitlines()
+        fragment = "\n".join(first_lines[first_side["startLoc"]["line"] - 1:
+                                         first_side["endLoc"]["line"]])
+        if clone.get("fragment") != fragment or clone.get("lines") != (
+                first_side["endLoc"]["line"] - first_side["startLoc"]["line"] + 1):
+            raise ValueError("Native clone fragment text differs from original source")
+
+
+def parse_jscpd(payload: str, root: Path, expected_paths: list[str],
+                expected_engine: bool = False) -> list[dict[str, Any]]:
     # Fail closed on a missing, truncated or incomplete native report.
     allowed = set(expected_paths)
+    if expected_engine:
+        raw = json.loads(payload)
+        if not isinstance(raw, dict):
+            raise ValueError("Missing native engine report")
+        _validate_clone_engine(raw, root, expected_paths)
     items: list[dict[str, Any]] = []
     for entry in _jscpd_duplicates(payload, len(allowed)):
         items.extend(_jscpd_clone(entry, root, allowed))
@@ -622,7 +665,8 @@ def parse_jscpd(payload: str, root: Path, expected_paths: list[str]) -> list[dic
 
 
 def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None,
-              expected_paths: list[str] | None = None) -> dict[str, Any]:
+              expected_paths: list[str] | None = None,
+              expected_engine: bool = False) -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
     items: list[dict[str, Any]] = []
@@ -646,7 +690,7 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
                 error = error or "PYDOCLINT_EXECUTION_ERROR"
         elif tool == "jscpd":
             payload = json_file.read_text(encoding="utf-8") if json_file else ""
-            items = parse_jscpd(payload, root, expected_paths or [])
+            items = parse_jscpd(payload, root, expected_paths or [], expected_engine)
             if result.get("exit_code") != (1 if items else 0):
                 error = error or "JSCPD_EXECUTION_ERROR"
         elif tool == "lcom4":

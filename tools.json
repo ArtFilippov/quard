@@ -12,6 +12,13 @@
     "packaging": "25.0"
   },
   "extras": {"pyright": ["nodejs"]},
+  "native_components": {
+    "quard-clones": "0.1.0",
+    "cpd-core": "0.1.20",
+    "cpd-finder": "0.1.20",
+    "cpd-reporter": "0.1.21",
+    "cpd-tokenizer": "0.1.19"
+  },
   "upstream_release_checked": "2026-09-21",
   "note": "Exact top-level pins; uv.lock resolves and fixes transitive dependencies. No third-party wheels are embedded."
 }

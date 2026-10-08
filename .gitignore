@@ -6,3 +6,4 @@ __pycache__/
 .quard/cache/
 .tach/
 /tach.toml
+/rust/quard-clones/target/
