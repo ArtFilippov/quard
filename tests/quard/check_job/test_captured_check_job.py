@@ -14,6 +14,7 @@ QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 
 from quard.check import make_jobs
+from quard.check_selection_utils import CHECK_DEFAULTS
 from quard.check_job.captured_check_job import CapturedCheckJob
 from quard._common import capture
 
@@ -43,7 +44,8 @@ class TestCapturedCheckJob(unittest.TestCase):
             run_dir = root / ".quard" / "reports" / "first-run"
             run_dir.mkdir(parents=True)
             files = {"production": ["src/sample.py"], "tests": []}
-            job = make_jobs(root, run_dir, files, architecture_ready=False)[0]
+            job = make_jobs(root, run_dir, files, architecture_ready=False,
+                            checks={**CHECK_DEFAULTS, "duplicate_detection": False})[0]
             # Run the real installed Pylint adapter against the temporary project.
             self.assertEqual(job["argv"][1], str(QUARD / "_pylint_worker.py"))
             result = self.run_job(job, root, run_dir)

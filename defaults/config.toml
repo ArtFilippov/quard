@@ -17,6 +17,10 @@ duplicate_detection = true
 tach = true
 dependency_types = true
 
+# Shared minimum for exact, renamed and gap-similar Python clone jobs.
+[duplication]
+min_lines = 3
+
 # Pylint's own metrics, not an AST-independent line count.
 [readability.production]
 max_line_length = 100

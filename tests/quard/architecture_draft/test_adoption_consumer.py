@@ -208,9 +208,9 @@ class TestAdoptionConsumer(unittest.TestCase):
                         file.write_text(before)
             client = root / "src/gateway/client/value_utils.py"
             before = client.read_text()
-            client.write_text(before.replace("demo.records.entry_shape import EntryShape",
-                                                  "demo.records.entry import Entry").replace(
-                                                      "value: EntryShape", "value: Entry"))
+            client.write_text(before.replace("demo.records.entry_shape as shape",
+                                             "demo.records.entry as shape").replace(
+                                                 "value: shape.EntryShape", "value: shape.Entry"))
             self.finding(self.check(root, 1), "CONCRETE_DEPENDENCY_TYPE",
                          "dependency-types", "src/gateway/client/value_utils.py", native=True)
             client.write_text(before)

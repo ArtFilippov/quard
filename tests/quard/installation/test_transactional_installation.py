@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -22,6 +23,7 @@ from installation_fixture_utils import fake_uv, run_command
 from offline_fixtures import create_repo, managed_bytes, native_result
 from quard import install as entry
 from quard import _policy
+from quard.duplication_utils import read_duplication_min_lines
 from quard.check_selection_utils import CHECK_DEFAULTS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from quard._audit import smoke_tests, tool_binary
@@ -181,6 +183,80 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS
                             if key != "instance_fields"))
         self.assertTrue(_policy.read_checks(root)["duplicate_detection"])
+
+    def test_duplication_setting_survives_install_reinstall_and_apply_entry_point(self):
+        root = self.configured_project()
+        setting = root / ".quard/config.toml"
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "min_lines = 3", "min_lines = 6\n# Consumer clone preference"), encoding="utf-8")
+        expected = setting.read_bytes()
+        original_pylint = load_toml(root / "pyproject.toml")["tool"]["pylint"][
+            "similarities"]["min-similarity-lines"]
+        with patch.object(entry, "capture", fake_uv), patch.object(sys, "argv", [
+                str(QUARD / "install.py"), "--project", str(root), "--json"]):
+            self.assertEqual(entry.main(), 0)
+            self.assertEqual(entry.main(), 0)
+        self.assertEqual(json.loads(run_command([sys.executable, str(QUARD / "apply.py"),
+                                                 "--project", str(root), "--json"], root))[
+            "status"], "applied")
+        self.assertEqual((setting.read_bytes(), read_duplication_min_lines(root)),
+                         (expected, 6))
+        native = load_toml(root / "pyproject.toml")
+        self.assertEqual(native["tool"]["pylint"]["similarities"]["min-similarity-lines"],
+                         original_pylint)
+        self.assertEqual(native["tool"]["unrelated"]["value"], "retain")
+
+    def test_legacy_duplication_settings_default_without_migration(self):
+        root = self.configured_project()
+        setting = root / ".quard/config.toml"
+        for old in (setting.read_text(encoding="utf-8").replace(
+                "[duplication]\nmin_lines = 3\n", ""),
+                setting.read_text(encoding="utf-8").replace("min_lines = 3\n", "")):
+            with self.subTest(old=old):
+                setting.write_text(old, encoding="utf-8")
+                self.assertEqual(read_duplication_min_lines(root), 3)
+                with patch.object(entry, "capture", fake_uv), patch.object(sys, "argv", [
+                        str(QUARD / "install.py"), "--project", str(root), "--json"]):
+                    self.assertEqual(entry.main(), 0)
+                self.assertEqual(read_duplication_min_lines(root), 3)
+
+    def test_invalid_duplication_settings_are_configuration_errors_at_public_commands(self):
+        root = self.configured_project()
+        setting = root / ".quard/config.toml"
+        original = setting.read_text(encoding="utf-8")
+        for replacement, rule in (("min_lines = true", "INVALID_DUPLICATION"),
+                                  ("min_lines = 0", "INVALID_DUPLICATION"),
+                                  ("min_lines = -1", "INVALID_DUPLICATION"),
+                                  ("min_lines = 2.5", "INVALID_DUPLICATION"),
+                                  ('min_lines = "3"', "INVALID_DUPLICATION"),
+                                  ("other = 3", "INVALID_DUPLICATION"),
+                                  ("[duplication", "INVALID_CONFIG")):
+            with self.subTest(value=replacement):
+                setting.write_text(original.replace("[duplication]\nmin_lines = 3",
+                                                    "[duplication]\n" + replacement),
+                                   encoding="utf-8")
+                for command in ("apply.py", "check.py"):
+                    output = run_command([sys.executable, str(QUARD / command),
+                                          "--project", str(root), "--json"], root, expected=2)
+                    response = json.loads(output)
+                    self.assertEqual(response["exit_code"], 2)
+                    if command == "apply.py":
+                        self.assertEqual(response["code"], rule)
+                    else:
+                        self.assertIn(rule, {d["rule"] for d in response["diagnostics"]})
+                        self.assertTrue(all(d["is_infrastructure_error"]
+                                            for d in response["diagnostics"] if d["rule"] == rule))
+                with patch.object(entry, "capture", wraps=fake_uv) as captured, patch.object(
+                        sys, "argv", [str(QUARD / "install.py"), "--project", str(root),
+                                      "--json"]), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertEqual(entry.main(), 2)
+                    self.assertEqual(json.loads(stdout.getvalue())["code"], rule)
+                captured.assert_not_called()
+        setting.write_text("duplication = 3\n" + original.replace(
+            "[duplication]\nmin_lines = 3\n", ""), encoding="utf-8")
+        output = json.loads(run_command([sys.executable, str(QUARD / "apply.py"),
+                                         "--project", str(root), "--json"], root, expected=2))
+        self.assertEqual(output["code"], "INVALID_DUPLICATION")
 
     def test_architecture_switch_upgrade_defaults_follow_selected_mode(self):
         for generated_policy in (False, True):

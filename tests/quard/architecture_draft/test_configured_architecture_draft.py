@@ -1297,6 +1297,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                              "from demo.arbitrary.envelopes.adapter import Adapter\n"
                              "from demo.arbitrary.sender import Sender\n"
                              "class Relay(Service):\n"
+                             "    \"\"\"Delegate to either adapter or sender.\"\"\"\n"
                              "    @override\n"
                              "    def first(self, value: str) -> str:\n"
                              "        if value:\n"

@@ -217,9 +217,18 @@ same discovered `src/` and `tests/` `.py` files, including cross-profile matches
 identifiers and string/numeric literals. The `similar` job merges detected fragments
 separated by at most **two unmatched lines in each file** (`--max-gap-lines 2`);
 it records native similarity and the `gap` method. Merging cannot detect copies
-whose individual matching parts fall below the native minimum of five lines and
+whose individual matching parts fall below the configured minimum and
 one token in strict mode. The JavaScript/TypeScript-only AST `--similarity` pass
 does not scan Python. The jobs run on the full scope even with `--lcom_files ""`.
+Set `[duplication] min_lines = 3` in `.quard/config.toml` to choose one positive
+integer minimum for all three Python clone jobs. Fresh installs use 3; existing
+configs without the section or key also use 3 without migration. An explicit
+value is retained by install, reinstall and apply. This setting is independent of
+Pylint's required `[readability.production] min_similarity_lines` limit and
+`[checks] duplicate_detection`, which selects the three jscpd jobs together.
+The current native CLI scans unprepared `.py` files; the threshold and its
+expected-source accounting use physical source lines. The later prepared-view
+integration will apply the same setting to eligible lines in that view.
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.

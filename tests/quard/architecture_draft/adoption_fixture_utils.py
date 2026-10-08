@@ -92,13 +92,13 @@ def adoption_consumer(root: Path) -> None:
         "def connect() -> str:\n    return Adapter().first(Sender().second('ok'))\n")
     (root / "src/gateway/client/value_utils.py").write_text(
         "from demo import PublicPort\n" +
-        "from demo.records.entry_shape import EntryShape\n\n" +
-        "def read_value(value: EntryShape, port: PublicPort) -> str:\n" +
+        "import demo.records.entry_shape as shape\n\n" +
+        "def read_value(value: shape.EntryShape, port: PublicPort) -> str:\n" +
         "    return port.first(value.identity.code)\n")
     (root / "src/gateway/client/value_utils.pyi").write_text(
         "from demo import PublicPort\n" +
-        "from demo.records.entry_shape import EntryShape\n\n" +
-        "def read_value(value: EntryShape, port: PublicPort) -> str: ...\n")
+        "import demo.records.entry_shape as shape\n\n" +
+        "def read_value(value: shape.EntryShape, port: PublicPort) -> str: ...\n")
     (root / "src/gateway/client/main.py").write_text("")
     tests = root / "tests/demo/records"
     tests.mkdir(parents=True)

@@ -409,6 +409,81 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertEqual(next(item for item in clean["tools"] if item["name"] == "jscpd-similar")[
             "status"], "passed")
 
+    def test_real_clone_jobs_share_three_line_default_and_explicit_minimum(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        (self.root / "src/demo/long.py").write_text(
+            "unique = object()\n" + "\n".join(f"# unrelated {index}" for index in range(11)) + "\n",
+            encoding="utf-8")
+        setting = self.root / ".quard/config.toml"
+        default = setting.read_text(encoding="utf-8")
+        fake, _ = fake_tools()
+
+        def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if Path(argv[0]).name == "jscpd":
+                return capture(argv, cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        cases = (
+            ("exact", "alpha = 17\nbeta = alpha * 3\ngamma = beta - 4\ndelta = gamma / 2\n",
+             "alpha = 17\nbeta = alpha * 3\ngamma = beta - 4\ndelta = gamma / 2\n", "jscpd", 5),
+            ("renamed", "def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n"
+             "    gamma = beta - 4\n    delta = gamma / 2\n    return delta + 10\n",
+             "def compute(amount):\n    start = amount + 71\n    middle = start * 8\n"
+             "    later = middle - 6\n    answer = later / 9\n    return answer + 22\n",
+             "jscpd-renamed", 7),
+            ("similar", "alpha = 17\nbeta = alpha * 3\ngamma = beta - 4\n"
+             "delta = gamma / 2\ndifferent = 1\nleft = 5\nright = left * 2\n"
+             "total = right - 7\nanswer = total / 3\n",
+             "alpha = 17\nbeta = alpha * 3\ngamma = beta - 4\n"
+             "delta = gamma / 2\ndifferent = 2\nleft = 5\nright = left * 2\n"
+             "total = right - 7\nanswer = total / 3\n",
+             "jscpd-similar", 10),
+        )
+        for label, source, counterpart, job_name, alternative in cases:
+            with self.subTest(kind=label):
+                first.write_text(source, encoding="utf-8")
+                second.write_text(counterpart, encoding="utf-8")
+                settings = [(default, "violations"),
+                            (default.replace("min_lines = 3", f"min_lines = {alternative}"),
+                             "passed")]
+                if label == "exact":
+                    settings.extend(((default.replace("[duplication]\nmin_lines = 3\n", ""),
+                                      "violations"),
+                                     (default.replace("min_lines = 3\n", ""), "violations")))
+                for configured, expected_status in settings:
+                    setting.write_text(configured, encoding="utf-8")
+                    report = self.run_report(dispatch, "")
+                    jobs = {job["name"]: job for job in report["tools"]}
+                    minimum = alternative if f"min_lines = {alternative}" in configured else 3
+                    for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+                        self.assertEqual(jobs[name]["argv"][jobs[name]["argv"].index(
+                            "--min-lines") + 1], str(minimum))
+                        native = read_json(self.root / jobs[name]["raw_output"]["native_json"])
+                        self.assertEqual(native["statistics"]["total"]["sources"],
+                                         sum(len((self.root / path).read_text(
+                                             encoding="utf-8").splitlines()) >= minimum
+                                             for path in report["coverage"]["production"]
+                                             + report["coverage"]["tests"]
+                                             if path.endswith(".py")))
+                    self.assertEqual(jobs[job_name]["status"], expected_status,
+                                     report["diagnostics"])
+                    self.assertEqual(jobs[job_name]["exit_code"],
+                                     1 if expected_status == "violations" else 0)
+                    if expected_status == "violations":
+                        self.assertEqual({item["path"] for item in report["diagnostics"]
+                                          if item["rule"] == f"{label.upper()}_CLONE"},
+                                         {"src/demo/first.py", "tests/second.py"})
+        setting.write_text(default, encoding="utf-8")
+        for path in (first, second):
+            path.write_text("alpha = 17\nbeta = alpha * 3\n", encoding="utf-8")
+        below_minimum = self.run_report(dispatch, "")
+        for job in below_minimum["tools"]:
+            if job["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}:
+                self.assertEqual((job["status"], job["exit_code"]), ("passed", 0))
+                native = read_json(self.root / job["raw_output"]["native_json"])
+                self.assertEqual(native["statistics"]["total"]["sources"], 3)
+
     def test_real_jscpd_renamed_identifiers_and_literals_full_scope(self) -> None:
         (self.root / "src/demo/domain/api.py").write_text(
             "from typing import Protocol\n\nclass API(Protocol):\n"
@@ -486,6 +561,12 @@ class TestNativeCheckRunner(unittest.TestCase):
                             and "similarity" in item["message"] for item in similar))
         validate(report, read_json(QUARD / "report.schema.json"))
         second.unlink()
+        remaining = self.run_report(dispatch, "")
+        self.assertEqual((remaining["exit_code"], {d["rule"] for d in remaining["diagnostics"]}),
+                         (1, {"RENAMED_CLONE"}))
+        self.assertEqual({d["path"] for d in remaining["diagnostics"]},
+                         {"src/demo/first.py"})
+        first.write_text(top, encoding="utf-8")
         clean = self.run_report(dispatch, "")
         self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
 

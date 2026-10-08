@@ -106,7 +106,8 @@ def fake_tools(failures: dict[str, dict[str, Any]] | None = None
                 name = {"renamed": "jscpd-renamed", "similar": "jscpd-similar"}.get(
                     kind, "jscpd")
                 output = Path(argv[argv.index("--output") + 1]) / "jscpd-report.json"
-                sources = sum(len((cwd / path).read_text(encoding="utf-8").splitlines()) >= 5
+                min_lines = int(argv[argv.index("--min-lines") + 1])
+                sources = sum(len((cwd / path).read_text(encoding="utf-8").splitlines()) >= min_lines
                               for path in argv[argv.index("--exit-code") + 2:])
                 output.write_text(json.dumps({"duplicates": [], "statistics": {
                     "total": {"sources": sources, "clones": 0}}}), encoding="utf-8")

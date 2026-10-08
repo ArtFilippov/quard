@@ -13,7 +13,8 @@ import tomlkit
 
 from quard._common import QuardError, atomic_write, load_toml, read_json, safe_target
 from quard.check_selection_utils import (DEPENDENCY_TYPES, architecture_defaults,
-                                        validate_architecture_checks, validate_checks)
+                                         validate_architecture_checks, validate_checks)
+from quard.duplication_utils import validate_duplication
 from quard.architecture_draft.generated_selection_utils import generated
 from quard.pylint_config_utils import (LEGACY_PLUGIN, official_plugins,
                                       clean_config as render_clean_config,
@@ -95,9 +96,12 @@ def read_settings(root: Path) -> dict[str, Any]:
                         "Missing .quard/config.toml; run bash quard/install.sh --project . "
                         + "to migrate existing settings before checking or applying.")
     data = load_toml(path)
-    if set(data) != {"checks", "readability", "scope"}:
+    if not {"checks", "readability", "scope"} <= set(data) or set(data) - {
+            "checks", "readability", "scope", "duplication"}:
         raise QuardError("INVALID_CONFIG",
-                        "config.toml expects [checks], [readability] and [scope].")
+                        "config.toml expects [checks], [readability], [scope] and "
+                        + "optional [duplication].")
+    _ = validate_duplication(data.get("duplication", {}))
     return data
 
 

@@ -12,6 +12,7 @@ from quard._common import QuardError, capture, read_json, tool_dir, write_json
 from quard._reports import diagnostic
 from quard.check_job.captured_check_job import CapturedCheckJob
 from quard.check_selection_utils import architecture_defaults
+from quard.duplication_utils import read_duplication_min_lines
 
 
 def inactive_job(name: str, status: str, error: str | None = None) -> dict[str, Any]:
@@ -117,10 +118,11 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     if lcom_files is None or source_files:
         add_worker("lcom4", "lcom4", source_files)
     if enabled["duplicate_detection"]:
+        min_lines = read_duplication_min_lines(root)
         clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
-                             if path.endswith(".py"))
+                              if path.endswith(".py"))
         eligible = [path for path in clone_files if len((root / path).read_text(
-            encoding="utf-8").splitlines()) >= 5]
+            encoding="utf-8").splitlines()) >= min_lines]
         # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
         config = run_dir / "jscpd-config.json"
         write_json(config, {}, root)
@@ -136,7 +138,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                          "json_file": output_dir / "jscpd-report.json",
                          "argv": [binary("jscpd"), "--config", str(config), "--no-gitignore",
                                   "--absolute", "--kind", kind, *flags, "--mode", "strict",
-                                  "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
+                                  "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
                                   "--reporters", "json", "--output", str(output_dir), "--exit-code",
                                   "1", *clone_files]})
     full_scope = sorted(files["production"] + files["tests"])

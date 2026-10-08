@@ -27,13 +27,19 @@ violations baseline.
   fragment. Keeping the exact pass separate preserves Type 1 findings that
   native normalization can miss on a combined scan. Type 2 normalizes identifiers
   and string/numeric literals.
+  `[duplication] min_lines` in `.quard/config.toml` sets a shared positive integer
+  minimum (default 3, also for older configs without the section or key). It is
+  passed to every job and used in each job's expected-source count. The current
+  CLI scans physical `.py` lines; prepared-view eligible-line counting will use
+  this same setting in the later in-memory integration. This minimum is distinct
+  from Pylint's mandatory `min_similarity_lines` readability limit.
   All jobs scan the same discovered `.py` files across production
   and tests, not `.pyi` stubs (unsupported by its Python format), irrespective
   of LCOM4 selection.
   The similar job uses `--max-gap-lines 2` to merge detected fragments with at
   most two unmatched lines in each file; native JSON, diagnostics and raw streams
   retain the `similar` kind, score, `gap` method and both positions. Fragments
-  individually shorter than the minimum of five lines and one token cannot be
+  individually shorter than the configured minimum and one token cannot be
   discovered by gap merging. The AST `--similarity` pass covers JavaScript and
   TypeScript functions, not Python. Empty or incomplete native scans, invalid
   similarity/report data and execution failures are infrastructure errors;
