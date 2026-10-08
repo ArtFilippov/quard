@@ -670,7 +670,8 @@ and ancestor re-exports use source and companion-stub evidence; unresolved,
 conflicting or concrete exports (including factory values and `__all__` entries)
 receive positioned generated folder findings even without an importer. Tach exposes
 only proven contract names and does not authorize concrete facade imports for
-assembly; assembly imports implementations from their defining modules.
+assembly; assembly imports implementations and proven top-level functions from their
+defining modules. Proven non-facade contract assignments retain their role.
 Generated exact file-level dependencies permit Contract and Infrastructure modules to
 import only Contract modules (or external packages), including within the same group.
 Whole-module imports qualify only for proven Contract modules; an Infrastructure module
@@ -691,7 +692,9 @@ combined local contract. Multiple contracts in one directory and multiple
 same-group contract bases are permitted. Reviewed and generated version-1
 projects retain their original name-based folder checks.
 In generated version 2, a proven explicitly inherited external base is an exact
-contract export (including generic specializations and builtin `Exception`).
+contract export (including generic specializations and builtin `Exception`). An
+inherited `UserList[str]` cannot expose bare `UserList` or `UserList[int]` through
+an import or alias.
 Its package and local concrete subclasses do not gain contract roles. Source/stub
 disagreement and shadowed or unproved bases cannot establish that export and
 receive positioned `UNRESOLVED_EXTERNAL_CONTRACT` findings. Contract signatures

@@ -15,7 +15,7 @@ from quard.architecture_draft.group_area_utils import (
 )
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
-from quard.folder_analysis.generated_facades_utils import facade_evidence
+from quard.folder_analysis.generated_facades_utils import alias_exports, facade_evidence
 from quard.folder_analysis.generated_reference_utils import contract_only
 
 CONTRACT_EXPORT = "contract"
@@ -66,19 +66,23 @@ def _exports(trees: dict[str, ast.Module], ownership: GeneratedOwnership
              ) -> dict[str, dict[str, set[str]]]:
     exports: dict[str, dict[str, set[str]]] = {}
     facades, _ = facade_evidence(trees, ownership)
+    selected = _sources(trees)
     for qualified, node, path in ownership.all_declarations():
         module = module_name(path)
-        if Path(path).stem == PACKAGE_FILE:
+        if Path(path).stem == PACKAGE_FILE or selected[module][0] != path:
             continue
         kind = CONTRACT_EXPORT if ownership.is_contract(qualified) else CONCRETE_EXPORT
         if kind == CONTRACT_EXPORT or qualified.rpartition(".")[0] == module:
             exports.setdefault(module, {}).setdefault(kind, set()).add(node.name)
-    for path, tree in trees.items():
+    for module, (path, tree) in selected.items():
         if Path(path).stem == PACKAGE_FILE:
             continue
-        if aliases := _aliases(path, tree, ownership):
-            exports.setdefault(module_name(path), {}).setdefault(CONTRACT_EXPORT, set()).update(
-                aliases)
+        if aliases := _aliases(path, tree, ownership) | alias_exports(path, tree, ownership):
+            exports.setdefault(module, {}).setdefault(CONTRACT_EXPORT, set()).update(aliases)
+        functions = {node.name for node in tree.body if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        if functions:
+            exports.setdefault(module, {}).setdefault(CONCRETE_EXPORT, set()).update(functions)
     for module, names in facades.items():
         exports.setdefault(module, {}).setdefault(CONTRACT_EXPORT, set()).update(names)
     return exports
@@ -152,11 +156,11 @@ def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: GeneratedOwner
            ) -> dict[str, str]:
     contracts = {name for name, _, _ in ownership.all_declarations()
                  if ownership.is_contract(name)}
-    invalid = {item["path"] for item in facade_evidence(trees, ownership)[1]}
-    invalid.update(str(item["path"]) for item in ownership.alias_violations)
-    invalid.update(path for name, _, path in ownership.all_declarations()
+    invalid = {module_name(str(item["path"])) for item in facade_evidence(trees, ownership)[1]}
+    invalid.update(module_name(str(item["path"])) for item in ownership.alias_violations)
+    invalid.update(module_name(path) for name, _, path in ownership.all_declarations()
                    if name in ownership.role_conflicts)
-    return {name: ("Infrastructure" if path in invalid else
+    return {name: ("Infrastructure" if name in invalid else
                    "Contract" if Path(path).stem == PACKAGE_FILE else
                    _role(path, tree, ownership, contracts))
             if area(path)[1] == ORDINARY else _role(path, tree, ownership, contracts)

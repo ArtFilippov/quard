@@ -64,8 +64,9 @@ cannot be exported, even when unused or listed in `__all__`. Import implementati
 from their defining modules in assembly; split out concrete facade exports during
 migration. Contract modules import only contracts; ordinary infrastructure modules
 import only contracts or external packages, even within their own folder. Source imports
-of whole contract modules are eligible, while assembly imports concrete symbols from
-their defining modules. Other modules' utilities stay private. Ordinary modules named `main.py`
+of whole contract modules are eligible, while assembly imports concrete symbols,
+including top-level functions, from their defining modules. Other modules' utilities
+stay private to ordinary consumers. Ordinary modules named `main.py`
 do not gain assembly privileges. A Python
 file or stub directly under `src/` receives a positioned layout violation; other
 file types do not. Empty package facades and extra import packages are supported.
@@ -85,6 +86,8 @@ modules, conflicting source/stub class roles and unresolved local bases receive
 positioned violations. Reviewed configurations keep their existing folder rules.
 Exact external types explicitly inherited by a local class, including generic
 bases and `Exception`, may be re-exported as contracts elsewhere in the project.
+Generic exports must retain the same specialization: inheriting `UserList[str]`
+does not expose bare `UserList` or `UserList[int]` through an alias.
 Other symbols from the same package and local concrete subclasses are not contracts;
 unproved or conflicting external bases receive positioned findings. External
 dependency validation still runs separately through native Tach.

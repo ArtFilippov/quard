@@ -27,7 +27,7 @@ def _bindings(path: str, tree: ast.Module) -> tuple[dict[str, tuple[str | None, 
     for node in tree.body:
         entries: list[tuple[str, str | None]] = []
         if isinstance(node, ast.ImportFrom):
-            package = module.split(".")
+            package = (module if _facade(path) else module.rpartition(".")[0]).split(".")
             prefix = package[:len(package) - node.level + 1] if node.level else []
             origin = ".".join([*prefix, node.module] if node.module else prefix)
             entries = [(alias.asname or alias.name, f"{origin}.{alias.name}")
@@ -46,8 +46,10 @@ def _bindings(path: str, tree: ast.Module) -> tuple[dict[str, tuple[str | None, 
                 value = dotted(node.value) if node.value is not None else None
                 first, _, rest = value.partition(".") if value else ("", "", "")
                 origin = bindings.get(first, (None, node))[0]
+                specialization = (f"[{ast.unparse(node.value.slice)}]"
+                                  if isinstance(node.value, ast.Subscript) else "")
                 entries.append((target.id, origin + ("." + rest if rest else "")
-                                if origin else None))
+                                + specialization if origin else None))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             entries = [(node.name, None)]
         for symbol, target in entries:
@@ -101,6 +103,32 @@ def alias_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
     for path in sorted(paths):
         entries, conflicts = bindings[path]
         companion = str(Path(path).with_suffix(".py" if path.endswith(".pyi") else ".pyi"))
+        # A defining implementation module may list its own concrete class in
+        # __all__; only class-free alias modules need contract-only export proof.
+        alias_module = not any(source == path for _, _, source in ownership.all_declarations())
+        for node in trees[path].body if alias_module else ():
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or not any(
+                    isinstance(target, ast.Name) and target.id == EXPORTS for target in (
+                        node.targets if isinstance(node, ast.Assign) else [node.target])):
+                continue
+            listed = node.value
+            if not isinstance(listed, (ast.List, ast.Tuple)) or any(
+                    not isinstance(item, ast.Constant) or not isinstance(item.value, str)
+                    for item in listed.elts):
+                names = {EXPORTS}
+            else:
+                names = {item.value for item in listed.elts if isinstance(item, ast.Constant)}
+            for name in names:
+                target = entries.get(name, (None, node))[0]
+                proven = ownership.provenance(target) if target else None
+                if name == EXPORTS or proven is None or not (
+                        ownership.is_contract(proven) or proven in ownership.external_contracts):
+                    blocked.add(f"{module_name(path)}.{name}")
+                    results.append({"path": path, "line": node.lineno,
+                                    "column": node.col_offset + 1, "symbol": name,
+                                    "rule": "UNRESOLVED_CONTRACT_ALIAS",
+                                    "message": f"{module_name(path)}.{name}: __all__ requires "
+                                               + "a proven contract alias."})
         for symbol, node in conflicts:
             earlier = _bindings(path, ast.Module(body=trees[path].body[:trees[path].body.index(node)],
                                                   type_ignores=[]))[0].get(symbol)
@@ -113,10 +141,22 @@ def alias_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
                                        + "contract provenance is unproved."})
         if companion not in bindings:
             continue
+        if (alias_module and _all_values(trees[path]) is not None
+                and _all_values(trees[companion]) is not None
+                and _all_values(trees[path]) != _all_values(trees[companion])):
+            blocked.update(f"{module_name(path)}.{name}" for name in entries)
+            results.append({"path": path, "line": trees[path].body[0].lineno,
+                            "column": trees[path].body[0].col_offset + 1,
+                            "symbol": EXPORTS, "rule": "CONFLICTING_CONTRACT_ALIAS",
+                            "message": f"{module_name(path)}: source and stub __all__ differs."})
         for symbol, (target, node) in entries.items():
             peer = bindings[companion][0].get(symbol)
             if peer is None:
-                if not relevant(target) or symbol not in _explicit_exports(trees[path]):
+                assigned = any(isinstance(item, (ast.Assign, ast.AnnAssign)) and any(
+                    isinstance(named, ast.Name) and named.id == symbol for named in (
+                        item.targets if isinstance(item, ast.Assign) else [item.target]))
+                               for item in trees[path].body)
+                if not relevant(target) or not (assigned or symbol in _explicit_exports(trees[path])):
                     continue
             elif (not path.endswith(".pyi") or target == peer[0] or not (
                     relevant(target) or relevant(peer[0]))):
@@ -127,6 +167,16 @@ def alias_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
                             "message": f"{module_name(path)}.{symbol}: source and stub "
                                        + "alias provenance differs."})
     return blocked, results
+
+
+def alias_exports(path: str, tree: ast.Module, ownership: GeneratedOwnership) -> set[str]:
+    """Expose only proven non-facade bindings, including assignment aliases."""
+    bindings, conflicts = _bindings(path, tree)
+    disputed = {name for name, _ in conflicts}
+    module = module_name(path)
+    return {name for name, (target, _) in bindings.items()
+            if name not in disputed and f"{module}.{name}" not in ownership.blocked_aliases
+            and target is not None and ownership.export_contract(target)}
 
 
 def facade_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership

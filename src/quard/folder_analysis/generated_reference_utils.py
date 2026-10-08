@@ -7,6 +7,7 @@ from pathlib import Path
 from quard.architecture_draft.group_area_utils import ORDINARY, area
 from quard.contract_analysis.contract_utils import dotted, module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
+from quard.folder_analysis.generated_facades_utils import alias_exports
 
 EXPORTS = "__all__"
 DECLARATION = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Assign, ast.AnnAssign, ast.AugAssign)
@@ -44,19 +45,28 @@ def contract_only(path: str, tree: ast.Module, ownership: FolderAnalysis,
                              for alias in statement.names)
         return not concrete_alias and not other_declarations(path, tree, ownership)
     imports = [alias.asname or alias.name for node in tree.body
-               if isinstance(node, ast.ImportFrom) for alias in node.names]
+                if isinstance(node, ast.ImportFrom) for alias in node.names]
+    aliases = alias_exports(path, tree, ownership)
     other = [node for node in tree.body if not isinstance(node, ast.ImportFrom)
-             and not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-                      and isinstance(node.value.value, str))
-             and not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                      and isinstance(node.targets[0], ast.Name)
-                      and node.targets[0].id == EXPORTS)]
+              and not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                       and isinstance(node.value.value, str))
+              and not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                       and isinstance(node.targets[0], ast.Name)
+                       and (node.targets[0].id == EXPORTS or
+                            node.targets[0].id in aliases))]
     if other:
         return False
-    if not imports:
+    if not imports and not aliases:
         return Path(path).stem == "__init__"
     name = module_name(path)
-    return all(ownership.export_contract(f"{name}.{alias}") for alias in imports)
+    specialized = {node.value.value.id for node in tree.body
+                   if isinstance(node, ast.Assign) and len(node.targets) == 1
+                   and isinstance(node.targets[0], ast.Name)
+                   and node.targets[0].id in aliases
+                   and isinstance(node.value, ast.Subscript)
+                   and isinstance(node.value.value, ast.Name)}
+    return all(ownership.export_contract(f"{name}.{alias}") or alias in specialized
+               for alias in imports)
 
 
 def _imported(path: str, statement: ast.Import | ast.ImportFrom) -> list[tuple[str, str]]:

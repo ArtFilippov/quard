@@ -88,8 +88,28 @@ class GeneratedOwnership(FolderOwnership):
                 if any(node.bases for node, _ in declarations):
                     self.conflicts.update((name, path) for _, path in declarations)
                 continue
-            self.external_contracts.update(identity.partition("[")[0] for identity in
-                                           (next(iter(evidence)) or ()))
+            self.external_contracts.update(next(iter(evidence)) or ())
+
+        # The general class resolver unwraps subscription for inheritance. Export
+        # provenance must retain it: importing UserList cannot prove UserList[str].
+        for path, tree in trees.items():
+            module = module_name(path)
+            for statement in tree.body:
+                if not (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                        and isinstance(statement.targets[0], ast.Name)
+                        and isinstance(statement.value, ast.Subscript)):
+                    continue
+                target = self.resolved(module, statement.value.value, path)
+                if target is None or self.node_for(target) is not None:
+                    continue
+                identity = f"{target}[{ast.unparse(statement.value.slice)}]"
+                symbol = statement.targets[0].id
+                self.bindings_by_path[path][symbol] = identity
+                if self.paths.get(f"{module}.{symbol}") is None and (
+                        path.endswith(".py") or not any(
+                            other != path and other.endswith(".py") and module_name(other) == module
+                            for other in trees)):
+                    self.imports[module][symbol] = identity
 
         self.blocked_aliases, self.alias_violations = alias_evidence(trees, self)
 

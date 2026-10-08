@@ -779,12 +779,13 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 "class ExternalPort(Protocol):\n"
                 "    def adapt(self, value: UserDict[str, str]) -> str: ...\n")
             facade = root / "src/other/group/deep/external_api.py"
-            facade.write_text("from collections import UserList as PublicItems\n"
+            facade.write_text("from collections import UserList\n"
                               "from builtins import Exception as PublicError\n"
+                              "PublicItems = UserList[str]\n"
                               "__all__ = ['PublicItems', 'PublicError']\n")
             use = root / "src/other/group/deep/external_utils.py"
             use.write_text("from other.group.deep.external_api import PublicItems\n\n"
-                           "def read(items: PublicItems[str]) -> str:\n"
+                            "def read(items: PublicItems) -> str:\n"
                            "    return items[0]\n")
 
             def check() -> dict[str, Any]:
