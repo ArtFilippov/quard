@@ -14,7 +14,7 @@ from quard.architecture_draft.group_area_utils import (
     ENVELOPES_FOLDER, MAIN_FOLDER, ORDINARY, area,
 )
 from quard.contract_analysis.contract_utils import module_name
-from quard.folder_analysis.folder_ownership import FolderOwnership
+from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 
 EXPORTS = "__all__"
 CONTRACT_EXPORT = "contract"
@@ -37,7 +37,7 @@ def _sources(trees: dict[str, ast.Module]) -> dict[str, tuple[str, ast.Module]]:
     return sources
 
 
-def _contract_only(path: str, tree: ast.Module, ownership: FolderOwnership,
+def _contract_only(path: str, tree: ast.Module, ownership: GeneratedOwnership,
                    contracts: set[str]) -> bool:
     if any(source == path for _, _, source in ownership.all_declarations()):
         if not all(ownership.declaration(item, source=(node, path)) for item, node, source
@@ -65,10 +65,10 @@ def _contract_only(path: str, tree: ast.Module, ownership: FolderOwnership,
     if not imports:
         return Path(path).stem == PACKAGE_FILE
     name = module_name(path)
-    return all(ownership.provenance(f"{name}.{alias}") in contracts for alias in imports)
+    return all(ownership.export_contract(f"{name}.{alias}") for alias in imports)
 
 
-def _role(path: str, tree: ast.Module, ownership: FolderOwnership,
+def _role(path: str, tree: ast.Module, ownership: GeneratedOwnership,
           contracts: set[str]) -> str:
     kind = area(path)[1]
     role = "Infrastructure"
@@ -81,15 +81,15 @@ def _role(path: str, tree: ast.Module, ownership: FolderOwnership,
     return role
 
 
-def _aliases(path: str, tree: ast.Module, ownership: FolderOwnership) -> set[str]:
+def _aliases(path: str, tree: ast.Module, ownership: GeneratedOwnership) -> set[str]:
     module = module_name(path)
     return {alias.asname or alias.name for node in tree.body
             if isinstance(node, ast.ImportFrom) for alias in node.names
-            if ownership.is_contract(ownership.provenance(
-                f"{module}.{alias.asname or alias.name}"))}
+            if ownership.export_contract(
+                f"{module}.{alias.asname or alias.name}")}
 
 
-def _exports(trees: dict[str, ast.Module], ownership: FolderOwnership
+def _exports(trees: dict[str, ast.Module], ownership: GeneratedOwnership
              ) -> dict[str, dict[str, set[str]]]:
     exports: dict[str, dict[str, set[str]]] = {}
     for qualified, node, path in ownership.all_declarations():
@@ -104,11 +104,11 @@ def _exports(trees: dict[str, ast.Module], ownership: FolderOwnership
     return exports
 
 
-def _eligible(name: str, reference: tuple[str, str], ownership: FolderOwnership,
-              areas: dict[str, tuple[str, str]], *, exports: dict[str, dict[str, set[str]]]
-              ) -> bool:
-    target_module, resolved = reference
-    symbol = resolved.rpartition(".")[2]
+def _eligible(name: str, reference: tuple[str, str, str], ownership: GeneratedOwnership,
+               areas: dict[str, tuple[str, str]], *, exports: dict[str, dict[str, set[str]]]
+               ) -> bool:
+    target_module, target, resolved = reference
+    symbol = target.removeprefix(target_module + ".").partition(".")[0]
     target_exports = exports.get(target_module, {})
     if ownership.is_contract(resolved) or symbol in target_exports.get(CONTRACT_EXPORT, set()):
         return True
@@ -118,7 +118,7 @@ def _eligible(name: str, reference: tuple[str, str], ownership: FolderOwnership,
 
 
 def _dependencies(name: str, sources: dict[str, tuple[str, ast.Module]],
-                  ownership: FolderOwnership, areas: dict[str, tuple[str, str]],
+                  ownership: GeneratedOwnership, areas: dict[str, tuple[str, str]],
                   *, exports: dict[str, dict[str, set[str]]]) -> list[str]:
     allowed: set[str] = set()
     if sources[name][0].endswith(".py"):
@@ -127,7 +127,8 @@ def _dependencies(name: str, sources: dict[str, tuple[str, ast.Module]],
             target_module = destination(target, sources) or destination(resolved, sources)
             if target_module is None or target_module == name:
                 continue
-            if _eligible(name, (target_module, resolved), ownership, areas, exports=exports):
+            if _eligible(name, (target_module, target, resolved), ownership, areas,
+                         exports=exports):
                 allowed.add(target_module)
     return sorted(allowed)
 
@@ -150,7 +151,7 @@ def _interfaces(name: str, areas: dict[str, tuple[str, str]],
     return interfaces
 
 
-def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: FolderOwnership
+def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: GeneratedOwnership
            ) -> dict[str, str]:
     contracts = {name for name, _, _ in ownership.all_declarations()
                  if ownership.is_contract(name)}
@@ -158,7 +159,7 @@ def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: FolderOwnershi
             for name, (path, tree) in sources.items()}
 
 
-def _boundaries(trees: dict[str, ast.Module], ownership: FolderOwnership,
+def _boundaries(trees: dict[str, ast.Module], ownership: GeneratedOwnership,
                 sources: dict[str, tuple[str, ast.Module]]
                 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     areas = {name: area(path) for name, (path, _) in sources.items()}
@@ -190,7 +191,7 @@ def folder_boundaries(root: Path) -> dict[str, Any]:
     scope = read_scope(root)
     files = discover_files(root, scope)["production"]
     trees = parse_trees(root, files, "GENERATED_ARCHITECTURE_SOURCE_ERROR")
-    modules, interfaces = _boundaries(trees, FolderOwnership(trees), _sources(trees))
+    modules, interfaces = _boundaries(trees, GeneratedOwnership(trees), _sources(trees))
     config: dict[str, Any] = {"source_roots": ["src"], "exact": True,
                               "forbid_circular_dependencies": True,
                               "ignore_type_checking_imports": False,

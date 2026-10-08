@@ -657,6 +657,12 @@ local ancestry, and cross-group implementations missing a directly inherited
 combined local contract. Multiple contracts in one directory and multiple
 same-group contract bases are permitted. Reviewed and generated version-1
 projects retain their original name-based folder checks.
+In generated version 2, a proven explicitly inherited external base is an exact
+contract export (including generic specializations and builtin `Exception`).
+Its package and local concrete subclasses do not gain contract roles. Source/stub
+disagreement and shadowed or unproved bases cannot establish that export and
+receive positioned `UNRESOLVED_EXTERNAL_CONTRACT` findings. Contract signatures
+may name external types; native Tach external-dependency checks remain active.
 Python files directly under `src/` receive a layout violation. Existing version-1
 generated selections keep their previous boundaries until the tracked marker is
 explicitly updated to version 2. Existing reviewed

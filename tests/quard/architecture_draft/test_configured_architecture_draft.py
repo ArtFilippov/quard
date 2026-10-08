@@ -629,6 +629,152 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                 item["path"] == "src/other/group/deep/bridge.py"
                                 for item in failed["diagnostics"]), failed["diagnostics"])
 
+    def test_generated_exact_external_inherited_contracts_full_check(self):
+        with TemporaryDirectory(prefix="quard-external-contracts-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            group = root / "src/demo/arbitrary"
+            implementation = group / "external_items.py"
+            implementation.write_text(
+                "from collections import UserList\n\n"
+                "class ExternalItems(UserList[str]):\n"
+                "    def first(self) -> str:\n        return self.last()\n\n"
+                "    def last(self) -> str:\n        return self[0]\n")
+            implementation.with_suffix(".pyi").write_text(
+                "from collections import UserList\n\n"
+                "class ExternalItems(UserList[str]):\n"
+                "    def first(self) -> str: ...\n"
+                "    def last(self) -> str: ...\n")
+            errors = group / "errors.py"
+            errors.write_text("class LocalError(Exception):\n"
+                              "    def detail(self) -> str:\n"
+                              "        prefix = 'error'\n"
+                              "        return prefix + self.summary()\n\n"
+                              "    def summary(self) -> str:\n"
+                              "        return ': ' + str(self)\n")
+            signature = group / "external_port.py"
+            signature.write_text(
+                "from collections import UserDict\nfrom typing import Protocol\n\n"
+                "class ExternalPort(Protocol):\n"
+                "    def adapt(self, value: UserDict[str, str]) -> str: ...\n")
+            facade = root / "src/other/group/deep/external_api.py"
+            facade.write_text("from collections import UserList as PublicItems\n"
+                              "from builtins import Exception as PublicError\n"
+                              "__all__ = ['PublicItems', 'PublicError']\n")
+            use = root / "src/other/group/deep/external_utils.py"
+            use.write_text("from other.group.deep.external_api import PublicItems\n\n"
+                           "def read(items: PublicItems[str]) -> str:\n"
+                           "    return items[0]\n")
+
+            def check() -> dict[str, Any]:
+                report = NativeCheckRunner().run(root)
+                self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                                 report["diagnostics"])
+                return report
+
+            clean = check()
+            self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
+            self.assertTrue(all(job["status"] in {"passed", "skipped"} for job in clean["tools"]))
+            modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
+            self.assertEqual(modules["other.group.deep.external_api"]["layer"], "Contract")
+            self.assertEqual(modules["demo.arbitrary.external_items"]["layer"], "Infrastructure")
+            self.assertEqual(modules["demo.arbitrary.errors"]["layer"], "Infrastructure")
+            self.assertEqual(modules["other.group.deep.external_utils"]["depends_on"],
+                             ["other.group.deep.external_api"])
+            execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                                 + "from demo.arbitrary.external_items import ExternalItems; "
+                                 + "from demo.arbitrary.errors import LocalError; "
+                                 + "from other.group.deep.external_utils import read; "
+                                 + "assert read(ExternalItems(['ok'])) == 'ok'; "
+                                 + "assert issubclass(LocalError, Exception)"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
+            original = facade.read_text()
+            original_use = use.read_text()
+            for export in ("from collections import UserDict as Unrelated\n",
+                           "from demo.arbitrary.external_items import ExternalItems as Unrelated\n"):
+                facade.write_text(original + export + "__all__ = ['Unrelated']\n")
+                use.write_text("from other.group.deep.external_api import Unrelated\n"
+                               + original_use)
+                failed = check()
+                self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                self.assertEqual(next(job for job in failed["tools"] if job["name"] ==
+                                      "tach")["status"], "violations")
+                self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                    "src/other/group/deep/external_utils.py" and
+                                    "Unrelated" in item["message"] for item in
+                                    failed["diagnostics"]), failed["diagnostics"])
+                interfaces = [item for item in load_toml(root / "tach.toml")["interfaces"]
+                              if item["from"] == [r"^other\.group\.deep\.external_api$"]]
+                self.assertFalse(any(r"^Unrelated$" in item["expose"] for item in interfaces))
+            facade.write_text(original)
+            use.write_text(original_use)
+
+            original_stub = implementation.with_suffix(".pyi").read_text()
+            implementation.with_suffix(".pyi").write_text(original_stub.replace(
+                "UserList[str]", "UserDict[str, str]").replace(
+                    "from collections import UserList", "from collections import UserDict"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            self.assertTrue(any(item["rule"] == "UNRESOLVED_EXTERNAL_CONTRACT" and
+                                item["path"] == "src/demo/arbitrary/external_items.pyi" and
+                                item["line"] > 0 and item["column"] > 0
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            implementation.with_suffix(".pyi").write_text(original_stub)
+
+            implementation.with_suffix(".pyi").write_text(original_stub.replace(
+                "UserList[str]", "UserList[int]"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            self.assertTrue(any(item["rule"] == "UNRESOLVED_EXTERNAL_CONTRACT" and
+                                item["path"] == "src/demo/arbitrary/external_items.pyi"
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            implementation.with_suffix(".pyi").write_text(original_stub)
+
+            implementation.write_text(implementation.read_text().replace(
+                "class ExternalItems", "UserList = object\n\nclass ExternalItems"))
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            self.assertTrue(any(item["rule"] in {"UNRESOLVED_GROUP_OWNER",
+                                                 "UNRESOLVED_EXTERNAL_CONTRACT"} and
+                                item["path"] == "src/demo/arbitrary/external_items.py"
+                                for item in failed["diagnostics"]), failed["diagnostics"])
+            implementation.write_text(implementation.read_text().replace("UserList = object\n\n", ""))
+
+            original_source = implementation.read_text()
+            for replacement in ("from collections import UserDict as UserList\n",
+                                "UserList = object\n"):
+                implementation.write_text(original_source.replace(
+                    "class ExternalItems", replacement + "\nclass ExternalItems"))
+                failed = check()
+                self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                self.assertTrue(any(item["rule"] == "UNRESOLVED_EXTERNAL_CONTRACT" and
+                                    item["path"] == "src/demo/arbitrary/external_items.py" and
+                                    item["line"] > 0 and item["column"] > 0
+                                    for item in failed["diagnostics"]), failed["diagnostics"])
+                self.assertEqual(next(job for job in failed["tools"] if job["name"] ==
+                                      "contract-folders")["status"], "violations")
+            implementation.write_text(original_source)
+
+            unproved = group / "unproved.py"
+            unproved.write_text("class Unproved(UnknownBase):\n    pass\n")
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            self.assertTrue(any(item["rule"] == "UNRESOLVED_GROUP_OWNER" and
+                                item["path"] == "src/demo/arbitrary/unproved.py" and
+                                item["line"] == item["column"] == 1 for item in
+                                failed["diagnostics"]), failed["diagnostics"])
+            unproved.unlink()
+
+            use.write_text(use.read_text() + "import tomlkit\n")
+            failed = check()
+            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            self.assertEqual(next(job for job in failed["tools"] if job["name"] ==
+                                  "tach-external")["status"], "violations")
+            self.assertTrue(any(item["job"] == "tach-external" and
+                                item["rule"] == "UndeclaredExternalDependency" for item in
+                                failed["diagnostics"]), failed["diagnostics"])
+
     def test_reviewed_folder_rules_survive_generated_role_changes(self):
         with TemporaryDirectory(prefix="quard-reviewed-roles-") as directory:
             root = Path(directory)

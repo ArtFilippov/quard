@@ -7,6 +7,7 @@ from pathlib import Path
 from quard.architecture_draft.group_area_utils import ORDINARY, area
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
+from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 
 SOURCE_ROOT = "src"
 EXPORTS = "__all__"
@@ -20,13 +21,13 @@ def _location(path: str, node: ast.stmt, symbol: str) -> dict[str, object]:
 
 
 def other_declarations(path: str, tree: ast.Module,
-                       ownership: FolderAnalysis) -> list[ast.stmt]:
+                       ownership: GeneratedOwnership) -> list[ast.stmt]:
     """Find definitions incompatible with a contract-only module.
 
     Args:
         path (str): Source or stub path.
         tree (ast.Module): Parsed module.
-        ownership (FolderAnalysis): Local declaration index.
+        ownership (GeneratedOwnership): Local declaration index.
 
     Returns:
         list[ast.stmt]: Concrete definitions in the module.
@@ -38,15 +39,15 @@ def other_declarations(path: str, tree: ast.Module,
         if (isinstance(node, ast.Assign) and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)):
             name = node.targets[0].id
-            if (name == EXPORTS or ownership.is_contract(ownership.provenance(
-                    f"{module_name(path)}.{name}"))):
+            if (name == EXPORTS or ownership.export_contract(
+                    f"{module_name(path)}.{name}")):
                 continue
         declarations.append(node)
     return declarations
 
 
 def _mixed(path: str, tree: ast.Module, declared: list[tuple[str, ast.ClassDef]],
-           ownership: FolderAnalysis) -> list[dict[str, object]]:
+           ownership: GeneratedOwnership) -> list[dict[str, object]]:
     if not any(ownership.declaration(name, source=(node, path)) for name, node in declared):
         return []
     results: list[dict[str, object]] = []
@@ -139,12 +140,12 @@ def _stub_role(path: str, name: str, node: ast.ClassDef,
              "message": f"{name}: source and stub must agree on contract role."}]
 
 
-def analyze(trees: dict[str, ast.Module], ownership: FolderAnalysis) -> list[dict[str, object]]:
+def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list[dict[str, object]]:
     """Check production modules and their companion stubs for proven roles.
 
     Args:
         trees (dict[str, ast.Module]): Parsed discovered source and test files.
-        ownership (FolderAnalysis): Resolved class declarations and bases.
+        ownership (GeneratedOwnership): Resolved class declarations and bases.
 
     Returns:
         list[dict[str, object]]: Positioned generated-policy findings.
@@ -160,6 +161,11 @@ def analyze(trees: dict[str, ast.Module], ownership: FolderAnalysis) -> list[dic
         declared = declarations.get(path, [])
         results.extend(_mixed(path, tree, declared, ownership))
         for name, node in declared:
+            if ownership.conflicting_base(name, path):
+                results.append({**_location(path, node, node.name),
+                                "rule": "UNRESOLVED_EXTERNAL_CONTRACT",
+                                "message": f"{name}: external base evidence conflicts or is unproved "
+                                           + "in source or stub."})
             results.extend(_stub_role(path, name, node, declarations, ownership))
             results.extend(_implementation(path, name, node, ownership))
     return results

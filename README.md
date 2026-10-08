@@ -71,6 +71,11 @@ using contracts from another directory must directly inherit a combined contract
 declared in its own group that covers those contracts. Mixed contract/concrete
 modules, conflicting source/stub class roles and unresolved local bases receive
 positioned violations. Reviewed configurations keep their existing folder rules.
+Exact external types explicitly inherited by a local class, including generic
+bases and `Exception`, may be re-exported as contracts elsewhere in the project.
+Other symbols from the same package and local concrete subclasses are not contracts;
+unproved or conflicting external bases receive positioned findings. External
+dependency validation still runs separately through native Tach.
 Free functions and assembly classes may live under
 `main/`; placement checks continue outside it. The generated version-2 folder job
 reports source-root layout; reviewed and generated version-1 projects retain their
