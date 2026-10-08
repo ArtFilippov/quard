@@ -1,0 +1,366 @@
+"""Build a real wheel and compare its full-check results with the native CLI."""
+from __future__ import annotations
+
+import atexit
+from collections.abc import Callable
+from functools import cache
+from importlib import util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from tempfile import mkdtemp
+from typing import Any, cast
+import unittest
+from unittest.mock import patch
+
+from offline_fixtures import fake_tools
+from quard._common import capture, read_json
+from quard.check_runner.native_check_runner import NativeCheckRunner
+from quard.check_runner.runner_utils import binary
+from quard.report_utils import normalize
+
+QUARD = Path(__file__).resolve().parents[3]
+SAMPLE = ("def repeat(value):\n    first = value + 17\n    second = first * 3\n"
+          "    third = second - 4\n    fourth = third / 2\n    return fourth + 10\n")
+
+
+def adoption_consumer(root: Path) -> None:
+    """Load the shared public consumer fixture from its own test directory.
+
+    Args:
+        root (Path): Selected isolated consumer root.
+
+    Raises:
+        RuntimeError: The shared public fixture is unavailable.
+    """
+    spec = util.spec_from_file_location("adoption_fixture_utils", QUARD /
+                                        "tests/quard/architecture_draft/adoption_fixture_utils.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Public adoption fixture could not be loaded")
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    create = cast(Callable[[Path], None], getattr(module, "adoption_consumer"))
+    create(root)
+
+
+@cache
+def wheel() -> tuple[Path, Path]:
+    """Build and install one real wheel for the current test process.
+
+    Returns:
+        tuple[Path, Path]: Isolated Python interpreter and built wheel artifact.
+
+    Raises:
+        RuntimeError: No Rust developer toolchain is available.
+        AssertionError: Wheel build or linked version evidence is incomplete.
+    """
+    cargo = shutil.which("cargo") or "/tmp/opencode/cargo/bin/cargo"
+    if not Path(cargo).is_file():
+        raise RuntimeError("Rust developer toolchain is required for real wheel verification")
+    base = Path(mkdtemp(prefix="quard-real-wheel-", dir="/tmp/opencode"))
+    _ = atexit.register(shutil.rmtree, base)
+    env = os.environ.copy()
+    env["PATH"] = str(Path(cargo).parent) + os.pathsep + env.get("PATH", "")
+    if cargo.startswith("/tmp/opencode/"):
+        env["CARGO_HOME"] = "/tmp/opencode/cargo"
+        env["RUSTUP_HOME"] = "/tmp/opencode/rustup"
+    env["CARGO_TARGET_DIR"] = str(base / "target")
+    subprocess.run(["uvx", "--from", "maturin==1.9.6", "maturin", "build",
+                    "--locked", "--release", "--manifest-path",
+                    str(QUARD / "rust/quard-clones/Cargo.toml"), "--interpreter",
+                    sys.executable, "--out", str(base)], env=env, check=True,
+                   capture_output=True, text=True, timeout=300)
+    artifacts = list(base.glob("quard_clones-*.whl"))
+    if len(artifacts) != 1:
+        raise AssertionError(f"Expected one real wheel, got {artifacts}")
+    python = base / "venv/bin/python"
+    subprocess.run(["uv", "venv", "--python", sys.executable, str(base / "venv")],
+                   check=True, capture_output=True, text=True)
+    subprocess.run(["uv", "pip", "install", "--python", str(python), str(artifacts[0])],
+                   check=True, capture_output=True, text=True)
+    installed = subprocess.run([str(python), "-c",
+                                "import quard_clones; print(dict(quard_clones.versions()))"],
+                               check=True, capture_output=True, text=True)
+    if "cpd-core" not in installed.stdout:
+        raise AssertionError("The real wheel did not expose linked engine versions")
+    return python, artifacts[0]
+
+
+def versions(_root: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """Supply empty version evidence only for mocked peer jobs in focused tests.
+
+    Args:
+        _root (Path): Ignored temporary consumer root.
+
+    Returns:
+        tuple[dict[str, str], list[dict[str, Any]]]: Empty mock version evidence.
+    """
+    return {}, []
+
+
+def report(root: Path) -> dict[str, Any]:
+    """Run the real wheel exact pass at the ordinary check-runner seam.
+
+    Args:
+        root (Path): Discovered fixture consumer root.
+
+    Returns:
+        dict[str, Any]: Full check report with other jobs mocked.
+    """
+    fake, _ = fake_tools()
+    python, _ = wheel()
+
+    def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+        if Path(argv[1]).name == "_clone_engine_worker.py":
+            return capture([str(python), *argv[1:]], cwd, timeout)
+        return fake(argv, cwd, timeout)
+
+    with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):
+        return NativeCheckRunner().run(root, lcom_files="", serial=True, timeout=60,
+                                       capture_fn=dispatch, versions_fn=versions)
+
+
+def compare_cli(test: unittest.TestCase, root: Path, result: dict[str, Any], minimum: int
+                ) -> dict[str, Any]:
+    """Compare archived native JSON with the CLI on the identical scope.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Fixture consumer root.
+        result (dict[str, Any]): Full check report.
+        minimum (int): Effective configured minimum.
+
+    Returns:
+        dict[str, Any]: Archived native Rust JSON data.
+    """
+    exact = next(job for job in result["tools"] if job["name"] == "jscpd")
+    native = read_json(root / exact["raw_output"]["native_json"])
+    run_dir = root / result["report_path"].replace("/report.json", "")
+    manifest = read_json(run_dir / "clone-engine-files.json")
+    test.assertEqual(manifest["min_lines"], minimum)
+    output = root / ".quard/cli"
+    output.mkdir(exist_ok=True)
+    command = [binary("jscpd"), "--config", str(run_dir / "jscpd-config.json"),
+               "--no-gitignore", "--absolute", "--kind", "exact", "--mode", "strict",
+               "--min-lines", str(minimum), "--min-tokens", "1", "--fail-on-empty",
+               "--reporters", "json", "--output", str(output), "--exit-code", "1",
+               *manifest["paths"]]
+    cli = capture(command, root, 60)
+    test.assertEqual(cli["exit_code"], exact["exit_code"], cli)
+    original = read_json(output / "jscpd-report.json")
+    for key in ("sources", "clones", "lines", "tokens"):
+        test.assertEqual(native["statistics"]["total"][key],
+                         original["statistics"]["total"][key])
+    for key in ("kind", "lines", "tokens", "fragment", "firstFile", "secondFile"):
+        test.assertEqual([item[key] for item in native["duplicates"]],
+                         [item[key] for item in original["duplicates"]], key)
+    return native
+
+
+def verify_cli_parity(test: unittest.TestCase, root: Path) -> None:
+    """Compare cross-profile clones, clean scans, ignored folders and stubs.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated consumer root.
+    """
+    setting = root / ".quard/config.toml"
+    setting.write_text(setting.read_text(encoding="utf-8").replace(
+        "min_lines = 3", "min_lines = 5"), encoding="utf-8")
+    (root / "src/demo/first.py").write_text(SAMPLE, encoding="utf-8")
+    (root / "tests/second.py").write_text(SAMPLE, encoding="utf-8")
+    (root / "src/demo/companion.pyi").write_text(SAMPLE, encoding="utf-8")
+    excluded = root / "src/demo/generated"
+    excluded.mkdir()
+    (excluded / "hidden.py").write_text(SAMPLE, encoding="utf-8")
+    for clean in (False, True):
+        with test.subTest(clean=clean):
+            if clean:
+                (root / "tests/second.py").unlink()
+                (root / "src/demo/first.py").write_text("unique = object()\n", encoding="utf-8")
+            result = report(root)
+            exact = next(job for job in result["tools"] if job["name"] == "jscpd")
+            test.assertEqual((result["exit_code"], exact["status"], exact["exit_code"]),
+                             (0, "passed", 0) if clean else (1, "violations", 1),
+                             result["diagnostics"])
+            _ = compare_cli(test, root, result, 5)
+            test.assertEqual({d["path"] for d in result["diagnostics"] if d["tool"] == "jscpd"},
+                             set() if clean else {"src/demo/first.py", "tests/second.py"})
+
+
+def verify_corrupt_report(test: unittest.TestCase, root: Path) -> None:
+    """A real engine scan with broken accounting fails without hiding a peer.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated consumer root.
+    """
+    text = ("def repeat(value):\n    first = value + 17\n"
+            "    second = first * 3\n    third = second - 4\n")
+    (root / "src/demo/first.py").write_text(text, encoding="utf-8")
+    (root / "tests/second.py").write_text(text, encoding="utf-8")
+    fake, _ = fake_tools({"pydoclint": {"stderr": "src/demo/first.py:1: DOC101: Native issue\n",
+                                       "code": 1}})
+    python, _ = wheel()
+
+    def corrupt(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+        if Path(argv[1]).name == "_clone_engine_worker.py":
+            native_result = capture([str(python), *argv[1:]], cwd, timeout)
+            test.assertEqual(native_result["exit_code"], 1, native_result["stderr"])
+            output = Path(argv[argv.index("--output") + 1])
+            payload = read_json(output)
+            payload["statistics"]["total"]["sources"] = 0
+            output.write_text(json.dumps(payload), encoding="utf-8")
+            return native_result
+        return fake(argv, cwd, timeout)
+
+    with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):
+        result = NativeCheckRunner().run(root, lcom_files="", serial=True, timeout=30,
+                                         capture_fn=corrupt, versions_fn=versions)
+    test.assertEqual(result["exit_code"], 2)
+    test.assertEqual(next(j for j in result["tools"] if j["name"] == "jscpd")["status"], "error")
+    test.assertIn("UNREADABLE_TOOL_OUTPUT", {d["rule"] for d in result["diagnostics"]})
+    test.assertIn("DOC101", {d["rule"] for d in result["diagnostics"]})
+
+
+def verify_missing_wheel(test: unittest.TestCase, root: Path) -> None:
+    """A consumer interpreter without the wheel gets an explicit failure.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated consumer root.
+    """
+    clean = root / ".quard/without-wheel"
+    subprocess.run(["uv", "venv", "--python", sys.executable, str(clean)],
+                   check=True, capture_output=True, text=True)
+    (root / "src/demo/first.py").write_text("one = 1\ntwo = one + 2\nthree = two * 3\n",
+                                             encoding="utf-8")
+    manifest = root / ".quard/clone-manifest.json"
+    manifest.write_text(json.dumps({"paths": ["src/demo/first.py"], "min_lines": 3}),
+                        encoding="utf-8")
+    result = capture([str(clean / "bin/python"), str(QUARD / "_clone_engine_worker.py"),
+                      "--manifest", str(manifest), "--output", str(root / ".quard/native.json")],
+                     root, 30)
+    test.assertEqual(result["exit_code"], 2)
+    test.assertIn("CLONE_ENGINE_ERROR", result["stderr"])
+    test.assertFalse((root / ".quard/native.json").exists())
+
+
+def verify_mismatched_engine(test: unittest.TestCase, root: Path) -> None:
+    """Reject real wheel bindings when the required linked version changes.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated consumer root.
+    """
+    (root / "src/demo/first.py").write_text(SAMPLE, encoding="utf-8")
+    manifest = root / ".quard/clone-manifest.json"
+    manifest.write_text(json.dumps({"paths": ["src/demo/first.py"], "min_lines": 3}),
+                        encoding="utf-8")
+    output = root / ".quard/native.json"
+    python, _ = wheel()
+    script = ("import sys\nsys.path.insert(0, sys.argv[1])\n"
+              "from quard import clone_engine_utils as engine\n"
+              "engine.EXPECTED['cpd-core'] = '0.0.0'\n"
+              "sys.argv = ['engine', '--manifest', sys.argv[2], '--output', sys.argv[3]]\n"
+              "try:\n    engine.main()\n"
+              "except RuntimeError as exc:\n    print(exc, file=sys.stderr)\n"
+              "    raise SystemExit(2) from None\n")
+    result = capture([str(python), "-c", script, str(QUARD / "src"), str(manifest), str(output)],
+                     root, 30)
+    test.assertEqual(result["exit_code"], 2)
+    test.assertIn("linked engine library version mismatch", result["stderr"])
+    test.assertFalse(output.exists())
+    parsed = normalize("jscpd", result, root, output, ["src/demo/first.py"], True)
+    test.assertEqual(parsed["status"], "error")
+    test.assertTrue(any(d["is_infrastructure_error"] for d in parsed["diagnostics"]))
+
+
+def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
+    """Same-file fragments agree with the CLI; invalid original text fails.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated consumer root.
+    """
+    (root / "src/demo/first.py").write_text(SAMPLE + "\n# separation\n" + SAMPLE,
+                                             encoding="utf-8")
+    result = report(root)
+    exact = next(job for job in result["tools"] if job["name"] == "jscpd")
+    test.assertEqual((exact["status"], exact["exit_code"]), ("violations", 1),
+                     result["diagnostics"])
+    test.assertEqual({d["path"] for d in result["diagnostics"] if d["tool"] == "jscpd"},
+                     {"src/demo/first.py"})
+    native = compare_cli(test, root, result, 3)
+    test.assertEqual(native["statistics"]["total"]["clones"], len(native["duplicates"]))
+    native["duplicates"][0]["fragment"] = "invented source"
+    bad = root / "altered.json"
+    bad.write_text(json.dumps(native), encoding="utf-8")
+    run_dir = root / result["report_path"].replace("/report.json", "")
+    paths = read_json(run_dir / "clone-engine-files.json")["paths"]
+    invalid = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "", "error": None},
+                        root, bad, paths, True)
+    test.assertEqual(invalid["status"], "error")
+    test.assertTrue(any(d["is_infrastructure_error"] for d in invalid["diagnostics"]))
+    native["duplicates"][0]["fragment"] = SAMPLE.strip()
+    native["duplicates"][0]["firstFile"]["startLoc"]["position"] += 1
+    bad.write_text(json.dumps(native), encoding="utf-8")
+    wrong_location = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
+                                         "error": None}, root, bad, paths, True)
+    test.assertEqual(wrong_location["status"], "error")
+
+
+def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
+    """Run all analyzers, unmocked, inside an isolated uv consumer without Rust.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Scratch root containing the nested selected consumer.
+    """
+    consumer = root / "isolated-consumer"
+    consumer.mkdir()
+    adoption_consumer(consumer)
+    python = consumer / ".venv/bin/python"
+    subprocess.run(["uv", "venv", "--python", sys.executable, str(consumer / ".venv")],
+                   check=True, capture_output=True, text=True)
+    subprocess.run(["uv", "pip", "install", "--python", str(python),
+                    "--group", "dev", "--project", str(QUARD)],
+                   check=True, capture_output=True, text=True, timeout=180)
+    _, artifact = wheel()
+    subprocess.run(["uv", "pip", "install", "--python", str(python), str(artifact)],
+                   check=True, capture_output=True, text=True)
+    env = os.environ.copy()
+    env["QUARD_CLONE_ENGINE"] = "rust"
+    env["PATH"] = str(python.parent) + ":/usr/local/bin:/usr/bin:/bin"
+    test.assertNotIn("cargo", env["PATH"])
+
+    def check(expected: int) -> dict[str, Any]:
+        process = subprocess.run([str(python), str(QUARD / "check.py"), "--project",
+                                  str(consumer), "--json"], cwd=consumer, env=env,
+                                 capture_output=True, text=True, timeout=180, check=False)
+        result = read_json(consumer / ".quard/reports/latest.json")
+        test.assertEqual((process.returncode, result["exit_code"]), (expected, expected),
+                         process.stderr + process.stdout[-2000:])
+        test.assertEqual(result["summary"]["infrastructure_errors"], 0,
+                         result["diagnostics"])
+        jobs = {job["name"]: job for job in result["tools"]}
+        test.assertEqual(jobs["jscpd"]["exit_code"], expected)
+        test.assertIn("_clone_engine_worker.py", jobs["jscpd"]["argv"][1])
+        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+            test.assertIn("native_json", jobs[name]["raw_output"])
+        test.assertEqual(result["versions"]["quard-clones"], "0.1.0")
+        return result
+
+    clean = check(0)
+    test.assertEqual({job["status"] for job in clean["tools"]}, {"passed", "skipped"})
+    text = ("def calculate(value):\n    first = value + 17\n    second = first * 3\n"
+            "    third = second - 4\n    fourth = third / 2\n    return fourth + 10\n")
+    for name in ("first", "second"):
+        (consumer / f"src/demo/main/{name}.py").write_text(text, encoding="utf-8")
+    violations = check(1)
+    test.assertEqual({item["path"] for item in violations["diagnostics"]
+                      if item["rule"] == "EXACT_CLONE"},
+                     {"src/demo/main/first.py", "src/demo/main/second.py"})

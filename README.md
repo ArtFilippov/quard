@@ -238,7 +238,7 @@ CLI. The wheel contains native code; consumers need no Rust toolchain. A
 missing or mismatched wheel is an infrastructure error. See
 [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md) for the report and
 version contract. Ordinary installs continue to use the three native CLI jobs
-until all three in-memory parity and installation gates are complete.
+until all three in-memory parity and #125 installation gates are complete.
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.

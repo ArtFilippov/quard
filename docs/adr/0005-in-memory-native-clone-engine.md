@@ -15,19 +15,26 @@ engine's original locations and counts and `cpd-reporter`'s original-text line
 extraction without reading source a second time in the reporter. No consumer
 module is imported and no prepared `.py` file is written.
 
-The wheel is built by developers/CI with a Rust toolchain and a locked Cargo
-dependency graph; the consumer installs the binary wheel without Rust. The
-Quard runner selects the wheel for the exact job with `QUARD_CLONE_ENGINE=rust`.
-Until the other two in-memory jobs and their installation gates are verified,
-the normal CLI remains the default and remains available for differential
-comparisons. The renamed and gap-similar jobs remain independent CLI runs.
+The wheel is built by developers/CI with Rust 1.99.0 and a locked Cargo
+dependency graph; the consumer installs the binary wheel without Rust. CI
+requires the real wheel build, installs that artifact into an isolated uv
+consumer, and runs its full clean and clone checks without a Rust toolchain in
+the consumer's `PATH`. The Quard runner selects the wheel for the exact job
+with `QUARD_CLONE_ENGINE=rust`. #114 calls for a full check that *can* use the
+wheel, not for every consumer to install it by default. Normal uv pinning and
+publication across supported Linux targets belong to #125. Until the other
+two in-memory jobs in #115 and #116 and the #125 installation gates are
+verified, the normal CLI remains the default and remains available for
+differential comparisons. The renamed and gap-similar jobs remain independent
+CLI runs.
 
 ## Reporting and failures
 
 The exact job retains the `jscpd` identity, a separate raw JSON report and
 stdout/stderr logs, original paths, one-based normalized locations and both
 native fragment locations. The JSON adds `engine` (the wheel and linked-crate
-versions) and `sourcePaths` (the complete accepted source list). The worker
+versions compiled from the actual Cargo.lock) and `sourcePaths` (the complete
+accepted source list). The worker
 checks wheel metadata and linked-version evidence against `tools.json`, and
 rejects missing or incomplete source preparation. The report parser checks
 the complete path list, native source count, original locations and fragment

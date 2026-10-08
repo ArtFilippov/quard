@@ -38,7 +38,7 @@ class TestNativeCheckRunner(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
         self.root: Path = Path(self.enterContext(
-            TemporaryDirectory(prefix="quard-runner with spaces-")))
+            TemporaryDirectory(prefix="quard-runner with spaces-", dir="/tmp/opencode")))
         create_repo(self.root)
         self.runner: CheckRunner = NativeCheckRunner()
 

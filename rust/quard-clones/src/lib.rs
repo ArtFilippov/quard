@@ -13,10 +13,10 @@ use serde_json::{json, Value};
 fn versions() -> Vec<(&'static str, &'static str)> {
     vec![
         ("quard-clones", env!("CARGO_PKG_VERSION")),
-        ("cpd-core", "0.1.20"),
-        ("cpd-finder", "0.1.20"),
-        ("cpd-reporter", "0.1.21"),
-        ("cpd-tokenizer", "0.1.19"),
+        ("cpd-core", env!("QUARD_CPD_CORE_VERSION")),
+        ("cpd-finder", env!("QUARD_CPD_FINDER_VERSION")),
+        ("cpd-reporter", env!("QUARD_CPD_REPORTER_VERSION")),
+        ("cpd-tokenizer", env!("QUARD_CPD_TOKENIZER_VERSION")),
     ]
 }
 

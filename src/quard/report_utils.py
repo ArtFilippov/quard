@@ -618,7 +618,27 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
     if raw.get("engine") != EXPECTED or raw.get("sourcePaths") != [str(root / path)
                                                                  for path in expected_paths]:
         raise ValueError("Missing or mismatched native engine/source evidence")
-    for clone in raw.get("duplicates", []):
+    statistics = raw.get("statistics")
+    if not isinstance(statistics, dict) or not isinstance(raw.get("duplicates"), list):
+        raise ValueError("Missing native engine statistics or clones")
+    total = statistics.get("total")
+    formats = statistics.get("formats")
+    if not isinstance(total, dict) or not isinstance(formats, dict):
+        raise ValueError("Missing native engine totals or formats")
+    python_stats = formats.get("python")
+    if not isinstance(python_stats, dict) or any(
+            not _jscpd_integer(total.get(key), minimum=0)
+            or total[key] != python_stats.get(key)
+            for key in ("sources", "clones", "lines", "tokens", "duplicatedLines",
+                        "duplicatedTokens")):
+        raise ValueError("Incomplete native engine accounting")
+    if (total["sources"] != len(expected_paths) or total["clones"] != len(raw["duplicates"])
+            or total["duplicatedTokens"] != sum(
+                clone.get("tokens", 0) for clone in raw["duplicates"] if isinstance(clone, dict))
+            or total["duplicatedLines"] != sum(
+                clone.get("lines", 0) for clone in raw["duplicates"] if isinstance(clone, dict))):
+        raise ValueError("Inconsistent native engine accounting")
+    for clone in raw["duplicates"]:
         if not isinstance(clone, dict) or clone.get("kind") != "exact":
             raise ValueError("Unexpected exact-engine clone kind")
         for key in ("firstFile", "secondFile"):
@@ -630,15 +650,24 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
                 raise ValueError("Native fragment outside source scope")
             start = side.get("startLoc")
             end = side.get("endLoc")
-            lines = (root / path).read_text(encoding="utf-8").splitlines()
+            original = (root / path).read_text(encoding="utf-8")
+            lines = original.splitlines()
+            source_lines = original.splitlines(keepends=True)
             if not isinstance(start, dict) or not isinstance(end, dict):
                 raise ValueError("Missing native source range")
             first, last = start.get("line"), end.get("line")
             if (not _jscpd_integer(first) or not _jscpd_integer(last) or last < first
                     or last > len(lines) or not _jscpd_integer(start.get("column"), minimum=0)
                     or not _jscpd_integer(end.get("column"), minimum=0)
+                    or not _jscpd_integer(start.get("position"), minimum=0)
+                    or not _jscpd_integer(end.get("position"), minimum=0)
+                    or side.get("start") != first or side.get("end") != last
                     or start["column"] > len(lines[first - 1].encode("utf-8"))
-                    or end["column"] > len(lines[last - 1].encode("utf-8"))):
+                    or end["column"] > len(lines[last - 1].encode("utf-8"))
+                    or start["position"] != len("".join(source_lines[:first - 1]).encode("utf-8"))
+                    + start["column"]
+                    or end["position"] != len("".join(source_lines[:last - 1]).encode("utf-8"))
+                    + end["column"]):
                 raise ValueError("Native fragment does not map to original source")
         first_side = clone["firstFile"]
         first_lines = (Path(first_side["name"])).read_text(encoding="utf-8").splitlines()

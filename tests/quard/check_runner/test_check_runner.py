@@ -23,12 +23,33 @@ from quard.check_runner.runner_utils import installed_versions
 from quard.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
+from rust_clone_engine_utils import (verify_cli_parity, verify_corrupt_report,
+                                     verify_mismatched_engine, verify_missing_wheel,
+                                     verify_real_full_check, verify_same_file_and_mapping)
 
 
 class TestCheckRunner(unittest.TestCase):
+    def test_real_wheel_cli_parity(self) -> None:
+        verify_cli_parity(self, self.root)
+
+    def test_real_wheel_invalid_output_retains_independent_diagnostics(self) -> None:
+        verify_corrupt_report(self, self.root)
+
+    def test_real_wheel_missing_is_infrastructure_error(self) -> None:
+        verify_missing_wheel(self, self.root)
+
+    def test_real_wheel_engine_version_mismatch_is_error(self) -> None:
+        verify_mismatched_engine(self, self.root)
+
+    def test_real_wheel_same_file_and_mapping(self) -> None:
+        verify_same_file_and_mapping(self, self.root)
+
+    def test_real_wheel_full_consumer_without_rust(self) -> None:
+        verify_real_full_check(self, self.root)
+
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.root: Path = Path(mkdtemp(prefix="quard-switches-"))
+        self.root: Path = Path(mkdtemp(prefix="quard-switches-", dir="/tmp/opencode"))
         self.addCleanup(shutil.rmtree, self.root)
         create_repo(self.root)
 

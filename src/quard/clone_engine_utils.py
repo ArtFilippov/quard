@@ -9,24 +9,25 @@ from pathlib import Path
 import sys
 from typing import cast
 
-from quard._common import read_json, tool_dir
+from quard._common import QuardError, read_json, tool_dir
 
 EXPECTED = read_json(tool_dir() / "tools.json")["native_components"]
 PARENT = ".."
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    _ = parser.add_argument("--manifest", type=Path, required=True)
-    _ = parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    native = importlib.import_module("quard_clones")
-    versions = native.versions
-    source_session = native.SourceSession
+def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
+    """Read the discovered source scope without importing consumer modules.
 
-    if metadata.version("quard-clones") != EXPECTED["quard-clones"] or dict(versions()) != EXPECTED:
-        raise RuntimeError("quard-clones wheel or linked engine library version mismatch")
-    loaded: object = read_json(args.manifest)
+    Args:
+        manifest_path (Path): Path to the job's discovered source manifest.
+
+    Returns:
+        tuple[list[tuple[str, str]], int]: Absolute paths, original text and minimum.
+
+    Raises:
+        RuntimeError: The manifest is malformed or has no eligible paths.
+    """
+    loaded: object = read_json(manifest_path)
     if not isinstance(loaded, dict):
         raise RuntimeError("invalid clone source manifest")
     manifest = cast(dict[str, object], loaded)
@@ -43,11 +44,24 @@ def main() -> int:
     paths = cast(list[str], paths)
     sources = [(str((Path.cwd() / path).resolve(strict=True)), (Path.cwd() / path).read_text(
         encoding="utf-8")) for path in paths]
-    session = source_session(sources, minimum)
-    if session.source_count() != len(paths):
+    return sources, minimum
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    _ = parser.add_argument("--manifest", type=Path, required=True)
+    _ = parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    native = importlib.import_module("quard_clones")
+    versions = native.versions
+    if metadata.version("quard-clones") != EXPECTED["quard-clones"] or dict(versions()) != EXPECTED:
+        raise RuntimeError("quard-clones wheel or linked engine library version mismatch")
+    sources, minimum = load_sources(args.manifest)
+    session = native.SourceSession(sources, minimum)
+    if session.source_count() != len(sources):
         raise RuntimeError("incomplete in-memory clone scan")
     report = json.loads(session.exact())
-    if report["statistics"]["total"]["sources"] != len(paths):
+    if report["statistics"]["total"]["sources"] != len(sources):
         raise RuntimeError("native source count mismatch")
     report["engine"] = dict(versions())
     report["sourcePaths"] = [path for path, _ in sources]
@@ -58,6 +72,7 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:
+    except (ImportError, OSError, ValueError, KeyError, TypeError, RuntimeError,
+            QuardError) as exc:
         print(f"CLONE_ENGINE_ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
