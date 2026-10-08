@@ -7,6 +7,7 @@ from typing import override
 from quard.contract_analysis.contract_utils import dotted, module_name
 from quard.contract_analysis.value_factory_utils import ValueFactory, values
 from quard.folder_analysis.folder_ownership import FolderOwnership
+from quard.folder_analysis.generated_facades_utils import alias_evidence
 
 _NON_CONTRACT_BASES = frozenset({"builtins.object", "typing.Protocol",
                                  "typing_extensions.Protocol", "abc.ABC", "abc.ABCMeta",
@@ -65,6 +66,16 @@ class GeneratedOwnership(FolderOwnership):
                         origins.setdefault(name, set()).add(None)
             self._ambiguous[path] = {name for name, values in origins.items() if len(values) > 1}
 
+        self.role_conflicts: set[str] = set()
+        for name, node, path in self.all_declarations():
+            if (not path.endswith(".pyi") or name not in self.nodes or
+                    not self.paths[name].endswith(".py")):
+                continue
+            if self.declaration(name, source=(node, path)) != self.declaration(name):
+                self.role_conflicts.add(name)
+        # Neither side of a disagreeing companion may make a contract public.
+        self.contracts.difference_update(self.role_conflicts)
+
         grouped: dict[str, list[tuple[ast.ClassDef, str]]] = {}
         for name, node, path in self.all_declarations():
             grouped.setdefault(name, []).append((node, path))
@@ -79,6 +90,8 @@ class GeneratedOwnership(FolderOwnership):
                 continue
             self.external_contracts.update(identity.partition("[")[0] for identity in
                                            (next(iter(evidence)) or ()))
+
+        self.blocked_aliases, self.alias_violations = alias_evidence(trees, self)
 
     def _bases(self, name: str, node: ast.ClassDef, path: str) -> set[str] | None:
         found: set[str] = set()
@@ -105,6 +118,8 @@ class GeneratedOwnership(FolderOwnership):
         Returns:
             bool: Whether the resolved type is a proven contract.
         """
+        if target in self.blocked_aliases:
+            return False
         proven = self.provenance(target)
         return self.is_contract(proven) or proven in self.external_contracts
 

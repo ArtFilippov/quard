@@ -57,7 +57,8 @@ def _aliases(path: str, tree: ast.Module, ownership: GeneratedOwnership) -> set[
     module = module_name(path)
     return {alias.asname or alias.name for node in tree.body
             if isinstance(node, ast.ImportFrom) for alias in node.names
-            if ownership.export_contract(
+            if f"{module}.{alias.asname or alias.name}" not in ownership.blocked_aliases
+            and ownership.export_contract(
                 f"{module}.{alias.asname or alias.name}")}
 
 
@@ -88,6 +89,8 @@ def _eligible(name: str, reference: tuple[str, str, str], ownership: GeneratedOw
                 roles: dict[str, str]
                 ) -> bool:
     target_module, target, resolved = reference
+    if target in ownership.blocked_aliases:
+        return False
     if roles[target_module] not in ALLOWED_ROLES[roles[name]]:
         return False
     if target == target_module:
@@ -150,9 +153,13 @@ def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: GeneratedOwner
     contracts = {name for name, _, _ in ownership.all_declarations()
                  if ownership.is_contract(name)}
     invalid = {item["path"] for item in facade_evidence(trees, ownership)[1]}
-    return {name: ("Infrastructure" if path in invalid else "Contract")
-            if Path(path).stem == PACKAGE_FILE and area(path)[1] == ORDINARY else
-            _role(path, tree, ownership, contracts)
+    invalid.update(str(item["path"]) for item in ownership.alias_violations)
+    invalid.update(path for name, _, path in ownership.all_declarations()
+                   if name in ownership.role_conflicts)
+    return {name: ("Infrastructure" if path in invalid else
+                   "Contract" if Path(path).stem == PACKAGE_FILE else
+                   _role(path, tree, ownership, contracts))
+            if area(path)[1] == ORDINARY else _role(path, tree, ownership, contracts)
             for name, (path, tree) in sources.items()}
 
 

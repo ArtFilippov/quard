@@ -122,12 +122,12 @@ def _concrete_bases(path: str, name: str, node: ast.ClassDef,
 
 def _stub_role(path: str, name: str, node: ast.ClassDef,
                declarations: dict[str, list[tuple[str, ast.ClassDef]]],
-               ownership: FolderAnalysis) -> list[dict[str, object]]:
+               ownership: GeneratedOwnership) -> list[dict[str, object]]:
     if not path.endswith(".pyi"):
         return []
     companion = str(Path(path).with_suffix(".py"))
     if (not any(item == name for item, _ in declarations.get(companion, []))
-            or ownership.is_contract(name) == ownership.declaration(name, source=(node, path))):
+            or name not in ownership.role_conflicts):
         return []
     return [{**_location(path, node, node.name), "rule": "CONFLICTING_MODULE_ROLE",
              "message": f"{name}: source and stub must agree on contract role."}]
@@ -209,6 +209,7 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
         if Path(path).parts[0] == SOURCE_ROOT:
             declarations.setdefault(path, []).append((name, node))
     results: list[dict[str, object]] = []
+    results.extend(ownership.alias_violations)
     results.extend(facade_evidence(trees, ownership)[1])
     sources = {module_name(path): path for path in sorted(trees)
                if Path(path).parts[0] == SOURCE_ROOT}

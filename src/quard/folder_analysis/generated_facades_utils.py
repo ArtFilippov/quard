@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from quard.contract_analysis.contract_utils import dotted, module_name
-from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
+if TYPE_CHECKING:
+    from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 
 FACADE_FILE = "__init__"
 SOURCE_ROOT = "src"
@@ -67,6 +69,66 @@ def _all_values(tree: ast.Module) -> str | None:
     return None
 
 
+def _explicit_exports(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(target, ast.Name) and target.id == EXPORTS for target in targets):
+            continue
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            names.update(item.value for item in node.value.elts
+                         if isinstance(item, ast.Constant) and isinstance(item.value, str))
+    return names
+
+
+def alias_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
+                   ) -> tuple[set[str], list[dict[str, object]]]:
+    """Reject uncertain non-facade aliases before granting contract visibility."""
+    paths = {path for path in trees if path.startswith("src/") and
+             Path(path).stem != FACADE_FILE}
+    bindings = {path: _bindings(path, trees[path]) for path in paths}
+    blocked: set[str] = set()
+    results: list[dict[str, object]] = []
+
+    def relevant(target: str | None) -> bool:
+        if target is None:
+            return False
+        resolved = ownership.provenance(target)
+        return ownership.node_for(resolved) is not None or resolved in ownership.external_contracts
+
+    for path in sorted(paths):
+        entries, conflicts = bindings[path]
+        companion = str(Path(path).with_suffix(".py" if path.endswith(".pyi") else ".pyi"))
+        for symbol, node in conflicts:
+            earlier = _bindings(path, ast.Module(body=trees[path].body[:trees[path].body.index(node)],
+                                                  type_ignores=[]))[0].get(symbol)
+            if not relevant(entries[symbol][0]) and not (earlier and relevant(earlier[0])):
+                continue
+            blocked.add(f"{module_name(path)}.{symbol}")
+            results.append({"path": path, "line": node.lineno, "column": node.col_offset + 1,
+                            "symbol": symbol, "rule": "CONFLICTING_CONTRACT_ALIAS",
+                            "message": f"{module_name(path)}.{symbol}: alias is rebound; "
+                                       + "contract provenance is unproved."})
+        if companion not in bindings:
+            continue
+        for symbol, (target, node) in entries.items():
+            peer = bindings[companion][0].get(symbol)
+            if peer is None:
+                if not relevant(target) or symbol not in _explicit_exports(trees[path]):
+                    continue
+            elif (not path.endswith(".pyi") or target == peer[0] or not (
+                    relevant(target) or relevant(peer[0]))):
+                continue
+            blocked.add(f"{module_name(path)}.{symbol}")
+            results.append({"path": path, "line": node.lineno, "column": node.col_offset + 1,
+                            "symbol": symbol, "rule": "CONFLICTING_CONTRACT_ALIAS",
+                            "message": f"{module_name(path)}.{symbol}: source and stub "
+                                       + "alias provenance differs."})
+    return blocked, results
+
+
 def facade_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
                     ) -> tuple[dict[str, set[str]], list[dict[str, object]]]:
     """Prove contract-only package exports.
@@ -107,7 +169,7 @@ def facade_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
                 mismatched.add(f"{module_name(path)}.{symbol}")
 
     def resolve(target: str, seen: frozenset[str]) -> str | None:
-        if target in seen or target in mismatched:
+        if target in seen or target in mismatched or target in ownership.blocked_aliases:
             return None
         if ownership.node_for(target) is not None:
             return target
@@ -154,6 +216,10 @@ def facade_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
         all_names: set[str] = set()
         all_node: ast.stmt | None = None
         for node in tree.body:
+            if isinstance(node, (ast.If, ast.Try, ast.For, ast.AsyncFor, ast.While,
+                                 ast.With, ast.AsyncWith, ast.Match)):
+                violation(path, node, "<conditional>", "UNRESOLVED_FACADE_EXPORT")
+                continue
             if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and (
                     node.target.id == EXPORTS):
                 violation(path, node, EXPORTS, "UNRESOLVED_FACADE_EXPORT")

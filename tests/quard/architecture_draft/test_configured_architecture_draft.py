@@ -520,6 +520,9 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             consumer.write_text(original_consumer.replace(
                 "from other.group.deep.aliases import PublicService",
                 "from demo import PublicPort as PublicService"))
+            consumer.with_suffix(".pyi").write_text(consumer.with_suffix(".pyi").read_text().replace(
+                "from other.group.deep.aliases import PublicService",
+                "from demo import PublicPort as PublicService"))
             assembly = root / "src/other/group/deep/main"
             assembly.mkdir()
             (assembly / "__init__.py").write_text("")
@@ -573,6 +576,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 (group, "from .service import Missing\n", "UNRESOLVED_FACADE_EXPORT"),
                 (group, "__all__ = ['Unknown']\n", "UNRESOLVED_FACADE_EXPORT"),
                 (group, "__all__ = names\n", "UNRESOLVED_FACADE_EXPORT"),
+                (group, "if True:\n    from .sender import Sender as Conditional\n",
+                 "UNRESOLVED_FACADE_EXPORT"),
                 (group, "from .service import Service as Port\n", "CONFLICTING_FACADE_EXPORT"),
                 (stub, "from .sender import Sender as Port\n", "CONFLICTING_FACADE_EXPORT"),
                 (ancestor, "from .arbitrary.sender import Sender as PublicSender\n",
@@ -1437,6 +1442,126 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                          ["status"], "error")
         self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
         self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]))
+
+    def test_generated_provenance_disagreement_does_not_expose_contracts(self):
+        with TemporaryDirectory(prefix="quard-provenance-consumer-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            group = root / "src/demo/arbitrary"
+            alias = group / "contract_alias.py"
+            stub = alias.with_suffix(".pyi")
+            consumer = root / "src/other/group/deep/operations_utils.py"
+            original = consumer.read_text()
+            consumer.write_text("from demo.arbitrary.contract_alias import Port\n" + original +
+                                "\ndef inspect_port(value: Port) -> str:\n"
+                                "    return value.first('ok')\n")
+            source = "from demo.arbitrary.service import Service as Port\n__all__ = ['Port']\n"
+            alias.write_text(source)
+            stub.write_text(source)
+
+            def check(rule: str, file: Path):
+                report = NativeCheckRunner().run(root)
+                self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
+                                 (1, 0), report["diagnostics"])
+                jobs = {item["name"]: item for item in report["tools"]}
+                self.assertEqual((jobs["contract-folders"]["status"],
+                                  jobs["contract-folders"]["exit_code"]), ("violations", 1))
+                self.assertTrue(any(item["rule"] == rule and item["path"] == str(
+                    file.relative_to(root)) and item["line"] > 0 and item["column"] > 0
+                    and not item["is_infrastructure_error"] for item in report["diagnostics"]),
+                    report["diagnostics"])
+                exposed = next(item["expose"] for item in load_toml(root / "tach.toml")[
+                    "interfaces"] if item["from"] == [r"^demo\.arbitrary\.contract_alias$"])
+                self.assertNotIn("^Port$", exposed)
+                self.assertEqual((jobs["tach"]["status"], jobs["tach"]["exit_code"]),
+                                 ("violations", 1), report["diagnostics"])
+                modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
+                self.assertNotIn("demo.arbitrary.contract_alias", modules[
+                    "other.group.deep.operations_utils"]["depends_on"])
+                self.assertFalse((root / ".quard/architecture.ready.json").exists())
+
+            clean = NativeCheckRunner().run(root)
+            self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
+            stub.write_text("from demo.arbitrary.sender import Sender as Port\n__all__ = ['Port']\n")
+            check("CONFLICTING_CONTRACT_ALIAS", stub)
+            stub.write_text(source)
+            alias.write_text(source + "Port = 42\n")
+            check("CONFLICTING_CONTRACT_ALIAS", alias)
+            alias.write_text(source)
+            stub.write_text("__all__ = ['Port']\n")
+            check("CONFLICTING_CONTRACT_ALIAS", alias)
+            stub.write_text(source)
+            consumer.write_text(original)
+
+            contract_stub = group / "service.pyi"
+            contract_stub.write_text("class Service(object):\n    def first(self, value: str) -> str: ...\n")
+            report = NativeCheckRunner().run(root)
+            self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
+                             (1, 0), report["diagnostics"])
+            self.assertTrue(any(item["rule"] == "CONFLICTING_MODULE_ROLE" and item["path"] ==
+                                str(contract_stub.relative_to(root)) for item in report["diagnostics"]))
+            self.assertNotIn("^Service$", next(item["expose"] for item in
+                load_toml(root / "tach.toml")["interfaces"] if item["from"] ==
+                [r"^demo\.arbitrary\.service$"]))
+            self.assertEqual(next(item["layer"] for item in load_toml(root / "tach.toml")[
+                "modules"] if item["path"] == "demo.arbitrary.service"), "Infrastructure")
+
+    def test_generated_real_failures_keep_independent_full_check_findings(self):
+        with TemporaryDirectory(prefix="quard-fail-closed-consumer-") as directory:
+            root = Path(directory)
+            utility = self.multi_package_fixture(root)
+            utility.write_text(utility.read_text() + "\nfrom demo.arbitrary.sender import Sender\n"
+                               "import tomlkit\n")
+
+            def check_failure(report: dict[str, Any], job: str, rule: str):
+                self.assertEqual(report["exit_code"], 2, report["diagnostics"])
+                self.assertGreater(report["summary"]["infrastructure_errors"], 0)
+                jobs = {item["name"]: item for item in report["tools"]}
+                self.assertEqual(jobs[job]["status"], "error", jobs[job])
+                self.assertTrue(any(item.get("is_infrastructure_error") and item["rule"] == rule
+                                    for item in report["diagnostics"]), report["diagnostics"])
+                self.assertTrue(any(item.get("job") == "pylint-production" and item["rule"] ==
+                                    "W0611" for item in report["diagnostics"]), report["diagnostics"])
+                for stream in jobs[job]["raw_output"].values():
+                    self.assertTrue((root / stream).is_file(), stream)
+                self.assertEqual(read_json(root / ".quard/reports/latest.json")["exit_code"], 2)
+                return jobs
+
+            source = root / "src/demo/arbitrary/sender.py"
+            original = source.read_text()
+            source.write_text(original + "\nclass Broken(\n")
+            parsed = NativeCheckRunner().run(root)
+            jobs = check_failure(parsed, "contract-folders", "CONTRACT_FOLDERS_PARSE_ERROR")
+            self.assertEqual(jobs["contract-folders"]["exit_code"], 2)
+            self.assertEqual(jobs["tach"]["status"], "blocked")
+            source.write_text(original)
+
+            from quard.check_runner import native_check_runner
+            original_jobs = native_check_runner.make_jobs
+
+            def broken_worker(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+                jobs = original_jobs(*args, **kwargs)
+                next(item for item in jobs if item["name"] == "contract-folders")[
+                    "argv"].append("--invalid-worker-flag")
+                return jobs
+
+            with patch.object(native_check_runner, "make_jobs", side_effect=broken_worker):
+                failed = NativeCheckRunner().run(root)
+            jobs = check_failure(failed, "contract-folders", "UNREADABLE_TOOL_OUTPUT")
+            self.assertNotEqual(jobs["contract-folders"]["exit_code"], 0)
+            self.assertEqual((jobs["tach"]["status"], jobs["tach"]["exit_code"]),
+                             ("violations", 1))
+            self.assertEqual((jobs["tach-external"]["status"], jobs["tach-external"]["exit_code"]),
+                             ("violations", 1))
+            self.assertTrue(any(item["job"] in {"tach", "tach-external"} for item in
+                                failed["diagnostics"]))
+
+            config = root / ".quard/config.toml"
+            config.write_text(config.read_text().replace(
+                "tach = true\n", "tach = true\ninvalid_check = true\n"))
+            configured = NativeCheckRunner().run(root)
+            jobs = check_failure(configured, "constructor-purity", "INVALID_CHECKS")
+            self.assertEqual(jobs["constructor-purity"]["status"], "error")
 
     def test_generated_install_preserves_reviewed_configuration(self):
         root = self.generated_fixture()
