@@ -4,7 +4,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from quard.architecture_draft.group_area_utils import ORDINARY, area
+from quard.architecture_draft.boundary_source_utils import destination, source_imports
+from quard.architecture_draft.group_area_utils import MAIN_FOLDER, ORDINARY, area
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
@@ -166,6 +167,33 @@ def _value_imports(path: str, tree: ast.Module, ownership: GeneratedOwnership
     return results
 
 
+def _bootstrap_imports(path: str, tree: ast.Module,
+                       sources: dict[str, str]) -> list[dict[str, object]]:
+    """Check source, typing and stub imports into Bootstrap.
+
+    Args:
+        path (str): Relative production file path.
+        tree (ast.Module): Parsed source or stub.
+        sources (dict[str, str]): Local module names and their source paths.
+
+    Returns:
+        list[dict[str, object]]: Positioned forbidden dependencies.
+    """
+    name = module_name(path)
+    results: list[dict[str, object]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        for target in source_imports(name, path, ast.Module(body=[node], type_ignores=[])):
+            module = destination(target, sources)
+            if module is None or module == name or area(sources[module])[1] != MAIN_FOLDER:
+                continue
+            results.append({**_location(path, node, target), "rule": "BOOTSTRAP_DEPENDENCY",
+                            "message": f"{path}: {target} belongs to Bootstrap; "
+                                       + "Bootstrap modules cannot be dependencies."})
+    return results
+
+
 def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list[dict[str, object]]:
     """Check production modules and their companion stubs for proven roles.
 
@@ -182,10 +210,13 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
             declarations.setdefault(path, []).append((name, node))
     results: list[dict[str, object]] = []
     results.extend(facade_evidence(trees, ownership)[1])
+    sources = {module_name(path): path for path in sorted(trees)
+               if Path(path).parts[0] == SOURCE_ROOT}
     for path, tree in sorted(trees.items()):
         if Path(path).parts[0] != SOURCE_ROOT:
             continue
         declared = declarations.get(path, [])
+        results.extend(_bootstrap_imports(path, tree, sources))
         results.extend(_value_imports(path, tree, ownership))
         results.extend(concrete_imports(path, tree, trees, ownership))
         results.extend(concrete_references(path, tree, ownership))

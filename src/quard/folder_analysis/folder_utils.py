@@ -37,9 +37,17 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
     if generated(root) and read_json(root / MARKER) == IDENTITY:
+        from quard._policy import read_scope
+        from quard.architecture_draft.group_area_utils import main_directories
         from quard.folder_analysis.generated_group_roles_utils import analyze as group_roles
         from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 
+        main_areas = main_directories(root, read_scope(root))
+        for path in main_areas if len(main_areas) > 1 else []:
+            diagnostics.append({"rule": "MULTIPLE_MAIN_DIRECTORIES", "path": path,
+                                "line": 1, "column": 1, "symbol": "main",
+                                "message": f"{path}: generated architecture permits only one "
+                                           + "production main directory."})
         for path in sorted(trees):
             if (Path(path).parts[0] == SOURCE_ROOT
                     and len(Path(path).parts) == SOURCE_ROOT_DEPTH):

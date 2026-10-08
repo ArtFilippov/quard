@@ -678,7 +678,12 @@ import would also expose its private utilities. Envelopes may import Contract,
 Infrastructure and Envelopes, and Bootstrap may import those three roles, but neither
 may depend on Bootstrap peers. Only observed eligible source imports become explicit
 dependencies; empty dependency lists remain explicit. Tach's exact/unused, cycles,
-type-checking imports and external job are retained.
+type-checking imports and external job are retained. A single `main/` directory,
+including an empty one, is allowed anywhere in production; a second receives a
+positioned generated folder violation. Nested folders beneath `envelopes/` are
+ordinary groups. Imports into Bootstrap from other Bootstrap modules or envelopes
+receive native Tach findings in source and positioned folder findings in source and
+stubs. A `main.py` file alone remains ordinary.
 The generated version-2 folder job checks production source and stub declarations
 for mixed Contract/Infrastructure modules, source/stub role conflicts, unresolved
 local ancestry, and cross-group implementations missing a directly inherited

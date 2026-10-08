@@ -53,7 +53,11 @@ source imports become exact dependency declarations; unauthorized imports of con
 implementations and private utilities remain native Tach violations. Files anywhere
 under a production `main/` folder or a direct group's `envelopes/` folder may assemble
 concrete implementations from other groups,
-including type-only imports and companion stubs. Package facades may be empty or
+including type-only imports and companion stubs. Only the direct `envelopes/`
+directory assembles; nested ordinary directories follow ordinary rules. Exactly one
+`main/` directory is allowed across `src/`, even if another is empty. Neither
+envelopes nor main may import Bootstrap modules, including in stubs; Bootstrap
+modules may not import one another. Package facades may be empty or
 re-export proven contracts directly, through aliases or through ancestor facades;
 source and companion stub evidence must agree. Concrete classes and factory values
 cannot be exported, even when unused or listed in `__all__`. Import implementations

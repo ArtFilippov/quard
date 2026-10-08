@@ -316,7 +316,8 @@ def parse_contract_folders(text: str, root: Path) -> tuple[list[dict[str, Any]],
                   "CONCRETE_IMPLEMENTATION_REFERENCE",
                   "UNRESOLVED_FACADE_EXPORT", "CONFLICTING_FACADE_EXPORT",
                   "UNRESOLVED_FOLDER_OWNER", "ENVELOPE_FOLDER", "ENVELOPE_CLASS",
-                   "ENVELOPE_FILE", "ENVELOPE_INHERITANCE", "SOURCE_ROOT_LAYOUT"}
+                   "ENVELOPE_FILE", "ENVELOPE_INHERITANCE", "SOURCE_ROOT_LAYOUT",
+                   "MULTIPLE_MAIN_DIRECTORIES", "BOOTSTRAP_DEPENDENCY"}
     items = []
     for entry in obj["diagnostics"]:
         if not isinstance(entry, dict) or entry.get("rule") not in violations | {

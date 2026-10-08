@@ -1266,6 +1266,162 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             restored = check()
             self.assertEqual(restored["exit_code"], 0, restored["diagnostics"])
 
+    def test_generated_envelopes_and_unique_main_full_consumer(self):
+        with TemporaryDirectory(prefix="quard-assembly-areas-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            first = root / "src/demo/arbitrary/envelopes"
+            first.mkdir()
+            adapter = first / "adapter.py"
+            adapter.write_text("from typing import override\n"
+                               "from demo.arbitrary.service import Service\n"
+                               "from demo.arbitrary.sender import Sender\n"
+                               "class Adapter(Service):\n"
+                               "    @override\n"
+                               "    def first(self, value: str) -> str:\n"
+                               "        return Sender().first(value)\n"
+                               "    @override\n"
+                               "    def second(self, value: str) -> str:\n"
+                               "        return self.first(value + '!')\n")
+            second = root / "src/other/group/deep/envelopes"
+            second.mkdir()
+            relay = second / "relay.py"
+            relay.write_text("from typing import override\n"
+                             "from demo.arbitrary.service import Service\n"
+                             "from demo.arbitrary.envelopes.adapter import Adapter\n"
+                             "from demo.arbitrary.sender import Sender\n"
+                             "class Relay(Service):\n"
+                             "    @override\n"
+                             "    def first(self, value: str) -> str:\n"
+                             "        if value:\n"
+                             "            return Adapter().first(value)\n"
+                             "        return Sender().first('empty')\n"
+                             "    @override\n"
+                             "    def second(self, value: str) -> str:\n"
+                             "        return self.first(Sender().second(value))\n")
+            relay.with_suffix(".pyi").write_text(
+                "from typing import override\n"
+                "from demo.arbitrary.service import Service\n"
+                "from demo.arbitrary.envelopes.adapter import Adapter\n"
+                "from demo.arbitrary.sender import Sender\n"
+                "class Relay(Service):\n"
+                "    reference: Adapter | Sender\n"
+                "    @override\n"
+                "    def first(self, value: str) -> str: ...\n"
+                "    @override\n"
+                "    def second(self, value: str) -> str: ...\n")
+            main = root / "src/other/group/deep/main"
+            main.mkdir()
+            wire = main / "wire.py"
+            wire.write_text("from demo.arbitrary.service import Service\n"
+                            "from demo.arbitrary.sender import Sender\n"
+                            "from other.group.deep.envelopes.relay import Relay\n"
+                            "def connect(value: Sender | Relay | None = None) -> Service:\n"
+                            "    return Relay() if (value or Sender()).first('ok') else Sender()\n")
+            wire.with_suffix(".pyi").write_text(
+                "from demo.arbitrary.service import Service\n"
+                "from demo.arbitrary.sender import Sender\n"
+                "from other.group.deep.envelopes.relay import Relay\n"
+                "def connect(value: Sender | Relay | None = None) -> Service: ...\n")
+            nested_main = main / "nested"
+            nested_main.mkdir()
+            (nested_main / "entry.py").write_text(
+                "from demo.arbitrary.sender import Sender\n"
+                "result = Sender().first('nested')\n")
+
+            def check() -> dict[str, Any]:
+                report = NativeCheckRunner().run(root)
+                self.assertEqual(report["summary"]["infrastructure_errors"], 0,
+                                 report["diagnostics"])
+                self.assertEqual(read_json(root / ".quard/reports/latest.json")["exit_code"],
+                                 report["exit_code"])
+                return report
+
+            clean = check()
+            self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
+            self.assertTrue(all(job["status"] in {"passed", "skipped"} for job in clean["tools"]))
+            modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
+            self.assertEqual(modules["demo.arbitrary.envelopes.adapter"]["layer"], "Envelopes")
+            self.assertEqual(modules["other.group.deep.envelopes.relay"]["layer"], "Envelopes")
+            self.assertEqual(modules["other.group.deep.main.wire"]["layer"], "Bootstrap")
+            self.assertEqual(modules["other.group.deep.main.nested.entry"]["layer"], "Bootstrap")
+            self.assertEqual(modules["other.group.main"]["layer"], "Contract")
+            self.assertEqual(modules["other.group.deep.envelopes.relay"]["depends_on"],
+                             ["demo.arbitrary.envelopes.adapter", "demo.arbitrary.sender",
+                              "demo.arbitrary.service"])
+            self.assertEqual(modules["other.group.deep.main.wire"]["depends_on"],
+                             ["demo.arbitrary.sender", "demo.arbitrary.service",
+                              "other.group.deep.envelopes.relay"])
+            self.assertEqual(modules["other.group.deep.main.nested.entry"]["depends_on"],
+                             ["demo.arbitrary.sender"])
+            executed = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                                "from other.group.deep.main.wire import connect; "
+                                "from other.group.deep.main.nested.entry import result; "
+                                "assert connect().first('ok') == 'ready:ok'; "
+                                "assert result == 'ready:nested'"], root, 10)
+            self.assertEqual(executed["exit_code"], 0, executed)
+
+            nested = second / "nested"
+            nested.mkdir()
+            (nested / "__init__.py").write_text("")
+            violations = (
+                (nested / "wire.py", "from demo.arbitrary.sender import Sender\n",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", True),
+                (nested / "wire.pyi", "from demo.arbitrary.sender import Sender\n",
+                 "CONCRETE_IMPLEMENTATION_IMPORT", False),
+                (root / "src/other/group/main.py",
+                 "from demo.arbitrary.sender import Sender\n", "CONCRETE_IMPLEMENTATION_IMPORT", True),
+                (wire, "import other.group.deep.main.extra\n", "BOOTSTRAP_DEPENDENCY", True),
+                (wire.with_suffix(".pyi"), "import other.group.deep.main.extra\n",
+                 "BOOTSTRAP_DEPENDENCY", False),
+                (relay, "import other.group.deep.main.extra\n",
+                 "BOOTSTRAP_DEPENDENCY", True),
+                (relay.with_suffix(".pyi"), "import other.group.deep.main.extra\n",
+                 "BOOTSTRAP_DEPENDENCY", False),
+                (wire, "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n"
+                 "    import other.group.deep.main.extra\n", "BOOTSTRAP_DEPENDENCY", True),
+            )
+            (main / "extra.py").write_text("")
+            for file, addition, rule, native in violations:
+                with self.subTest(file=file, rule=rule):
+                    original = file.read_text() if file.exists() else None
+                    file.write_text((original or "") + addition)
+                    try:
+                        report = check()
+                        self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+                        job = next(item for item in report["tools"] if item["name"] ==
+                                   "contract-folders")
+                        self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
+                        self.assertTrue(any(item["rule"] == rule and item["path"] ==
+                                            str(file.relative_to(root)) and item["line"] > 0 and
+                                            item["column"] > 0 and not item["is_infrastructure_error"]
+                                            for item in report["diagnostics"]), report["diagnostics"])
+                        tach = next(item for item in report["tools"] if item["name"] == "tach")
+                        self.assertEqual((tach["status"], tach["exit_code"]),
+                                         ("violations", 1) if native else ("passed", 0),
+                                         report["diagnostics"])
+                        if native:
+                            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                                str(file.relative_to(root)) for item in
+                                                report["diagnostics"]), report["diagnostics"])
+                    finally:
+                        if original is None:
+                            file.unlink()
+                        else:
+                            file.write_text(original)
+            (main / "extra.py").unlink()
+            for duplicate in (root / "src/demo/main", root / "src/demo/arbitrary/envelopes/main"):
+                with self.subTest(duplicate=duplicate):
+                    duplicate.mkdir()
+                    report = check()
+                    self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+                    self.assertTrue(any(item["rule"] == "MULTIPLE_MAIN_DIRECTORIES" and
+                                        item["path"] == str(duplicate.relative_to(root)) and
+                                        item["line"] == item["column"] == 1 for item in
+                                        report["diagnostics"]), report["diagnostics"])
+                    duplicate.rmdir()
+            self.assertEqual(check()["exit_code"], 0)
+
     def test_generated_native_error_is_not_mistaken_for_success(self):
         root = self.generated_fixture()
         self.install_generated_fixture(root)
