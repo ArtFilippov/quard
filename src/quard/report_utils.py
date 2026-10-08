@@ -612,7 +612,8 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
     return items
 
 
-def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list[str]) -> None:
+def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list[str],
+                           expected_kind: str) -> None:
     from quard.clone_engine_utils import EXPECTED
 
     if raw.get("engine") != EXPECTED or raw.get("sourcePaths") != [str(root / path)
@@ -639,8 +640,8 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
                 clone.get("lines", 0) for clone in raw["duplicates"] if isinstance(clone, dict))):
         raise ValueError("Inconsistent native engine accounting")
     for clone in raw["duplicates"]:
-        if not isinstance(clone, dict) or clone.get("kind") != "exact":
-            raise ValueError("Unexpected exact-engine clone kind")
+        if not isinstance(clone, dict) or clone.get("kind") != expected_kind:
+            raise ValueError("Unexpected native engine clone kind")
         for key in ("firstFile", "secondFile"):
             side = clone.get(key)
             if not isinstance(side, dict):
@@ -679,14 +680,15 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
 
 
 def parse_jscpd(payload: str, root: Path, expected_paths: list[str],
-                expected_engine: bool = False) -> list[dict[str, Any]]:
+                expected_engine: bool = False, expected_kind: str = "exact"
+                ) -> list[dict[str, Any]]:
     # Fail closed on a missing, truncated or incomplete native report.
     allowed = set(expected_paths)
     if expected_engine:
         raw = json.loads(payload)
         if not isinstance(raw, dict):
             raise ValueError("Missing native engine report")
-        _validate_clone_engine(raw, root, expected_paths)
+        _validate_clone_engine(raw, root, expected_paths, expected_kind)
     items: list[dict[str, Any]] = []
     for entry in _jscpd_duplicates(payload, len(allowed)):
         items.extend(_jscpd_clone(entry, root, allowed))
@@ -695,7 +697,7 @@ def parse_jscpd(payload: str, root: Path, expected_paths: list[str],
 
 def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | None = None,
               expected_paths: list[str] | None = None,
-              expected_engine: bool = False) -> dict[str, Any]:
+              expected_engine: bool = False, expected_kind: str = "exact") -> dict[str, Any]:
     text = result.get("stdout", "") + "\n" + result.get("stderr", "")
     error = result.get("error")
     items: list[dict[str, Any]] = []
@@ -719,7 +721,7 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
                 error = error or "PYDOCLINT_EXECUTION_ERROR"
         elif tool == "jscpd":
             payload = json_file.read_text(encoding="utf-8") if json_file else ""
-            items = parse_jscpd(payload, root, expected_paths or [], expected_engine)
+            items = parse_jscpd(payload, root, expected_paths or [], expected_engine, expected_kind)
             if result.get("exit_code") != (1 if items else 0):
                 error = error or "JSCPD_EXECUTION_ERROR"
         elif tool == "lcom4":

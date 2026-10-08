@@ -1,4 +1,4 @@
-"""Run the opt-in in-memory exact pass with the first-party native wheel."""
+"""Run the opt-in in-memory exact and renamed passes with the native wheel."""
 from __future__ import annotations
 
 import argparse
@@ -51,16 +51,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     _ = parser.add_argument("--manifest", type=Path, required=True)
     _ = parser.add_argument("--output", type=Path, required=True)
+    _ = parser.add_argument("--kind", choices=("exact", "renamed"), default="exact")
     args = parser.parse_args()
     native = importlib.import_module("quard_clones")
     versions = native.versions
     if metadata.version("quard-clones") != EXPECTED["quard-clones"] or dict(versions()) != EXPECTED:
         raise RuntimeError("quard-clones wheel or linked engine library version mismatch")
     sources, minimum = load_sources(args.manifest)
-    session = native.SourceSession(sources, minimum)
+    session = native.SourceSession(sources, minimum, renamed=args.kind == "renamed")
     if session.source_count() != len(sources):
         raise RuntimeError("incomplete in-memory clone scan")
-    report = json.loads(session.exact())
+    report = json.loads(session.renamed() if args.kind == "renamed" else session.exact())
     if report["statistics"]["total"]["sources"] != len(sources):
         raise RuntimeError("native source count mismatch")
     report["engine"] = dict(versions())

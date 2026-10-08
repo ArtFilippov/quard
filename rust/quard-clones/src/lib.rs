@@ -26,12 +26,14 @@ struct SourceSession {
     files: Vec<SourceFile>,
     prepared: Vec<cpd_core::detect::PreparedSource>,
     min_lines: usize,
+    renamed: bool,
 }
 
 #[pymethods]
 impl SourceSession {
     #[new]
-    fn new(sources: Vec<(String, String)>, min_lines: usize) -> PyResult<Self> {
+    #[pyo3(signature = (sources, min_lines, renamed=false))]
+    fn new(sources: Vec<(String, String)>, min_lines: usize, renamed: bool) -> PyResult<Self> {
         if sources.is_empty() || min_lines == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "nonempty sources and positive min_lines required",
@@ -42,6 +44,8 @@ impl SourceSession {
             min_tokens: 1,
             mode: Mode::Strict,
             no_gitignore: true,
+            ignore_identifiers: renamed,
+            ignore_literals: renamed,
             ..RunConfig::default()
         };
         let preparer = FilePreparer::new(&config);
@@ -72,24 +76,16 @@ impl SourceSession {
             files,
             prepared,
             min_lines,
+            renamed,
         })
     }
 
     fn exact(&self) -> PyResult<String> {
-        let clones = detect_prepared(
-            vec![self.prepared.clone()],
-            1,
-            self.min_lines,
-            &PathFilters::default(),
-        );
-        let clones: Vec<CpdClone> = clones
-            .into_iter()
-            .filter(|clone| KindFilter::Exact.matches(clone))
-            .collect();
-        let stats = statistics::compute(&self.files, &clones);
-        let duplicates: PyResult<Vec<Value>> =
-            clones.iter().map(|clone| self.duplicate(clone)).collect();
-        Ok(json!({"statistics": stats, "duplicates": duplicates?}).to_string())
+        self.detect(KindFilter::Exact, false)
+    }
+
+    fn renamed(&self) -> PyResult<String> {
+        self.detect(KindFilter::Renamed, true)
     }
 
     fn source_count(&self) -> usize {
@@ -98,6 +94,28 @@ impl SourceSession {
 }
 
 impl SourceSession {
+    fn detect(&self, kind: KindFilter, renamed: bool) -> PyResult<String> {
+        if self.renamed != renamed {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "clone session normalization does not match requested pass",
+            ));
+        }
+        let clones = detect_prepared(
+            vec![self.prepared.clone()],
+            1,
+            self.min_lines,
+            &PathFilters::default(),
+        );
+        let clones: Vec<CpdClone> = clones
+            .into_iter()
+            .filter(|clone| kind.matches(clone))
+            .collect();
+        let stats = statistics::compute(&self.files, &clones);
+        let duplicates: PyResult<Vec<Value>> =
+            clones.iter().map(|clone| self.duplicate(clone)).collect();
+        Ok(json!({"statistics": stats, "duplicates": duplicates?}).to_string())
+    }
+
     fn duplicate(&self, clone: &CpdClone) -> PyResult<Value> {
         let first = &clone.fragment_a;
         let second = &clone.fragment_b;

@@ -152,14 +152,15 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                     "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
                     "--reporters", "json", "--output", str(output_dir), "--exit-code",
                     "1", *clone_files]
-            if name == "jscpd" and os.environ.get("QUARD_CLONE_ENGINE") == "rust":
+            engine = name != "jscpd-similar" and os.environ.get("QUARD_CLONE_ENGINE") == "rust"
+            if engine:
                 manifest = run_dir / "clone-engine-files.json"
                 write_json(manifest, {"paths": eligible, "min_lines": min_lines}, root)
                 argv = [sys.executable, str(tool_dir() / "_clone_engine_worker.py"),
                         "--manifest", str(manifest), "--output",
-                        str(output_dir / "jscpd-report.json")]
+                        str(output_dir / "jscpd-report.json"), "--kind", kind]
             jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,
-                         "engine": name == "jscpd" and os.environ.get("QUARD_CLONE_ENGINE") == "rust",
+                         "engine": engine, "kind": kind,
                          "json_file": output_dir / "jscpd-report.json", "argv": argv})
     full_scope = sorted(files["production"] + files["tests"])
     for key, name in (("method_decorators", "method-decorators"),

@@ -1,4 +1,4 @@
-# In-memory exact clone engine alongside the CLI
+# In-memory exact and renamed clone engine alongside the CLI
 
 ## Decision
 
@@ -22,23 +22,31 @@ consumer, and runs its full clean and clone checks without a Rust toolchain in
 the consumer's `PATH`. The Quard runner selects the wheel for the exact job
 with `QUARD_CLONE_ENGINE=rust`. #114 calls for a full check that *can* use the
 wheel, not for every consumer to install it by default. Normal uv pinning and
-publication across supported Linux targets belong to #125. Until the other
-two in-memory jobs in #115 and #116 and the #125 installation gates are
+publication across supported Linux targets belong to #125. Until the remaining
+in-memory job in #116 and the #125 installation gates are
 verified, the normal CLI remains the default and remains available for
-differential comparisons. The renamed and gap-similar jobs remain independent
-CLI runs.
+differential comparisons. The gap-similar job remains an independent CLI run.
+#115 adds the renamed pass to `SourceSession`: it loads the same original source
+manifest and uses the same strict native `FilePreparer` pipeline with
+`ignore_identifiers` and `ignore_literals` enabled. The two jobs run in separate
+processes so their sessions, failures and native reports remain independent.
+The renamed job keeps only native Type 2 (`renamed`) matches; normalized Type 1
+matches do not displace findings from the separate unnormalized exact job.
+Both jobs use the same positive physical-line minimum and discovered Python scope.
 
 ## Reporting and failures
 
-The exact job retains the `jscpd` identity, a separate raw JSON report and
-stdout/stderr logs, original paths, one-based normalized locations and both
+The exact and renamed jobs retain the `jscpd` and `jscpd-renamed` identities,
+separate raw JSON reports and stdout/stderr logs, original paths, one-based
+normalized locations and both
 native fragment locations. The JSON adds `engine` (the wheel and linked-crate
 versions compiled from the actual Cargo.lock) and `sourcePaths` (the complete
 accepted source list). The worker
 checks wheel metadata and linked-version evidence against `tools.json`, and
 rejects missing or incomplete source preparation. The report parser checks
 the complete path list, native source count, original locations and fragment
-text. Mismatches, tool failures and invalid output are infrastructure errors
+text. The parser validates each job's expected native kind, counts and mappings.
+Mismatches, tool failures and invalid output are infrastructure errors
 (exit 2); other jobs finish and retain their own diagnostics. Native findings
 are never suppressed to obtain a passing result.
 
@@ -46,7 +54,7 @@ are never suppressed to obtain a passing result.
 
 The native API is pinned deliberately: updating the CLI or any engine crate
 requires rebuilding the wheel and repeating real CLI/library parity tests.
-The first slice uses the original source with physical-line accounting; source
+The exact and renamed slices use original source with physical-line accounting; source
 preparation and eligible-line accounting belong to later slices of #112.
 An explicit wheel-selection switch keeps the existing CLI executable and its
 independent native diagnostics in ordinary installations while the rest of the
