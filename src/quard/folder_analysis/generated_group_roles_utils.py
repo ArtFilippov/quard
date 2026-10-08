@@ -8,6 +8,7 @@ from quard.architecture_draft.group_area_utils import ORDINARY, area
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
+from quard.folder_analysis.generated_facades_utils import facade_evidence
 
 SOURCE_ROOT = "src"
 EXPORTS = "__all__"
@@ -189,6 +190,7 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
         if Path(path).parts[0] == SOURCE_ROOT:
             declarations.setdefault(path, []).append((name, node))
     results: list[dict[str, object]] = []
+    results.extend(facade_evidence(trees, ownership)[1])
     for path, tree in sorted(trees.items()):
         if Path(path).parts[0] != SOURCE_ROOT:
             continue

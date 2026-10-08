@@ -661,6 +661,12 @@ root config is ignored and restored by install, apply and check. Generated bound
 support multiple import packages, empty facades and nearest-directory groups for
 source and stubs. Contract-only declarations and proven aliases retain Contract
 roles; ordinary utilities remain Infrastructure, regardless of module names.
+Package `__init__` facades expose only proven contracts. Direct, aliased, chained
+and ancestor re-exports use source and companion-stub evidence; unresolved,
+conflicting or concrete exports (including factory values and `__all__` entries)
+receive positioned generated folder findings even without an importer. Tach exposes
+only proven contract names and does not authorize concrete facade imports for
+assembly; assembly imports implementations from their defining modules.
 The generated version-2 folder job checks production source and stub declarations
 for mixed Contract/Infrastructure modules, source/stub role conflicts, unresolved
 local ancestry, and cross-group implementations missing a directly inherited

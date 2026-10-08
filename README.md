@@ -53,8 +53,13 @@ source imports become exact dependency declarations; unauthorized imports of con
 implementations and private utilities remain native Tach violations. Files anywhere
 under a production `main/` folder or a direct group's `envelopes/` folder may assemble
 concrete implementations from other groups,
-including type-only imports and companion stubs. Other modules' utilities stay
-private. Ordinary modules named `main.py` do not gain assembly privileges. A Python
+including type-only imports and companion stubs. Package facades may be empty or
+re-export proven contracts directly, through aliases or through ancestor facades;
+source and companion stub evidence must agree. Concrete classes and factory values
+cannot be exported, even when unused or listed in `__all__`. Import implementations
+from their defining modules in assembly; split out concrete facade exports during
+migration. Other modules' utilities stay private. Ordinary modules named `main.py`
+do not gain assembly privileges. A Python
 file or stub directly under `src/` receives a positioned layout violation; other
 file types do not. Empty package facades and extra import packages are supported.
 Existing version-1 generated selections keep their previous boundaries; migrate

@@ -15,6 +15,7 @@ from quard.architecture_draft.group_area_utils import (
 )
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
+from quard.folder_analysis.generated_facades_utils import facade_evidence
 
 EXPORTS = "__all__"
 CONTRACT_EXPORT = "contract"
@@ -92,24 +93,34 @@ def _aliases(path: str, tree: ast.Module, ownership: GeneratedOwnership) -> set[
 def _exports(trees: dict[str, ast.Module], ownership: GeneratedOwnership
              ) -> dict[str, dict[str, set[str]]]:
     exports: dict[str, dict[str, set[str]]] = {}
+    facades, _ = facade_evidence(trees, ownership)
     for qualified, node, path in ownership.all_declarations():
         module = module_name(path)
+        if Path(path).stem == PACKAGE_FILE:
+            continue
         kind = CONTRACT_EXPORT if ownership.is_contract(qualified) else CONCRETE_EXPORT
         if kind == CONTRACT_EXPORT or qualified.rpartition(".")[0] == module:
             exports.setdefault(module, {}).setdefault(kind, set()).add(node.name)
     for path, tree in trees.items():
+        if Path(path).stem == PACKAGE_FILE:
+            continue
         if aliases := _aliases(path, tree, ownership):
             exports.setdefault(module_name(path), {}).setdefault(CONTRACT_EXPORT, set()).update(
                 aliases)
+    for module, names in facades.items():
+        exports.setdefault(module, {}).setdefault(CONTRACT_EXPORT, set()).update(names)
     return exports
 
 
 def _eligible(name: str, reference: tuple[str, str, str], ownership: GeneratedOwnership,
-               areas: dict[str, tuple[str, str]], *, exports: dict[str, dict[str, set[str]]]
+               areas: dict[str, tuple[str, str]], *, exports: dict[str, dict[str, set[str]]],
+               facades: set[str]
                ) -> bool:
     target_module, target, resolved = reference
     symbol = target.removeprefix(target_module + ".").partition(".")[0]
     target_exports = exports.get(target_module, {})
+    if target_module in facades:
+        return symbol in target_exports.get(CONTRACT_EXPORT, set())
     if ownership.is_contract(resolved) or symbol in target_exports.get(CONTRACT_EXPORT, set()):
         return True
     assembly = areas[name][1] in {MAIN_FOLDER, ENVELOPES_FOLDER}
@@ -119,7 +130,7 @@ def _eligible(name: str, reference: tuple[str, str, str], ownership: GeneratedOw
 
 def _dependencies(name: str, sources: dict[str, tuple[str, ast.Module]],
                   ownership: GeneratedOwnership, areas: dict[str, tuple[str, str]],
-                  *, exports: dict[str, dict[str, set[str]]]) -> list[str]:
+                  *, exports: dict[str, dict[str, set[str]]], facades: set[str]) -> list[str]:
     allowed: set[str] = set()
     if sources[name][0].endswith(".py"):
         for target in source_imports(name, *sources[name]):
@@ -128,7 +139,7 @@ def _dependencies(name: str, sources: dict[str, tuple[str, ast.Module]],
             if target_module is None or target_module == name:
                 continue
             if _eligible(name, (target_module, target, resolved), ownership, areas,
-                         exports=exports):
+                         exports=exports, facades=facades):
                 allowed.add(target_module)
     return sorted(allowed)
 
@@ -151,11 +162,15 @@ def _interfaces(name: str, areas: dict[str, tuple[str, str]],
     return interfaces
 
 
-def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: GeneratedOwnership
+def _roles(sources: dict[str, tuple[str, ast.Module]], ownership: GeneratedOwnership,
+           trees: dict[str, ast.Module]
            ) -> dict[str, str]:
     contracts = {name for name, _, _ in ownership.all_declarations()
                  if ownership.is_contract(name)}
-    return {name: _role(path, tree, ownership, contracts)
+    invalid = {item["path"] for item in facade_evidence(trees, ownership)[1]}
+    return {name: ("Infrastructure" if path in invalid else "Contract")
+            if Path(path).stem == PACKAGE_FILE and area(path)[1] == ORDINARY else
+            _role(path, tree, ownership, contracts)
             for name, (path, tree) in sources.items()}
 
 
@@ -163,15 +178,16 @@ def _boundaries(trees: dict[str, ast.Module], ownership: GeneratedOwnership,
                 sources: dict[str, tuple[str, ast.Module]]
                 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     areas = {name: area(path) for name, (path, _) in sources.items()}
-    roles = _roles(sources, ownership)
+    roles = _roles(sources, ownership, trees)
     exports = _exports(trees, ownership)
+    facades = {name for name, (path, _) in sources.items() if Path(path).stem == PACKAGE_FILE}
     assembly = {name for name in sources if areas[name][1] != ORDINARY}
     modules: list[dict[str, Any]] = []
     interfaces: list[dict[str, Any]] = []
     for name in sorted(sources):
         modules.append({"path": name, "layer": roles[name],
                         "depends_on": _dependencies(name, sources, ownership, areas,
-                                                    exports=exports),
+                                                    exports=exports, facades=facades),
                         "cannot_depend_on": sorted(other for other in sources if other != name
                                                     and roles[other] not in ALLOWED_ROLES[
                                                         roles[name]])})

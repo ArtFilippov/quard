@@ -502,6 +502,121 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                              load_toml(root / "tach.toml")["modules"] if item["path"] ==
                              "other.group.deep.operations_utils")["depends_on"])
 
+    def test_generated_package_facades_full_consumer_check(self):
+        with TemporaryDirectory(prefix="quard-facade-consumer-") as directory:
+            root = Path(directory)
+            self.multi_package_fixture(root)
+            group = root / "src/demo/arbitrary/__init__.py"
+            ancestor = root / "src/demo/__init__.py"
+            stub = group.with_suffix(".pyi")
+            group.write_text("from .service import Service as Port\n"
+                             "__all__ = ['Port']\n")
+            stub.write_text(group.read_text())
+            ancestor.write_text("from .arbitrary import Port as PublicPort\n"
+                                "__all__ = ['PublicPort']\n")
+            consumer = root / "src/other/group/deep/operations_utils.py"
+            original_consumer = consumer.read_text()
+            consumer.write_text(original_consumer.replace(
+                "from other.group.deep.aliases import PublicService",
+                "from demo import PublicPort as PublicService"))
+            assembly = root / "src/other/group/deep/main"
+            assembly.mkdir()
+            (assembly / "__init__.py").write_text("")
+            wire = assembly / "wire.py"
+            wire.write_text("from demo.arbitrary.sender import Sender\n"
+                            "result = Sender().first('ok')\n")
+
+            def check(expected: int, rule: str | None = None, path: str | None = None):
+                report = NativeCheckRunner().run(root)
+                self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
+                                 (expected, 0), report["diagnostics"])
+                job = next(item for item in report["tools"] if item["name"] ==
+                           "contract-folders")
+                self.assertEqual((job["status"], job["exit_code"]),
+                                 ("passed", 0) if rule is None else ("violations", 1),
+                                 report["diagnostics"])
+                if rule is not None:
+                    self.assertTrue(any(item["rule"] == rule and item["path"] == path and
+                                        item["line"] > 0 and item["column"] > 0 for item in
+                                        report["diagnostics"]), report["diagnostics"])
+                return report
+
+            clean = check(0)
+            self.assertTrue(all(item["status"] in {"passed", "skipped"} for item in
+                                clean["tools"]))
+            config = load_toml(root / "tach.toml")
+            self.assertEqual(next(item for item in config["interfaces"] if item["from"] ==
+                                  [r"^demo\.arbitrary$"])["expose"], [r"^Port$"])
+            execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                                 "from other.group.deep.main.wire import result; "
+                                 "assert result == 'ready:ok'"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
+            original_ancestor = ancestor.read_text()
+            ancestor.write_text("from .arbitrary import Port\n"
+                                "PublicPort = Port\n__all__ = ['PublicPort']\n")
+            check(0)
+            ancestor.write_text(original_ancestor)
+
+            original_stub = stub.read_text()
+            stub.write_text(original_stub.replace("['Port']", "[]"))
+            check(1, "CONFLICTING_FACADE_EXPORT", str(stub.relative_to(root)))
+            stub.write_text(original_stub)
+
+            for file, contents, rule in (
+                (group, "from .sender import Sender\n", "CONCRETE_FACADE_EXPORT"),
+                (group, "from .sender import Sender as PublicSender\n",
+                 "CONCRETE_FACADE_EXPORT"),
+                (group, "from .sender import Sender as PublicSender\n"
+                        "__all__ = ['PublicSender']\n", "CONCRETE_FACADE_EXPORT"),
+                (group, "from .service import Missing\n", "UNRESOLVED_FACADE_EXPORT"),
+                (group, "__all__ = ['Unknown']\n", "UNRESOLVED_FACADE_EXPORT"),
+                (group, "__all__ = names\n", "UNRESOLVED_FACADE_EXPORT"),
+                (group, "from .service import Service as Port\n", "CONFLICTING_FACADE_EXPORT"),
+                (stub, "from .sender import Sender as Port\n", "CONFLICTING_FACADE_EXPORT"),
+                (ancestor, "from .arbitrary.sender import Sender as PublicSender\n",
+                 "CONCRETE_FACADE_EXPORT"),
+                (group, "from .sender import Sender as PrivateSender\n"
+                        "PrivateSender = Port\n", "CONFLICTING_FACADE_EXPORT"),
+            ):
+                with self.subTest(file=file, rule=rule):
+                    before = file.read_text()
+                    file.write_text(before + contents)
+                    try:
+                        check(1, rule, str(file.relative_to(root)))
+                        if file == group:
+                            exposed = next(item["expose"] for item in
+                                           load_toml(root / "tach.toml")["interfaces"] if
+                                           item["from"] == [r"^demo\.arbitrary$"])
+                            self.assertEqual(exposed, [])
+                    finally:
+                        file.write_text(before)
+
+            value = root / "src/demo/arbitrary/value.py"
+            value.write_text("from typing import NamedTuple\n"
+                             "Value = NamedTuple('Value', [('code', str)])\n")
+            group.write_text(group.read_text() + "from .value import Value as PublicValue\n")
+            check(1, "CONCRETE_FACADE_EXPORT", str(group.relative_to(root)))
+            group.write_text(original_stub)
+            value.unlink()
+
+            # An indirect export is forbidden even when no consumer imports it.
+            group.write_text(group.read_text() + "from .sender import Sender as Hidden\n")
+            stub.write_text(group.read_text())
+            ancestor.write_text(ancestor.read_text() + "from .arbitrary import Hidden\n")
+            check(1, "CONCRETE_FACADE_EXPORT", str(ancestor.relative_to(root)))
+            group.write_text(original_stub)
+            stub.write_text(original_stub)
+            ancestor.write_text(original_ancestor)
+            wire.write_text("from demo.arbitrary import Sender\nresult = Sender().first('ok')\n")
+            rejected = NativeCheckRunner().run(root)
+            self.assertEqual((rejected["exit_code"], rejected["summary"]["infrastructure_errors"]),
+                             (1, 0), rejected["diagnostics"])
+            self.assertEqual(next(item for item in rejected["tools"] if item["name"] == "tach")
+                             ["status"], "violations")
+            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                str(wire.relative_to(root)) for item in rejected["diagnostics"]))
+
     def test_generated_multiple_contracts_combined_groups_and_mixed_roles(self):
         with TemporaryDirectory(prefix="quard-group-roles-") as directory:
             root = Path(directory)
