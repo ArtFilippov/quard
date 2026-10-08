@@ -76,6 +76,16 @@ bases and `Exception`, may be re-exported as contracts elsewhere in the project.
 Other symbols from the same package and local concrete subclasses are not contracts;
 unproved or conflicting external bases receive positioned findings. External
 dependency validation still runs separately through native Tach.
+Proven `typing.NamedTuple`/`collections.namedtuple` factory assignments are concrete
+classes, count toward the one-outer-class limit in source, stubs and tests, and
+cannot be exported as contracts. Put explicit Protocol value shapes in separate
+contract modules; annotate nested fields and cross-group consumers with those
+contracts. Concrete factory imports from ordinary production modules, including
+stubs, and concrete field/parameter/result annotations receive positioned findings.
+Unproved or shadowed factories and conflicting source/stub value evidence are
+reported rather than granting contract visibility. For migration, split files with
+multiple factory values and move concrete assembly imports into `envelopes/` or
+`main/`.
 Free functions and assembly classes may live under
 `main/`; placement checks continue outside it. The generated version-2 folder job
 reports source-root layout; reviewed and generated version-1 projects retain their

@@ -107,6 +107,27 @@ if True:
         self.assertEqual((result["status"], result["exit_code"], result["error"]),
                          ("error", 2, "OUTER_CLASSES_EXECUTION_ERROR"))
 
+    def test_proven_factories_count_but_shadowed_names_do_not_prove_classes(self):
+        self.put("src/demo/values.py", "from typing import NamedTuple as NT\n"
+                 "from collections import namedtuple as tuple_factory\n"
+                 "First = NT('First', [('code', str)])\n"
+                 "Second = tuple_factory('Second', 'code')\n")
+        self.put("src/demo/values.pyi", "from typing import NamedTuple\n"
+                 "First = NamedTuple('First', [('code', str)])\n"
+                 "Second = NamedTuple('Second', [('code', str)])\n")
+        self.put("src/demo/uncertain.py", "from typing import NamedTuple\n"
+                 "if True: NamedTuple = object\n"
+                 "Unknown = NamedTuple('Unknown', [('code', str)])\n"
+                 "class Other: pass\n")
+        result, _, _ = self.worker()
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual({(item["path"], item["symbol"], item["line"]) for item in
+                          result["diagnostics"]}, {
+                              ("src/demo/values.py", "First", 3),
+                              ("src/demo/values.py", "Second", 4),
+                              ("src/demo/values.pyi", "First", 2),
+                              ("src/demo/values.pyi", "Second", 3)})
+
     def test_full_check_records_job_and_raw_output_independently_of_lcom4(self):
         self.put("src/demo/domain/api.py", "class First: pass\nclass Second: pass\n")
         self.put("src/demo/domain/api.pyi", "class Stub: ...\n")

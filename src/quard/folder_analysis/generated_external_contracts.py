@@ -5,10 +5,12 @@ import ast
 from typing import override
 
 from quard.contract_analysis.contract_utils import dotted, module_name
+from quard.contract_analysis.value_factory_utils import ValueFactory, values
 from quard.folder_analysis.folder_ownership import FolderOwnership
 
 _NON_CONTRACT_BASES = frozenset({"builtins.object", "typing.Protocol",
-                                 "typing_extensions.Protocol", "abc.ABC", "abc.ABCMeta"})
+                                 "typing_extensions.Protocol", "abc.ABC", "abc.ABCMeta",
+                                 "typing.NamedTuple", "typing_extensions.NamedTuple"})
 
 
 class GeneratedOwnership(FolderOwnership):
@@ -21,6 +23,19 @@ class GeneratedOwnership(FolderOwnership):
             trees (dict[str, ast.Module]): Discovered parsed modules.
         """
         super().__init__(trees)
+        self.value_evidence: dict[str, list[ValueFactory]] = {
+            path: values(tree) for path, tree in trees.items()}
+        for path, evidence in self.value_evidence.items():
+            for value in evidence:
+                if value.declaration is None:
+                    continue
+                name = f"{module_name(path)}.{value.declaration.name}"
+                # A companion Protocol must not turn a concrete factory into an export.
+                self.contracts.discard(name)
+                self.declarations.append((name, value.declaration, path))
+                if name not in self.nodes or path.endswith(".py"):
+                    self.nodes[name] = value.declaration
+                    self.paths[name] = path
         self._ambiguous: dict[str, set[str]] = {}
         for path, tree in trees.items():
             origins: dict[str, set[str | None]] = {}

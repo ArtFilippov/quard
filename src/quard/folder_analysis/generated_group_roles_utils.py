@@ -140,6 +140,40 @@ def _stub_role(path: str, name: str, node: ast.ClassDef,
              "message": f"{name}: source and stub must agree on contract role."}]
 
 
+def _value_imports(path: str, tree: ast.Module, ownership: GeneratedOwnership
+                   ) -> list[dict[str, object]]:
+    if area(path)[1] != ORDINARY:
+        return []
+    concrete = {f"{module_name(source)}.{value.declaration.name}"
+                for source, evidence in ownership.value_evidence.items()
+                for value in evidence if value.declaration is not None}
+    concrete_modules = {name.rpartition(".")[0] for name in concrete}
+    results: list[dict[str, object]] = []
+    for statement in ast.walk(tree):
+        if not isinstance(statement, (ast.ImportFrom, ast.Import)):
+            continue
+        targets: list[tuple[str, str]] = []
+        if isinstance(statement, ast.ImportFrom):
+            module = module_name(path)
+            package = module if Path(path).stem == "__init__" else module.rpartition(".")[0]
+            parts = package.split(".")
+            prefix = parts[:len(parts) - statement.level + 1] if statement.level else []
+            origin = ".".join([*prefix, statement.module] if statement.module else prefix)
+            targets.extend((f"{origin}.{alias.name}", alias.asname or alias.name)
+                           for alias in statement.names)
+        elif isinstance(statement, ast.Import):
+            targets.extend((alias.name, alias.asname or alias.name) for alias in statement.names)
+        for imported, symbol in targets:
+            target = ownership.provenance(imported)
+            if (target in concrete or target in concrete_modules) and module_name(path) != (
+                    target.rpartition(".")[0] if target in concrete else target):
+                results.append({**_location(path, statement, symbol),
+                                "rule": "CONCRETE_VALUE_DEPENDENCY",
+                                "message": f"{path}: {target} is a concrete value dependency; "
+                                           + "import its explicit contract instead."})
+    return results
+
+
 def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list[dict[str, object]]:
     """Check production modules and their companion stubs for proven roles.
 
@@ -159,6 +193,35 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
         if Path(path).parts[0] != SOURCE_ROOT:
             continue
         declared = declarations.get(path, [])
+        results.extend(_value_imports(path, tree, ownership))
+        for value in ownership.value_evidence.get(path, []):
+            if value.declaration is None:
+                results.append({**_location(path, value.assignment,
+                                             ast.unparse(value.assignment.targets[0])),
+                                "rule": "UNRESOLVED_VALUE_FACTORY",
+                                "message": f"{path}: value factory identity or fields are unproved."})
+                continue
+            companion = str(Path(path).with_suffix(".py")) if path.endswith(".pyi") else str(
+                Path(path).with_suffix(".pyi"))
+            peers = {item.declaration.name: item for item in
+                     ownership.value_evidence.get(companion, []) if item.declaration}
+            companion_class = any(isinstance(item, ast.ClassDef) and
+                                  item.name == value.declaration.name for item in
+                                  trees[companion].body) if companion in trees else False
+            if companion_class:
+                results.append({**_location(path, value.assignment, value.declaration.name),
+                                "rule": "CONFLICTING_VALUE_FACTORY",
+                                "message": f"{value.declaration.name}: source and stub must "
+                                           + "agree on value factory evidence."})
+            if (companion in trees and (peer := peers.get(value.declaration.name)) is not None
+                    and peer.declaration is not None):
+                if (peer.identity != value.identity or
+                        ast.dump(ast.Module(body=peer.declaration.body, type_ignores=[])) !=
+                        ast.dump(ast.Module(body=value.declaration.body, type_ignores=[]))):
+                    results.append({**_location(path, value.assignment, value.declaration.name),
+                                    "rule": "CONFLICTING_VALUE_FACTORY",
+                                    "message": f"{value.declaration.name}: source and stub value "
+                                               + "factory evidence must agree."})
         results.extend(_mixed(path, tree, declared, ownership))
         for name, node in declared:
             if ownership.conflicting_base(name, path):

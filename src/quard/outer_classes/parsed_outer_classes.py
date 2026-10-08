@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 from typing import override
 
+from quard.contract_analysis.value_factory_utils import values
 from quard.outer_classes.outer_classes import OuterClasses
 
 
@@ -25,6 +26,8 @@ class ParsedOuterClasses(OuterClasses):
                 visit(child, enclosed)
 
         visit(tree, False)
+        classes.extend(value.declaration for value in values(tree) if value.declaration is not None)
+        classes.sort(key=lambda node: (node.lineno, node.col_offset))
         return classes
 
     @override

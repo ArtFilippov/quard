@@ -108,12 +108,22 @@ violations baseline.
   `UNRESOLVED_DEPENDENCY_TYPE`, not a claim of proof. Unknown bare names and
   external types are not proven customer concrete classes; Pyright independently
   checks their validity. Parse and worker errors fail as infrastructure errors.
+  Generated version 2 also checks annotations on ordinary free functions and
+  concrete factory-created value fields, including stubs; another concrete class
+  in the same module does not become a contract by proximity. A value field that
+  refers to another concrete value uses an explicit local Protocol/abstract value
+  contract instead. Ordinary production imports of a proven factory value receive
+  `CONCRETE_VALUE_DEPENDENCY`, even when found only in a stub; native Tach retains
+  its separate source-import findings. Shadowed, unresolved and conflicting factory
+  evidence receives positioned generated folder diagnostics.
 * **Outer classes**: `MULTIPLE_OUTER_CLASSES` reports each outer class when a
   discovered `.py` or `.pyi` file contains more than one. Nested classes are allowed;
   a class inside a function counts unless enclosed by a class. Files without classes
   pass. Source and companion stubs are counted separately, across production and
   tests, independently of LCOM4 selection. Parse and worker failures are
   infrastructure errors; raw worker output and job status appear in the report.
+  Proven module-level `typing.NamedTuple`, `typing_extensions.NamedTuple` and
+  `collections.namedtuple` assignments with literal class names also count.
 * **Contract folders** (reviewed and generated version 1): `CONTRACT_FOLDER` requires each discovered local Protocol or
   abstract-interface class to reside in a folder and module whose names are the
   class name converted to snake_case (for example, `HTTPPort` in

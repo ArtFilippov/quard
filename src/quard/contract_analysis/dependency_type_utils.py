@@ -7,8 +7,12 @@ import json
 from pathlib import Path
 from typing import cast
 
+from quard._common import read_json
+from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER
+from quard.architecture_draft.group_area_utils import ORDINARY, area
 from quard.contract_analysis.contract_utils import dotted, module_name
 from quard.contract_analysis.contracts import Contracts
+from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 
 _SELF = frozenset({"Self", "typing.Self", "typing_extensions.Self"})
 _CONCRETE = "CONCRETE_DEPENDENCY_TYPE"
@@ -82,20 +86,22 @@ def _read_trees(root: Path, paths: list[str]
     return trees, diagnostics, error
 
 
-def _classification(index: Contracts, resolved: str | None, path: str
-                    ) -> tuple[str, str] | None:
+def _classification(index: Contracts, resolved: str | None, path: str, *, grouped: bool
+                     ) -> tuple[str, str] | None:
     if index.node_for(resolved) is not None:
         target = cast(str, resolved)
-        if index.declaration(target) or module_name(index.path_for(target)) == module_name(path):
+        if index.declaration(target) or (not grouped and
+                                         module_name(index.path_for(target)) == module_name(path)):
             return None
-        return _CONCRETE, "a concrete class from another module"
+        return _CONCRETE, ("a concrete class without a local contract" if grouped else
+                           "a concrete class from another module")
     if resolved and index.local_module(resolved):
         return _UNRESOLVED, "an unresolved customer type"
     return None
 
 
 def _violation(index: Contracts, owner: tuple[str, str], annotation: tuple[ast.expr, str],
-               reference: ast.expr) -> dict[str, object] | None:
+               reference: ast.expr, *, grouped: bool) -> dict[str, object] | None:
     name, path = owner
     text = dotted(reference)
     if not text or text in _SELF:
@@ -103,7 +109,7 @@ def _violation(index: Contracts, owner: tuple[str, str], annotation: tuple[ast.e
     resolved = index.resolved(name, reference, path)
     if resolved in _SELF or resolved == name:
         return None
-    if (classification := _classification(index, resolved, path)) is None:
+    if (classification := _classification(index, resolved, path, grouped=grouped)) is None:
         return None
     position = annotation[0] if isinstance(annotation[0], ast.Constant) else reference
     return {"rule": classification[0], "path": path, "line": position.lineno,
@@ -114,7 +120,7 @@ def _violation(index: Contracts, owner: tuple[str, str], annotation: tuple[ast.e
                         + "use a local contract.")}
 
 
-def _class_diagnostics(index: Contracts, owner: tuple[str, ast.ClassDef, str]
+def _class_diagnostics(index: Contracts, owner: tuple[str, ast.ClassDef, str], *, grouped: bool
                        ) -> list[dict[str, object]]:
     name, node, path = owner
     parts = Path(path).parts
@@ -123,16 +129,44 @@ def _class_diagnostics(index: Contracts, owner: tuple[str, ast.ClassDef, str]
     results: list[dict[str, object]] = []
     for annotation in _annotations(node):
         for reference in _types(annotation[0]):
-            if result := _violation(index, (name, path), annotation, reference):
+            if result := _violation(index, (name, path), annotation, reference, grouped=grouped):
                 results.append(result)
+    return results
+
+
+def _function_diagnostics(index: Contracts, trees: dict[str, ast.Module]
+                          ) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for path, tree in trees.items():
+        if Path(path).parts[0] != _SOURCE_ROOT or area(path)[1] != ORDINARY:
+            continue
+        for function in tree.body:
+            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name = f"{module_name(path)}.{function.name}"
+                annotations = _method_annotations(function)
+            elif isinstance(function, ast.AnnAssign) and isinstance(function.target, ast.Name):
+                name = module_name(path)
+                annotations = [(function.annotation, function.target.id)]
+            else:
+                continue
+            for annotation in annotations:
+                for reference in _types(annotation[0]):
+                    if result := _violation(index, (name, path), annotation, reference,
+                                            grouped=True):
+                        results.append(result)
     return results
 
 
 def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
     trees, diagnostics, error = _read_trees(root, paths)
-    index = Contracts(trees)
+    grouped = ((root / MARKER).exists() and read_json(root / MARKER) == IDENTITY)
+    index = GeneratedOwnership(trees) if grouped else Contracts(trees)
     for owner in index.all_declarations():
-        diagnostics.extend(_class_diagnostics(index, owner))
+        diagnostics.extend(_class_diagnostics(index, owner, grouped=grouped and
+                                             Path(owner[2]).parts[0] == _SOURCE_ROOT and
+                                              area(owner[2])[1] == ORDINARY))
+    if grouped:
+        diagnostics.extend(_function_diagnostics(index, trees))
     return diagnostics, error
 
 

@@ -13,8 +13,10 @@ import unittest
 import tomlkit
 
 if TYPE_CHECKING:
-    from quard._common import QuardError, capture, load_toml
+    from quard._common import QuardError, capture, load_toml, write_json
     from quard.policy_utils import configure
+    from quard.audit_utils import discover_plugins
+    from quard.architecture_draft.generated_selection_utils import IDENTITY
     from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
     from quard.check_runner.native_check_runner import NativeCheckRunner
     from quard.folder_analysis.folder_ownership import FolderOwnership
@@ -31,6 +33,9 @@ if not TYPE_CHECKING:
     QuardError = common.QuardError
     capture = common.capture
     load_toml = common.load_toml
+    write_json = common.write_json
+    discover_plugins = import_module("quard.audit_utils").discover_plugins
+    IDENTITY = import_module("quard.architecture_draft.generated_selection_utils").IDENTITY
     ConfiguredArchitectureDraft = import_module(
         "quard.architecture_draft.configured_architecture_draft").ConfiguredArchitectureDraft
     run = import_module("quard.tach_worker_utils").run
@@ -43,6 +48,158 @@ if not TYPE_CHECKING:
 
 
 class TestArchitectureDraft(unittest.TestCase):
+    def test_generated_value_contracts_and_independent_forbidden_exposures(self):
+        with TemporaryDirectory(prefix="quard-factory-values-") as directory:
+            root = Path(directory)
+            create_repo(root, ready=False)
+            write_json(root / ".quard/architecture.generated.json", IDENTITY)
+            (root / "src/demo/domain/api.py").write_text("")
+            (root / "tests/test_value.py").write_text("")
+            setting = root / ".quard/config.toml"
+            setting.write_text(setting.read_text().replace("dependency_types = false",
+                                                           "dependency_types = true"))
+            for folder in ("src/demo/arbitrary", "src/other", "src/other/group",
+                           "src/other/group/deep"):
+                location = root / folder
+                location.mkdir(parents=True, exist_ok=True)
+                (location / "__init__.py").write_text("")
+            group = root / "src/demo/arbitrary"
+            (group / "identity_shape.py").write_text(
+                "from typing import Protocol\n\n"
+                + "class IdentityShape(Protocol):\n"
+                + "    @property\n    def code(self) -> str: ...\n")
+            (group / "evidence_shape.py").write_text(
+                "from typing import Protocol\n"
+                + "from demo.arbitrary.identity_shape import IdentityShape\n\n"
+                + "class EvidenceShape(Protocol):\n"
+                + "    @property\n    def identity(self) -> IdentityShape: ...\n")
+            identity = group / "identity.py"
+            identity.write_text("from typing import NamedTuple\n\n"
+                                + "Identity = NamedTuple('Identity', [('code', str)])\n")
+            evidence = group / "evidence.py"
+            evidence.write_text("from typing import NamedTuple\n"
+                                + "from demo.arbitrary.identity_shape import IdentityShape\n\n"
+                                + "Evidence = NamedTuple('Evidence', [('identity', IdentityShape)])\n")
+            stub = evidence.with_suffix(".pyi")
+            stub.write_text(evidence.read_text())
+            client = root / "src/other/group/deep/value_utils.py"
+            client.write_text("from demo.arbitrary.evidence_shape import EvidenceShape\n\n"
+                              + "def read_value(value: EvidenceShape) -> str:\n"
+                              + "    return value.identity.code\n")
+            logs = root / ".quard/logs/install-probes"
+            logs.mkdir(parents=True)
+            plugins, catalog = discover_plugins(root, logs)
+            write_json(root / ".quard/pylint-catalog.json", catalog)
+            configure(root, initial=True, plugins=plugins, catalog=catalog)
+
+            def check(expected: int, job: str, rule: str | None = None,
+                      path: str | None = None):
+                report = NativeCheckRunner().run(root)
+                self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
+                                 (expected, 0), report["diagnostics"])
+                jobs = {item["name"]: item for item in report["tools"]}
+                self.assertEqual((jobs[job]["status"], jobs[job]["exit_code"]),
+                                 (("passed", 0) if not expected else ("violations", 1)),
+                                 report["diagnostics"])
+                if rule is not None:
+                    self.assertTrue(any(item["rule"] == rule and item["path"] == path and
+                                        item["line"] > 0 and item["column"] > 0
+                                        for item in report["diagnostics"]), report["diagnostics"])
+                return report
+
+            clean = check(0, "dependency-types")
+            self.assertTrue(all(job["status"] in {"passed", "skipped"} for job in clean["tools"]))
+            modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
+            self.assertEqual(modules["demo.arbitrary.evidence"]["layer"], "Infrastructure")
+            self.assertEqual(modules["demo.arbitrary.evidence_shape"]["layer"], "Contract")
+            self.assertEqual(modules["other.group.deep.value_utils"]["depends_on"],
+                             ["demo.arbitrary.evidence_shape"])
+            execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
+                                 + "from demo.arbitrary.identity import Identity; "
+                                 + "from demo.arbitrary.evidence import Evidence; "
+                                 + "from other.group.deep.value_utils import read_value; "
+                                 + "assert read_value(Evidence(Identity('ok'))) == 'ok'"], root, 10)
+            self.assertEqual(execution["exit_code"], 0, execution)
+
+            original = client.read_text()
+            client.write_text("from demo.arbitrary.evidence import Evidence\n\n"
+                              + "def read_value(value: Evidence) -> str:\n"
+                              + "    return value.identity.code\n")
+            report = check(1, "dependency-types", "CONCRETE_DEPENDENCY_TYPE",
+                           "src/other/group/deep/value_utils.py")
+            tach = next(job for job in report["tools"] if job["name"] == "tach")
+            self.assertEqual((tach["status"], tach["exit_code"]), ("violations", 1))
+            client.write_text(original)
+
+            client.write_text(original + "\nfrom demo.arbitrary.evidence import Evidence\n"
+                              + "current: Evidence\n")
+            check(1, "dependency-types", "CONCRETE_DEPENDENCY_TYPE",
+                  "src/other/group/deep/value_utils.py")
+            client.write_text(original)
+
+            before = evidence.read_text()
+            evidence.write_text(before.replace("IdentityShape", "Identity").replace(
+                "identity_shape", "identity"))
+            check(1, "dependency-types", "CONCRETE_DEPENDENCY_TYPE",
+                  "src/demo/arbitrary/evidence.py")
+            evidence.write_text(before)
+
+            stub_before = stub.read_text()
+            stub.write_text(stub_before.replace("IdentityShape", "Identity").replace(
+                "identity_shape", "identity"))
+            check(1, "dependency-types", "CONCRETE_DEPENDENCY_TYPE",
+                  "src/demo/arbitrary/evidence.pyi")
+            stub.write_text(stub_before)
+
+            stub.write_text(stub_before + "\nfrom .identity import Identity\n")
+            check(1, "contract-folders", "CONCRETE_VALUE_DEPENDENCY",
+                  "src/demo/arbitrary/evidence.pyi")
+            stub.write_text(stub_before)
+
+            stub.write_text(stub_before.replace("IdentityShape", "str"))
+            check(1, "contract-folders", "CONFLICTING_VALUE_FACTORY",
+                  "src/demo/arbitrary/evidence.pyi")
+            stub.write_text(stub_before)
+
+            stub.write_text("from typing import NamedTuple\n"
+                            + "class Evidence(NamedTuple):\n    identity: str\n")
+            check(1, "contract-folders", "CONFLICTING_VALUE_FACTORY",
+                  "src/demo/arbitrary/evidence.py")
+            stub.write_text(stub_before)
+
+            identity_before = identity.read_text()
+            identity.write_text(identity_before.replace("from typing import NamedTuple",
+                                                        "from typing import NamedTuple\n"
+                                                        + "NamedTuple = str"))
+            check(1, "contract-folders", "UNRESOLVED_VALUE_FACTORY",
+                  "src/demo/arbitrary/identity.py")
+            identity.write_text(identity_before)
+
+            stub.write_text(stub_before.replace("Evidence = NamedTuple(",
+                                                "from typing import Protocol\n"
+                                                + "class Evidence(Protocol): ...\n"
+                                                + "# Evidence = NamedTuple("))
+            check(1, "contract-folders", "CONFLICTING_MODULE_ROLE",
+                  "src/demo/arbitrary/evidence.pyi")
+            stub.write_text(stub_before)
+
+            identity.write_text(identity_before +
+                                "Second = NamedTuple('Second', [('code', str)])\n")
+            check(1, "outer-classes", "MULTIPLE_OUTER_CLASSES",
+                  "src/demo/arbitrary/identity.py")
+            identity.write_text(identity_before)
+
+            stub.write_text(stub_before + "Second = NamedTuple('Second', [('code', str)])\n")
+            check(1, "outer-classes", "MULTIPLE_OUTER_CLASSES",
+                  "src/demo/arbitrary/evidence.pyi")
+            stub.write_text(stub_before)
+
+            test_file = root / "tests/test_value.py"
+            test_file.write_text("from typing import NamedTuple\n"
+                                 + "First = NamedTuple('First', [('code', str)])\n"
+                                 + "Second = NamedTuple('Second', [('code', str)])\n")
+            check(1, "outer-classes", "MULTIPLE_OUTER_CLASSES", "tests/test_value.py")
+
     def fixture(self, directory: str) -> Path:
         return Path(directory)
 
