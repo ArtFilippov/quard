@@ -26,8 +26,16 @@ struct Selection {
     typing_modules: HashSet<String>,
     typed_dict_names: HashSet<String>,
     typed_dict_modules: HashSet<String>,
+    protocol_names: HashSet<String>,
+    protocol_modules: HashSet<String>,
+    abc_names: HashSet<String>,
+    abc_meta_names: HashSet<String>,
+    abc_modules: HashSet<String>,
+    abstract_names: HashSet<String>,
+    contracts: HashSet<String>,
     schemas: Vec<Vec<(usize, usize)>>,
     canonical_schemas: Vec<Unit>,
+    declarations: Vec<Unit>,
     text: String,
     error: Option<String>,
 }
@@ -40,6 +48,205 @@ struct Field {
 }
 
 impl Selection {
+    fn forget_binding(&mut self, binding: &str) {
+        self.alias_names.remove(binding);
+        self.typing_modules.remove(binding);
+        self.typed_dict_names.remove(binding);
+        self.typed_dict_modules.remove(binding);
+        self.protocol_names.remove(binding);
+        self.protocol_modules.remove(binding);
+        self.abc_names.remove(binding);
+        self.abc_meta_names.remove(binding);
+        self.abc_modules.remove(binding);
+        self.abstract_names.remove(binding);
+        self.contracts.remove(binding);
+    }
+
+    fn base_name(base: &Expr) -> &Expr {
+        if let Expr::Subscript(subscript) = base {
+            &subscript.value
+        } else {
+            base
+        }
+    }
+
+    fn imported_name(
+        base: &Expr,
+        names: &HashSet<String>,
+        modules: &HashSet<String>,
+        member: &str,
+    ) -> bool {
+        match Self::base_name(base) {
+            Expr::Name(name) => names.contains(name.id.as_str()),
+            Expr::Attribute(attr) => {
+                attr.attr.as_str() == member
+                    && matches!(attr.value.as_ref(), Expr::Name(name)
+                    if modules.contains(name.id.as_str()))
+            }
+            _ => false,
+        }
+    }
+
+    fn contract_class(&self, def: &ast::StmtClassDef) -> bool {
+        if self.protocol_class(def) {
+            return true;
+        }
+        let abc = def.bases.iter().any(|base| {
+            Self::imported_name(base, &self.abc_names, &self.abc_modules, "ABC")
+                || matches!(base, Expr::Name(name)
+                    if self.contracts.contains(name.id.as_str()))
+        }) || def.keywords.iter().any(|kw| {
+            kw.arg
+                .as_ref()
+                .is_some_and(|arg| arg.as_str() == "metaclass")
+                && Self::imported_name(
+                    &kw.value,
+                    &self.abc_meta_names,
+                    &self.abc_modules,
+                    "ABCMeta",
+                )
+        });
+        abc && def.body.iter().any(|stmt| match stmt {
+            Stmt::FunctionDef(method) => self.abstract_decorators(&method.decorator_list),
+            Stmt::AsyncFunctionDef(method) => self.abstract_decorators(&method.decorator_list),
+            _ => false,
+        })
+    }
+
+    fn protocol_class(&self, def: &ast::StmtClassDef) -> bool {
+        def.bases.iter().any(|base| {
+            Self::imported_name(
+                base,
+                &self.protocol_names,
+                &self.protocol_modules,
+                "Protocol",
+            )
+        })
+    }
+
+    fn abstract_decorators(&self, decorators: &[Expr]) -> bool {
+        decorators.iter().any(|dec| {
+            Self::imported_name(
+                dec,
+                &self.abstract_names,
+                &self.abc_modules,
+                "abstractmethod",
+            ) || Self::imported_name(
+                dec,
+                &self.abstract_names,
+                &self.abc_modules,
+                "abstractproperty",
+            )
+        })
+    }
+
+    fn contract_methods(&mut self, body: &[Stmt]) {
+        let mut text = String::new();
+        let mut lines = Vec::new();
+        let mut columns = Vec::new();
+        for stmt in body {
+            let (name, statements, decorators) = match stmt {
+                Stmt::FunctionDef(def) => (def.name.as_str(), &def.body, &def.decorator_list),
+                Stmt::AsyncFunctionDef(def) => (def.name.as_str(), &def.body, &def.decorator_list),
+                _ => continue,
+            };
+            if (name.starts_with("__") && name.ends_with("__"))
+                || decorators.iter().any(|decorator| match decorator {
+                    Expr::Name(value) => matches!(
+                        value.id.as_str(),
+                        "property" | "cached_property" | "abstractproperty"
+                    ),
+                    Expr::Attribute(value) => matches!(
+                        value.attr.as_str(),
+                        "property"
+                            | "cached_property"
+                            | "abstractproperty"
+                            | "getter"
+                            | "setter"
+                            | "deleter"
+                    ),
+                    _ => false,
+                })
+            {
+                continue;
+            }
+            let statements = if matches!(statements.first(), Some(Stmt::Expr(expr))
+                if matches!(expr.value.as_ref(), Expr::Constant(value)
+                    if matches!(value.value, Constant::Str(_))))
+            {
+                &statements[1..]
+            } else {
+                statements.as_slice()
+            };
+            if statements.len() != 1 || !Self::placeholder(&statements[0]) {
+                continue;
+            }
+            let start: usize = stmt.range().start().into();
+            let body_start: usize = statements[0].range().start().into();
+            let body_end: usize = statements[0].range().end().into();
+            let signature_line = self.text[..start].bytes().filter(|b| *b == b'\n').count() + 1;
+            let placeholder_line = self.text[..body_start]
+                .bytes()
+                .filter(|b| *b == b'\n')
+                .count()
+                + 1;
+            if self.text[body_start..body_end].contains('\n') {
+                continue;
+            }
+            let signature_column = start - self.text[..start].rfind('\n').map_or(0, |i| i + 1);
+            let body_column = body_start - self.text[..body_start].rfind('\n').map_or(0, |i| i + 1);
+            let placeholder = &self.text[body_start..body_end];
+            if placeholder_line == signature_line {
+                let signature = self.text[start..body_start].trim_end();
+                if !signature.ends_with(':') {
+                    continue;
+                }
+                let canonical = format!("{signature} {placeholder}");
+                let mut map: Vec<usize> = (0..=signature.len())
+                    .map(|i| signature_column + i)
+                    .collect();
+                map.push(body_column);
+                map.extend((1..=placeholder.len()).map(|i| body_column + i));
+                text.push_str(&canonical);
+                text.push('\n');
+                lines.push(signature_line);
+                columns.push(map);
+                continue;
+            }
+            let Some(end) = self.text[start..body_start].find('\n').map(|i| start + i) else {
+                continue;
+            };
+            let signature = self.text[start..end].trim_end();
+            if !signature.ends_with(':') {
+                continue;
+            }
+            text.push_str(signature);
+            text.push('\n');
+            lines.push(signature_line);
+            columns.push(
+                (0..=signature.len())
+                    .map(|i| signature_column + i)
+                    .collect(),
+            );
+            // Tie the placeholder to its declaration: repeated pass/ellipsis alone
+            // must never match methods whose names or signatures differ.
+            let synthetic = format!("{signature} {placeholder}");
+            let mut map = vec![body_column; signature.len() + 2];
+            map.extend((1..=placeholder.len()).map(|i| body_column + i));
+            text.push_str(&synthetic);
+            text.push('\n');
+            lines.push(placeholder_line);
+            columns.push(map);
+        }
+        if !lines.is_empty() {
+            self.declarations.push(Unit {
+                text,
+                lines,
+                columns: Some(columns),
+            });
+        }
+    }
+
     fn placeholder(stmt: &Stmt) -> bool {
         match stmt {
             Stmt::Pass(_) => true,
@@ -80,23 +287,20 @@ impl Selection {
                         || module.split('.').next().unwrap_or(module),
                         |name| name.as_str(),
                     );
-                    self.alias_names.remove(binding);
-                    self.typing_modules.remove(binding);
-                    self.typed_dict_names.remove(binding);
-                    self.typed_dict_modules.remove(binding);
+                    self.forget_binding(binding);
                     if matches!(module, "typing" | "typing_extensions") {
                         self.typing_modules.insert(binding.to_owned());
                         self.typed_dict_modules.insert(binding.to_owned());
+                        self.protocol_modules.insert(binding.to_owned());
+                    } else if module == "abc" {
+                        self.abc_modules.insert(binding.to_owned());
                     }
                 }
             }
             Stmt::ImportFrom(node) => {
                 for alias in &node.names {
                     let binding = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
-                    self.alias_names.remove(binding);
-                    self.typing_modules.remove(binding);
-                    self.typed_dict_names.remove(binding);
-                    self.typed_dict_modules.remove(binding);
+                    self.forget_binding(binding);
                     if node.level.is_none_or(|level| level.to_u32() == 0)
                         && node.module.as_ref().is_some_and(|module| {
                             matches!(module.as_str(), "typing" | "typing_extensions")
@@ -113,6 +317,26 @@ impl Selection {
                     {
                         self.typed_dict_names.insert(binding.to_owned());
                     }
+                    if node.level.is_none_or(|level| level.to_u32() == 0) {
+                        match (
+                            node.module.as_ref().map(|m| m.as_str()),
+                            alias.name.as_str(),
+                        ) {
+                            (Some("typing" | "typing_extensions"), "Protocol") => {
+                                self.protocol_names.insert(binding.to_owned());
+                            }
+                            (Some("abc"), "ABC") => {
+                                self.abc_names.insert(binding.to_owned());
+                            }
+                            (Some("abc"), "ABCMeta") => {
+                                self.abc_meta_names.insert(binding.to_owned());
+                            }
+                            (Some("abc"), "abstractmethod" | "abstractproperty") => {
+                                self.abstract_names.insert(binding.to_owned());
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             _ => {}
@@ -122,10 +346,7 @@ impl Selection {
     fn forget_target(&mut self, target: &Expr) {
         match target {
             Expr::Name(name) => {
-                self.alias_names.remove(name.id.as_str());
-                self.typing_modules.remove(name.id.as_str());
-                self.typed_dict_names.remove(name.id.as_str());
-                self.typed_dict_modules.remove(name.id.as_str());
+                self.forget_binding(name.id.as_str());
             }
             Expr::Tuple(items) => {
                 for item in &items.elts {
@@ -149,16 +370,10 @@ impl Selection {
             .chain(&args.args)
             .chain(&args.kwonlyargs)
         {
-            self.alias_names.remove(argument.def.arg.as_str());
-            self.typing_modules.remove(argument.def.arg.as_str());
-            self.typed_dict_names.remove(argument.def.arg.as_str());
-            self.typed_dict_modules.remove(argument.def.arg.as_str());
+            self.forget_binding(argument.def.arg.as_str());
         }
         for argument in [&args.vararg, &args.kwarg].into_iter().flatten() {
-            self.alias_names.remove(argument.arg.as_str());
-            self.typing_modules.remove(argument.arg.as_str());
-            self.typed_dict_names.remove(argument.arg.as_str());
-            self.typed_dict_modules.remove(argument.arg.as_str());
+            self.forget_binding(argument.arg.as_str());
         }
     }
 
@@ -407,6 +622,13 @@ impl Selection {
         let parent_modules = self.typing_modules.clone();
         let parent_dict_names = self.typed_dict_names.clone();
         let parent_dict_modules = self.typed_dict_modules.clone();
+        let parent_protocol_names = self.protocol_names.clone();
+        let parent_protocol_modules = self.protocol_modules.clone();
+        let parent_abc_names = self.abc_names.clone();
+        let parent_abc_meta_names = self.abc_meta_names.clone();
+        let parent_abc_modules = self.abc_modules.clone();
+        let parent_abstract_names = self.abstract_names.clone();
+        let parent_contracts = self.contracts.clone();
         self.keep.push(Vec::new());
         self.remove.push(Vec::new());
         self.current = self.keep.len() - 1;
@@ -423,6 +645,13 @@ impl Selection {
         self.typing_modules = parent_modules;
         self.typed_dict_names = parent_dict_names;
         self.typed_dict_modules = parent_dict_modules;
+        self.protocol_names = parent_protocol_names;
+        self.protocol_modules = parent_protocol_modules;
+        self.abc_names = parent_abc_names;
+        self.abc_meta_names = parent_abc_meta_names;
+        self.abc_modules = parent_abc_modules;
+        self.abstract_names = parent_abstract_names;
+        self.contracts = parent_contracts;
     }
 }
 
@@ -433,27 +662,25 @@ impl Visitor for Selection {
         match node {
             Stmt::FunctionDef(def) => {
                 self.unit(def.body, span, false, Some(&def.args));
-                self.alias_names.remove(def.name.as_str());
-                self.typing_modules.remove(def.name.as_str());
-                self.typed_dict_names.remove(def.name.as_str());
-                self.typed_dict_modules.remove(def.name.as_str());
+                self.forget_binding(def.name.as_str());
             }
             Stmt::AsyncFunctionDef(def) => {
                 self.unit(def.body, span, false, Some(&def.args));
-                self.alias_names.remove(def.name.as_str());
-                self.typing_modules.remove(def.name.as_str());
-                self.typed_dict_names.remove(def.name.as_str());
-                self.typed_dict_modules.remove(def.name.as_str());
+                self.forget_binding(def.name.as_str());
             }
             Stmt::ClassDef(def) => {
+                let contract = self.contract_class(&def);
+                if contract {
+                    self.contract_methods(&def.body);
+                }
                 if def.bases.iter().any(|base| self.is_typed_dict(base)) {
                     self.schema_fields(&def.body);
                 }
                 self.unit(def.body, span, true, None);
-                self.alias_names.remove(def.name.as_str());
-                self.typing_modules.remove(def.name.as_str());
-                self.typed_dict_names.remove(def.name.as_str());
-                self.typed_dict_modules.remove(def.name.as_str());
+                self.forget_binding(def.name.as_str());
+                if contract {
+                    self.contracts.insert(def.name.to_string());
+                }
             }
             Stmt::Import(_) | Stmt::ImportFrom(_) => {
                 self.import_bindings(&node);
@@ -573,6 +800,7 @@ pub fn prepare(text: &str, path: &str) -> Result<Views, String> {
         )?
         .into_iter()
         .chain(selection.canonical_schemas)
+        .chain(selection.declarations)
         .collect(),
     })
 }

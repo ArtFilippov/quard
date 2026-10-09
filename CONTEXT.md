@@ -42,8 +42,11 @@ standalone `pass`, `...` and bare or literal-argument `raise NotImplementedError
 are placeholders, even alongside a docstring, and do not contribute to the
 shared behavior view. Other real statements, including `return None`, executable
 decorator implementations and real contract/special-method bodies remain eligible.
-A later exact contract-declaration view may count eligible declaration placeholders
-toward its physical line minimum without changing the behavior view.
+The exact contract-declaration view includes ordered one-line signatures and
+eligible placeholder lines of local Protocol and abstract-interface methods.
+Contract names and special double-underscore declarations do not count. Its
+placeholders can satisfy the physical line minimum without entering behavior;
+executable contract and special-method bodies remain behavioral.
 The effective clone minimum counts **eligible material** within a unit. Removing lines does not
 allow neighboring independent classes or functions to form one clone.
 

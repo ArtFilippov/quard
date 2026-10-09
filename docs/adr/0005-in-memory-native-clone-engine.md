@@ -107,6 +107,17 @@ from original files, including their original syntax. Each schema remains its
 own unit and uses the same eligible-line minimum; mapping/parser errors fail
 as infrastructure errors rather than silently returning an empty scan.
 
+#123 adds exact-only ordered method declarations from local Protocols and
+abstract interfaces. Each one-line signature retains its exact method name,
+parameters and return type; a standalone one-line declaration placeholder is
+tied to that signature so repeated `pass` or ellipsis cannot match differently
+named methods. The class name, decorators, documentation and special dunder
+and property-accessor declarations are not eligible. The same eligible
+physical-line minimum applies
+to signatures and placeholders; real bodies, including special-method bodies,
+remain in the behavior view. Native fragments map back to original signature
+and placeholder lines; renamed/similar never receive declaration units.
+
 ## Reporting and failures
 
 The three jobs retain the `jscpd`, `jscpd-renamed` and `jscpd-similar` identities,
@@ -132,8 +143,8 @@ The native API is pinned deliberately: updating the CLI or any engine crate
 requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
 and verifying the prepared-view fixtures with the real component.
 The ordinary CLI still uses original-source physical lines. The opt-in Rust
-path applies the shared minimum to eligible prepared lines. Declaration-only
-material for exact contract clones remains for later slices of #112.
+path applies the shared minimum to eligible prepared lines. Property accessors
+and multiline contract signature ranges remain for the dependent slice of #112.
 An explicit wheel-selection switch keeps the existing CLI executable and its
 independent native diagnostics in ordinary installations while the rest of the
 three-pass installation contract is built.

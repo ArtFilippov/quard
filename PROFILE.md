@@ -48,8 +48,16 @@ violations baseline.
    columns and verbatim fragments remain in reports. Different field names and
    types are never normalized in renamed/similar, whose behavior view excludes
    these declarations entirely. Ordinary annotation-only fields remain excluded.
-   Future exact contract declarations may separately
-   count eligible declaration placeholders as physical lines. This minimum is
+   The exact view also matches ordered one-line signatures of methods declared
+   in local Protocols and abstract interfaces, including exact method names
+   and eligible one-line placeholder bodies. Contract class names, decorators,
+   headers and documentation do not count. Declaration placeholders count
+   toward this view's physical eligible-line minimum, unlike behavior. Changed
+   method names, parameter or return signatures, or method order do not
+   become equivalent by normalization. Property accessors and special
+   `__dunder__` declarations do not count here; real bodies in contracts and
+   special methods remain behavioral.
+   Declarations do not enter renamed/similar. This minimum is
    distinct from Pylint's mandatory `min_similarity_lines` readability limit.
   With a separately installed, first-party `quard-clones==0.1.0` wheel and
   `QUARD_CLONE_ENGINE=rust`, all three jobs use the linked `cpd-core==0.1.20`,

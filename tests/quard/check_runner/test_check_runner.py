@@ -23,6 +23,7 @@ from quard.check_runner.runner_utils import installed_versions
 from quard.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
+from contract_clone_utils import verify_contract_methods
 from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_report,
                                        verify_mismatched_engine, verify_missing_wheel,
                                        verify_real_full_check, verify_same_file_and_mapping,
@@ -177,8 +178,12 @@ class TestCheckRunner(unittest.TestCase):
     def test_real_wheel_functional_typed_dict_fields(self) -> None:
         verify_functional_typed_dict_fields(self, self.root)
 
+    def test_real_wheel_contract_methods(self) -> None:
+        verify_contract_methods(self, self.root)
+
     def _inspect_placeholder_source(self, source: str, eligible: int,
-                                    clone: bool) -> dict[str, Any]:
+                                    clone: bool, exact_eligible: int | None = None
+                                    ) -> dict[str, Any]:
         first = self.root / "src/demo/first.py"
         second = self.root / "tests/second.py"
         (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
@@ -195,12 +200,13 @@ class TestCheckRunner(unittest.TestCase):
         for kind, name in names.items():
             job = next(item for item in result["tools"] if item["name"] == name)
             native = read_json(self.root / job["raw_output"]["native_json"])
+            count = exact_eligible if kind == "exact" and exact_eligible is not None else eligible
             self.assertEqual(native["minimum"], 3)
-            self.assertEqual(native["eligibleLines"][str(first)], eligible)
-            self.assertEqual(native["unitLines"][str(first)], [eligible] if eligible else [])
+            self.assertEqual(native["eligibleLines"][str(first)], count)
+            self.assertEqual(native["unitLines"][str(first)], [count] if count else [])
             self.assertEqual(native["sourcePaths"],
                              [str(self.root / path) for path in manifest["paths"]])
-            if eligible >= 3:
+            if count >= 3:
                 self.assertEqual(native["statistics"]["total"]["sources"],
                                  len(native["sourcePaths"]))
             if kind == "exact" and clone:
@@ -211,7 +217,7 @@ class TestCheckRunner(unittest.TestCase):
                                  {"src/demo/first.py", "tests/second.py"})
             else:
                 self.assertEqual((job["status"], job["exit_code"]),
-                                 ("passed", 0) if eligible >= 3 else ("skipped", None))
+                                 ("passed", 0) if count >= 3 else ("skipped", None))
                 self.assertFalse(native.get("duplicates", []))
         return result
 
@@ -252,7 +258,8 @@ class TestCheckRunner(unittest.TestCase):
                 with self.subTest(wrapper=wrapper, form=form):
                     self._inspect_placeholder_source(
                         wrapper + '        """A method stub."""\n' +
-                        f"        {form}\n", 0, False)
+                        f"        {form}\n", 0, False,
+                        2 if "(Protocol)" in wrapper else None)
             with self.subTest(wrapper=wrapper, material="real body"):
                 self._inspect_placeholder_source(
                     wrapper + "        first = 1\n        ...\n" +
