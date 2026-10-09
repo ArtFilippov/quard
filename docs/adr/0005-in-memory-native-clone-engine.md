@@ -54,6 +54,17 @@ retains only two secondary one-token occurrences, which can otherwise lose
 Type 2 clones in a large normalized scope. These are native scans, not filters
 on reported findings.
 
+#118 excludes ordinary class and function headers (including decorator syntax,
+multiline parameters and annotations), annotation-only fields and recognized
+type aliases from the prepared units. PEP 695 `type` statements and assignments
+annotated with explicitly imported `typing.TypeAlias` or
+`typing_extensions.TypeAlias` (including aliases) count as type aliases;
+ordinary assignments, including annotated assignments with values, do not.
+Control flow, function-local imports, decorator implementations and real bodies
+in contracts or special methods remain behavioral. All three jobs consume the
+same view at this stage. Dedicated schema/contract declaration views remain
+dependent work; omission here does not reclassify them as behavioral clones.
+
 ## Reporting and failures
 
 The three jobs retain the `jscpd`, `jscpd-renamed` and `jscpd-similar` identities,

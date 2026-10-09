@@ -24,11 +24,11 @@ from quard.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
 from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_report,
-                                      verify_mismatched_engine, verify_missing_wheel,
-                                      verify_real_full_check, verify_same_file_and_mapping,
-                                      verify_prepared_renamed, verify_renamed_failure,
-                                      verify_prepared_similar, verify_similar_failure,
-                                      report as prepared_report, versions, wheel)
+                                       verify_mismatched_engine, verify_missing_wheel,
+                                       verify_real_full_check, verify_same_file_and_mapping,
+                                       verify_prepared_renamed, verify_renamed_failure,
+                                       verify_prepared_similar, verify_similar_failure,
+                                       prepared_native, report as prepared_report, versions, wheel)
 
 
 class TestCheckRunner(unittest.TestCase):
@@ -161,6 +161,153 @@ class TestCheckRunner(unittest.TestCase):
                           if item["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}},
                          {"jscpd": "error", "jscpd-renamed": "error", "jscpd-similar": "error"})
         self.assertTrue(any(item["is_infrastructure_error"] for item in broken["diagnostics"]))
+
+    def test_real_wheel_behavioral_declarations(self) -> None:
+        self._verify_excluded_declarations()
+        self._verify_mixed_declarations()
+        self._verify_alias_shadowing()
+        self._verify_behavioral_bodies()
+
+    def _verify_excluded_declarations(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        excluded_forms = {
+            "multiline class and decorators": (
+                "@decorate(\n    mode=1,\n    enabled=True,\n)\n"
+                "class First(\n    Parent,\n    metaclass=Meta,\n):\n"
+                "    field: list[int]\n    other: dict[str, int]\n    last: bytes\n"),
+            "multiline function annotations": (
+                "@decorate\nasync def action(\n    first: list[int],\n"
+                "    second: dict[str, int],\n    third: str,\n) -> bytes:\n"
+                "    result: bytes\n    return b'yes'\n"),
+            "pep 695 aliases": (
+                "type First[T] = list[T]\n"
+                "type Second[T] = dict[str, T]\n"
+                "type Third = tuple[int, str]\n"),
+            "explicit annotated aliases": (
+                "from typing import TypeAlias as TA\n"
+                "import typing as tp\n"
+                "from typing_extensions import TypeAlias as TE\n"
+                "First: TA = list[int]\n"
+                "Second: tp.TypeAlias = dict[str, int]\n"
+                "Third: TE = tuple[int, str]\n"),
+        }
+        for form, source in excluded_forms.items():
+            with self.subTest(form=form):
+                for path in (first, second):
+                    path.write_text(source, encoding="utf-8")
+                result = prepared_report(self.root)
+                for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+                    job = next(item for item in result["tools"] if item["name"] == name)
+                    self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+
+    def _verify_mixed_declarations(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        declarations = (
+            "from typing import TypeAlias as TA\n"
+            "import typing as tp\n"
+            "from typing_extensions import TypeAlias as TE\n"
+            "type Modern[T] = dict[str, list[T]]\n"
+            "Legacy: TA = dict[str, list[int]]\n"
+            "Qualified: tp.TypeAlias = list[int]\n"
+            "Extended: TE = tuple[int, str]\n"
+            "@decorate(\n    mode=1,\n    enabled=True,\n)\n"
+            "class Widget(\n    Base,\n    metaclass=Meta,\n):\n"
+            "    field: list[int]\n"
+            "    @property\n"
+            "    def value(\n        self,\n        argument: list[int],\n"
+            "        another: str,\n    ) -> list[int]:\n"
+            "        first = argument + [1]\n"
+            "        second: list[int] = first + [2]\n"
+        )
+        for path in (first, second):
+            path.write_text(declarations, encoding="utf-8")
+        short = prepared_report(self.root)
+        for kind in ("exact", "renamed", "similar"):
+            with self.subTest(kind=kind, material="declarations plus two assignments"):
+                job = next(job for job in short["tools"] if job["name"] ==
+                           {"exact": "jscpd", "renamed": "jscpd-renamed",
+                            "similar": "jscpd-similar"}[kind])
+                native = read_json(self.root / job["raw_output"]["native_json"])
+                self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+                self.assertIn("skipped", native)
+                self.assertEqual(native["unitLines"][str(first)][-1], 2)
+        for path in (first, second):
+            path.write_text(declarations + "        third = second * 3\n", encoding="utf-8")
+        long = prepared_report(self.root)
+        exact = prepared_native(self, self.root, long, 3)
+        self.assertTrue(exact["duplicates"])
+        self.assertTrue(any("first = argument + [1]" in item["fragment"]
+                            for item in exact["duplicates"]))
+        self.assertEqual({item["path"] for item in long["diagnostics"]
+                          if item["rule"] == "EXACT_CLONE"},
+                         {"src/demo/first.py", "tests/second.py"})
+        second.write_text(declarations.replace("first = argument + [1]",
+                                               "start = argument + [7]")
+                          .replace("second: list[int] = first + [2]",
+                                   "middle: list[int] = start + [8]")
+                          + "        third = middle * 9\n", encoding="utf-8")
+        changed = prepared_report(self.root)
+        renamed = prepared_native(self, self.root, changed, 3, "renamed")
+        self.assertTrue(renamed["duplicates"])
+        self.assertFalse(prepared_native(self, self.root, changed, 3)["duplicates"])
+
+    def _verify_alias_shadowing(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        shadowed = ("from typing import TypeAlias as TA\n"
+                    "def run(TA):\n"
+                    "    first: TA = 1\n"
+                    "    second: TA = first + 2\n"
+                    "    third: TA = second * 3\n")
+        for path in (first, second):
+            path.write_text(shadowed, encoding="utf-8")
+        rebound = prepared_report(self.root)
+        self.assertTrue(prepared_native(self, self.root, rebound, 3)["duplicates"])
+        relative = ("from .typing import TypeAlias as TA\n"
+                    "first: TA = 1\n"
+                    "second: TA = first + 2\n"
+                    "third: TA = second * 3\n")
+        for path in (first, second):
+            path.write_text(relative, encoding="utf-8")
+        local = prepared_report(self.root)
+        self.assertTrue(prepared_native(self, self.root, local, 3)["duplicates"])
+
+    def _verify_behavioral_bodies(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        for path in (first, second):
+            path.write_text("".join(("def decorate(func):\n    if func:\n",
+                                     "        initial = func(1)\n",
+                                     "        result: int = initial + 2\n",
+                                     "        return result\n",
+                                     "    return func\n")), encoding="utf-8")
+        checked = prepared_report(self.root)
+        native = prepared_native(self, self.root, checked, 3)
+        self.assertTrue(native["duplicates"])
+        self.assertTrue(any("if func:" in item["fragment"]
+                            for item in native["duplicates"]))
+        for path in (first, second):
+            path.write_text("".join(("from typing import Protocol\n",
+                                     "class Contract(Protocol):\n    def __init__(self):\n",
+                                     "        self.value = 1\n        current = self.value + 2\n",
+                                     "        self.value = current * 3\n")), encoding="utf-8")
+        special = prepared_report(self.root)
+        self.assertTrue(prepared_native(self, self.root, special, 3)["duplicates"])
+        for path in (first, second):
+            path.write_text("".join(("class First:\n    one: int\n    two: str\n",
+                                     "    three: bytes\nclass Second:\n",
+                                     "    one: int\n    two: str\n    three: bytes\n")),
+                            encoding="utf-8")
+        excluded = prepared_report(self.root)
+        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+            job = next(item for item in excluded["tools"] if item["name"] == name)
+            self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
 
     def test_real_wheel_similar_prepared(self) -> None:
         verify_prepared_similar(self, self.root)

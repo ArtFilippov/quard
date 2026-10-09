@@ -229,9 +229,16 @@ Pylint's required `[readability.production] min_similarity_lines` limit and
 The default native CLI scans unprepared `.py` files and counts physical source
 lines. The opt-in Rust path prepares discovered files in memory, applying the
 same minimum to eligible lines within each module, class or function unit.
-File-level and class-level imports, actual docstrings and attribute documentation
-do not count; function-local imports and assigned values do. Views with no
-qualifying unit are explicitly skipped with a reason. Rust reports retain
+File-level and class-level imports, actual docstrings, attribute documentation,
+ordinary class/function headers (including decorators, multiline signatures and
+annotations), annotation-only fields and recognized type aliases do not count.
+Function-local imports, value assignments (including annotated values and literal
+constants), control flow and executable bodies, including decorator implementations
+and real contract/special-method bodies, do count. Recognized aliases are
+`type Name = ...` and assignments annotated with explicitly imported
+`typing.TypeAlias` or `typing_extensions.TypeAlias` (including import and module
+aliases). Views with no qualifying unit are explicitly skipped with a reason.
+Rust reports retain
 original paths, positions and verbatim fragments, with source digests and
 per-unit accounting.
 For developer comparison, build the locked `rust/quard-clones` wheel with

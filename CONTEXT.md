@@ -32,9 +32,14 @@ ordinary CLI continues to scan original files.
 
 A **prepared view** is the in-memory sequence of eligible original source
 lines in one module, class or function unit. File-level and class-level imports,
-actual docstrings and attribute documentation do not contribute; function-local
-imports and assignments, including assigned strings, do. The effective clone
-minimum counts **eligible material** within a unit. Removing lines does not
+actual docstrings, attribute documentation, ordinary definition headers,
+decorator syntax, annotation-only fields and type aliases do not contribute.
+Type aliases recognized here use `type Name = ...` or an annotation with
+`typing.TypeAlias` / `typing_extensions.TypeAlias` through an explicit import,
+including aliases. Function-local imports, control flow and value assignments,
+including assigned strings and annotated values, do contribute. Executable
+decorator implementations and real contract/special-method bodies remain eligible.
+The effective clone minimum counts **eligible material** within a unit. Removing lines does not
 allow neighboring independent classes or functions to form one clone.
 
 ## Source mapping
