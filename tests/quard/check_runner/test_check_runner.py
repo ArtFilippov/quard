@@ -30,6 +30,9 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                        verify_prepared_similar, verify_similar_failure,
                                        prepared_native, report as prepared_report, versions, wheel)
 
+PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
+                "raise NotImplementedError()", 'raise NotImplementedError("pending")')
+
 
 class TestCheckRunner(unittest.TestCase):
     def test_real_wheel_read_failure_keeps_peer_findings(self) -> None:
@@ -167,6 +170,101 @@ class TestCheckRunner(unittest.TestCase):
         self._verify_mixed_declarations()
         self._verify_alias_shadowing()
         self._verify_behavioral_bodies()
+
+    def _inspect_placeholder_source(self, source: str, eligible: int,
+                                    clone: bool) -> dict[str, Any]:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        names = {"exact": "jscpd", "renamed": "jscpd-renamed",
+                 "similar": "jscpd-similar"}
+        for path in (first, second):
+            path.write_text(source, encoding="utf-8")
+        result = prepared_report(self.root)
+        self.assertEqual(result["exit_code"], int(clone), result["diagnostics"])
+        self.assertFalse([item for item in result["diagnostics"]
+                          if item.get("is_infrastructure_error", False)])
+        manifest = read_json((self.root / result["report_path"]).parent /
+                             "clone-engine-files.json")
+        for kind, name in names.items():
+            job = next(item for item in result["tools"] if item["name"] == name)
+            native = read_json(self.root / job["raw_output"]["native_json"])
+            self.assertEqual(native["minimum"], 3)
+            self.assertEqual(native["eligibleLines"][str(first)], eligible)
+            self.assertEqual(native["unitLines"][str(first)], [eligible] if eligible else [])
+            self.assertEqual(native["sourcePaths"],
+                             [str(self.root / path) for path in manifest["paths"]])
+            if eligible >= 3:
+                self.assertEqual(native["statistics"]["total"]["sources"],
+                                 len(native["sourcePaths"]))
+            if kind == "exact" and clone:
+                self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
+                self.assertTrue(native["duplicates"])
+                self.assertEqual({d["path"] for d in result["diagnostics"]
+                                  if d["rule"] == "EXACT_CLONE"},
+                                 {"src/demo/first.py", "tests/second.py"})
+            else:
+                self.assertEqual((job["status"], job["exit_code"]),
+                                 ("passed", 0) if eligible >= 3 else ("skipped", None))
+                self.assertFalse(native.get("duplicates", []))
+        return result
+
+    def test_real_wheel_behavioral_placeholders(self) -> None:
+        for form in PLACEHOLDERS:
+            with self.subTest(form=form, material="stub with documentation"):
+                result = self._inspect_placeholder_source(
+                    'def action():\n    """Shared documentation."""\n' + f"    {form}\n",
+                    0, False)
+                names = ("jscpd", "jscpd-renamed", "jscpd-similar")
+                for name in names:
+                    job = next(item for item in result["tools"] if item["name"] == name)
+                    self.assertIn("skipped", read_json(self.root /
+                                  job["raw_output"]["native_json"]))
+            for body in (f"    first = 1\n    second = first + 2\n    {form}\n",
+                         f"    first = 1\n    {form}\n    second = first + 2\n"):
+                with self.subTest(form=form, material="two executable lines"):
+                    self._inspect_placeholder_source(
+                        'def action():\n    """Shared documentation."""\n' + body, 2, False)
+            with self.subTest(form=form, material="three executable lines"):
+                result = self._inspect_placeholder_source(
+                    'def action():\n    first = 1\n    second = first + 2\n' +
+                    f"    {form}\n    third = second * 3\n", 3, True)
+                native = prepared_native(self, self.root, result, 3)
+                self.assertTrue(any(form in item["fragment"] and
+                                    "third = second * 3" in item["fragment"]
+                                    for item in native["duplicates"]))
+                self.assertTrue(any(item["firstFile"]["start"] == 2 and
+                                    item["firstFile"]["end"] == 5
+                                    for item in native["duplicates"]))
+
+    def test_real_wheel_method_placeholders(self) -> None:
+        for wrapper in ("class Component:\n    def action(self):\n",
+                        "from typing import Protocol\nclass Component(Protocol):\n" +
+                        "    def action(self):\n",
+                        "class Component:\n    def __call__(self):\n"):
+            for form in PLACEHOLDERS:
+                with self.subTest(wrapper=wrapper, form=form):
+                    self._inspect_placeholder_source(
+                        wrapper + '        """A method stub."""\n' +
+                        f"        {form}\n", 0, False)
+            with self.subTest(wrapper=wrapper, material="real body"):
+                self._inspect_placeholder_source(
+                    wrapper + "        first = 1\n        ...\n" +
+                    "        second = first + 2\n        third = second * 3\n", 3, True)
+
+        for form in PLACEHOLDERS:
+            with self.subTest(form=form, material="one-line stub"):
+                self._inspect_placeholder_source(f"def action(): {form}\n", 0, False)
+
+    def test_real_wheel_other_statements_remain_behavioral(self) -> None:
+        for real in ("return None", "raise ValueError()",
+                     "raise NotImplementedError(compute())",
+                     "raise NotImplementedError from cause", "return ...",
+                     "value = ..."):
+            with self.subTest(real=real):
+                self._inspect_placeholder_source(
+                    "def action():\n    first = 1\n    second = first + 2\n" +
+                    f"    {real}\n", 3, True)
 
     def _verify_excluded_declarations(self) -> None:
         first = self.root / "src/demo/first.py"

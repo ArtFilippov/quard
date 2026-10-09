@@ -37,8 +37,13 @@ decorator syntax, annotation-only fields and type aliases do not contribute.
 Type aliases recognized here use `type Name = ...` or an annotation with
 `typing.TypeAlias` / `typing_extensions.TypeAlias` through an explicit import,
 including aliases. Function-local imports, control flow and value assignments,
-including assigned strings and annotated values, do contribute. Executable
+including assigned strings and annotated values, do contribute. Ordinary
+standalone `pass`, `...` and bare or literal-argument `raise NotImplementedError`
+are placeholders, even alongside a docstring, and do not contribute to the
+shared behavior view. Other real statements, including `return None`, executable
 decorator implementations and real contract/special-method bodies remain eligible.
+A later exact contract-declaration view may count eligible declaration placeholders
+toward its physical line minimum without changing the behavior view.
 The effective clone minimum counts **eligible material** within a unit. Removing lines does not
 allow neighboring independent classes or functions to form one clone.
 

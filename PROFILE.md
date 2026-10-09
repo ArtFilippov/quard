@@ -34,8 +34,12 @@ violations baseline.
    within a prepared module/class/function unit. Ordinary definition headers,
    decorators, annotation-only fields and recognized type aliases are excluded;
    actual assignments, control flow and executable bodies remain eligible.
-   This minimum is distinct
-  from Pylint's mandatory `min_similarity_lines` readability limit.
+   Ordinary standalone `pass`, `...` and bare or literal-argument
+   `raise NotImplementedError` do not count in this shared behavior view,
+   including when a stub has a docstring. Other real statements (including
+   `return None`) do count; future exact contract declarations may separately
+   count eligible declaration placeholders as physical lines. This minimum is
+   distinct from Pylint's mandatory `min_similarity_lines` readability limit.
   With a separately installed, first-party `quard-clones==0.1.0` wheel and
   `QUARD_CLONE_ENGINE=rust`, all three jobs use the linked `cpd-core==0.1.20`,
   `cpd-finder==0.1.20`, `cpd-tokenizer==0.1.19` and

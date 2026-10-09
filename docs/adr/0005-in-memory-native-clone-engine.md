@@ -65,6 +65,16 @@ in contracts or special methods remain behavioral. All three jobs consume the
 same view at this stage. Dedicated schema/contract declaration views remain
 dependent work; omission here does not reclassify them as behavioral clones.
 
+#119 excludes ordinary standalone `pass`, ellipsis statements and bare or
+literal-argument `raise NotImplementedError` from the shared prepared behavior
+view. Stub-only bodies (with or without documentation) have no eligible lines;
+two real lines plus a placeholder remain below the default minimum. Other
+executable statements, including computed exception arguments and `return None`,
+still count. The source map retains original lines and archives verbatim fragments
+when a real match spans a placeholder. A future exact contract-declaration slice
+may count eligible declaration placeholders as physical lines without altering
+the behavior view.
+
 ## Reporting and failures
 
 The three jobs retain the `jscpd`, `jscpd-renamed` and `jscpd-similar` identities,

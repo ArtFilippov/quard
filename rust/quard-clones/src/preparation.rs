@@ -20,6 +20,25 @@ struct Selection {
 }
 
 impl Selection {
+    fn placeholder(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Pass(_) => true,
+            Stmt::Expr(expr) => matches!(expr.value.as_ref(), Expr::Constant(value)
+                if matches!(value.value, Constant::Ellipsis)),
+            Stmt::Raise(raised) if raised.cause.is_none() => match raised.exc.as_deref() {
+                Some(Expr::Name(name)) => name.id.as_str() == "NotImplementedError",
+                Some(Expr::Call(call)) => {
+                    matches!(call.func.as_ref(), Expr::Name(name)
+                            if name.id.as_str() == "NotImplementedError")
+                        && call.keywords.is_empty()
+                        && call.args.iter().all(|arg| matches!(arg, Expr::Constant(_)))
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     fn is_type_alias(&self, annotation: &Expr) -> bool {
         match annotation {
             Expr::Name(name) => self.alias_names.contains(name.id.as_str()),
@@ -111,6 +130,9 @@ impl Selection {
                 Expr::Constant(value) if matches!(value.value, Constant::Str(_))));
             let assignment = matches!(&stmt, Stmt::Assign(_) | Stmt::AnnAssign(_));
             if doc && (index == 0 || self.attribute_docs && previous_assignment) {
+                let range = stmt.range();
+                self.remove[self.current].push((range.start().into(), range.end().into()));
+            } else if Self::placeholder(&stmt) {
                 let range = stmt.range();
                 self.remove[self.current].push((range.start().into(), range.end().into()));
             } else {

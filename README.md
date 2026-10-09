@@ -237,7 +237,14 @@ constants), control flow and executable bodies, including decorator implementati
 and real contract/special-method bodies, do count. Recognized aliases are
 `type Name = ...` and assignments annotated with explicitly imported
 `typing.TypeAlias` or `typing_extensions.TypeAlias` (including import and module
-aliases). Views with no qualifying unit are explicitly skipped with a reason.
+aliases). Ordinary standalone `pass`, `...` and `raise NotImplementedError`
+(bare or constructed with literal arguments) are excluded, including in
+documented stubs. They cannot turn two executable lines into a three-line clone.
+Other executable statements, including `return None`, computed raise arguments,
+and real bodies in contracts or special methods remain eligible. A later exact
+contract-declaration view may count eligible declaration placeholders toward its
+physical line minimum; this behavior view does not. Views with no qualifying
+unit are explicitly skipped with a reason.
 Rust reports retain
 original paths, positions and verbatim fragments, with source digests and
 per-unit accounting.
