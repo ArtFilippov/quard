@@ -23,7 +23,7 @@ from quard.check_runner.runner_utils import installed_versions
 from quard.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
-from contract_clone_utils import verify_contract_methods
+from contract_clone_utils import verify_contract_methods, verify_contract_properties
 from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_report,
                                        verify_mismatched_engine, verify_missing_wheel,
                                        verify_real_full_check, verify_same_file_and_mapping,
@@ -180,6 +180,7 @@ class TestCheckRunner(unittest.TestCase):
 
     def test_real_wheel_contract_methods(self) -> None:
         verify_contract_methods(self, self.root)
+        verify_contract_properties(self, self.root)
 
     def _inspect_placeholder_source(self, source: str, eligible: int,
                                     clone: bool, exact_eligible: int | None = None

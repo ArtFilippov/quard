@@ -112,11 +112,25 @@ abstract interfaces. Each one-line signature retains its exact method name,
 parameters and return type; a standalone one-line declaration placeholder is
 tied to that signature so repeated `pass` or ellipsis cannot match differently
 named methods. The class name, decorators, documentation and special dunder
-and property-accessor declarations are not eligible. The same eligible
-physical-line minimum applies
-to signatures and placeholders; real bodies, including special-method bodies,
+and property-accessor declarations are not eligible at this stage. The same
+eligible physical-line minimum applies to signatures and placeholders; real
+bodies, including special-method bodies,
 remain in the behavior view. Native fragments map back to original signature
 and placeholder lines; renamed/similar never receive declaration units.
+
+#124 includes getter, setter and deleter declarations in that exact-only unit.
+Each prepared line is tagged with the whole exact signature, its row and, for
+properties, the public property name and accessor kind. Thus an ordinary
+method, a changed signature or another accessor cannot match a continuation
+or placeholder as the same declaration. Multiline signatures retain one prepared
+line per original signature line, followed by a signature-tied placeholder when
+the body is separate. Per-byte maps restore original columns and complete
+source spans; archives and normalized details contain only verbatim original
+multiline fragments, never canonical declaration text. Only eligible
+signature/placeholder lines clear the shared minimum, irrespective of excluded
+decorators, documentation or the length of a reported original span. Special
+declarations stay excluded; real contract, property and special-method bodies
+stay behavioral in all three passes.
 
 ## Reporting and failures
 
@@ -143,8 +157,7 @@ The native API is pinned deliberately: updating the CLI or any engine crate
 requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
 and verifying the prepared-view fixtures with the real component.
 The ordinary CLI still uses original-source physical lines. The opt-in Rust
-path applies the shared minimum to eligible prepared lines. Property accessors
-and multiline contract signature ranges remain for the dependent slice of #112.
+path applies the shared minimum to eligible prepared lines.
 An explicit wheel-selection switch keeps the existing CLI executable and its
 independent native diagnostics in ordinary installations while the rest of the
 three-pass installation contract is built.

@@ -24,9 +24,10 @@ fn original_column(map: &SourceMap, line: usize, column: usize) -> PyResult<usiz
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("unmapped schema line"))?;
         // The pinned tokenizer can point one byte past a final newline.
         if column > boundaries.len() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "unmapped schema column",
-            ));
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "unmapped schema column {line}:{column} ({} boundaries)",
+                boundaries.len(),
+            )));
         }
         return boundaries
             .get(column.min(boundaries.len() - 1))

@@ -150,26 +150,41 @@ impl Selection {
                 Stmt::AsyncFunctionDef(def) => (def.name.as_str(), &def.body, &def.decorator_list),
                 _ => continue,
             };
-            if (name.starts_with("__") && name.ends_with("__"))
-                || decorators.iter().any(|decorator| match decorator {
-                    Expr::Name(value) => matches!(
-                        value.id.as_str(),
-                        "property" | "cached_property" | "abstractproperty"
-                    ),
-                    Expr::Attribute(value) => matches!(
-                        value.attr.as_str(),
-                        "property"
-                            | "cached_property"
-                            | "abstractproperty"
-                            | "getter"
-                            | "setter"
-                            | "deleter"
-                    ),
-                    _ => false,
-                })
-            {
+            if name.starts_with("__") && name.ends_with("__") {
                 continue;
             }
+            let property = decorators.iter().find_map(|decorator| match decorator {
+                Expr::Name(value)
+                    if matches!(value.id.as_str(), "property" | "abstractproperty") =>
+                {
+                    Some((name.to_owned(), "getter"))
+                }
+                Expr::Attribute(value)
+                    if matches!(value.attr.as_str(), "property" | "abstractproperty") =>
+                {
+                    Some((name.to_owned(), "getter"))
+                }
+                Expr::Attribute(value)
+                    if matches!(value.attr.as_str(), "getter" | "setter" | "deleter") =>
+                {
+                    match value.value.as_ref() {
+                        Expr::Name(owner) => Some((owner.id.to_string(), value.attr.as_str())),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            });
+            // Cached properties describe behavior, not accessor declarations.
+            if decorators.iter().any(|decorator| match decorator {
+                Expr::Name(value) => value.id.as_str() == "cached_property",
+                Expr::Attribute(value) => value.attr.as_str() == "cached_property",
+                _ => false,
+            }) {
+                continue;
+            }
+            let header_body_start: usize = statements
+                .first()
+                .map_or(0, |first| first.range().start().into());
             let statements = if matches!(statements.first(), Some(Stmt::Expr(expr))
                 if matches!(expr.value.as_ref(), Expr::Constant(value)
                     if matches!(value.value, Constant::Str(_))))
@@ -193,45 +208,69 @@ impl Selection {
             if self.text[body_start..body_end].contains('\n') {
                 continue;
             }
-            let signature_column = start - self.text[..start].rfind('\n').map_or(0, |i| i + 1);
             let body_column = body_start - self.text[..body_start].rfind('\n').map_or(0, |i| i + 1);
             let placeholder = &self.text[body_start..body_end];
-            if placeholder_line == signature_line {
-                let signature = self.text[start..body_start].trim_end();
-                if !signature.ends_with(':') {
-                    continue;
-                }
-                let canonical = format!("{signature} {placeholder}");
-                let mut map: Vec<usize> = (0..=signature.len())
-                    .map(|i| signature_column + i)
-                    .collect();
-                map.push(body_column);
-                map.extend((1..=placeholder.len()).map(|i| body_column + i));
-                text.push_str(&canonical);
-                text.push('\n');
-                lines.push(signature_line);
-                columns.push(map);
-                continue;
-            }
-            let Some(end) = self.text[start..body_start].find('\n').map(|i| start + i) else {
-                continue;
-            };
-            let signature = self.text[start..end].trim_end();
+            let signature = self.text[start..header_body_start].trim_end();
             if !signature.ends_with(':') {
                 continue;
             }
-            text.push_str(signature);
-            text.push('\n');
-            lines.push(signature_line);
-            columns.push(
-                (0..=signature.len())
-                    .map(|i| signature_column + i)
-                    .collect(),
-            );
+            let signature_end = start + signature.len();
+            let identity = property.map_or_else(String::new, |(owner, kind)| {
+                format!("property {owner} {kind} ")
+            });
+            let declaration = format!("{identity}{signature}");
+            let marker = |row: usize| {
+                format!(
+                    "{} ",
+                    serde_json::to_string(&format!("{declaration} line {row}"))
+                        .expect("signature is valid UTF-8")
+                )
+            };
+            let mut cursor = start;
+            let mut row = 0;
+            while cursor < signature_end {
+                let end = self.text[cursor..signature_end]
+                    .find('\n')
+                    .map_or(signature_end, |index| cursor + index);
+                let part = &self.text[cursor..end];
+                let original_column = cursor - self.text[..cursor].rfind('\n').map_or(0, |i| i + 1);
+                // Each original line remains eligible, but its exact contract
+                // signature and row must agree before it can match. Distinct
+                // signatures cannot share a long continuation or placeholder.
+                let prefix = marker(row);
+                let mut canonical = format!("{prefix}{part}");
+                let mut map = vec![original_column; prefix.len()];
+                map.extend((0..=part.len()).map(|i| original_column + i));
+                if end == signature_end
+                    && placeholder_line
+                        == self.text[..end].bytes().filter(|b| *b == b'\n').count() + 1
+                {
+                    canonical.push(' ');
+                    canonical.push_str(placeholder);
+                    map.push(body_column);
+                    map.extend((1..=placeholder.len()).map(|i| body_column + i));
+                }
+                text.push_str(&canonical);
+                text.push('\n');
+                lines.push(self.text[..cursor].bytes().filter(|b| *b == b'\n').count() + 1);
+                columns.push(map);
+                cursor = end + 1;
+                row += 1;
+            }
+            if placeholder_line == signature_line
+                || self.text[..signature_end]
+                    .bytes()
+                    .filter(|b| *b == b'\n')
+                    .count()
+                    + 1
+                    == placeholder_line
+            {
+                continue;
+            }
             // Tie the placeholder to its declaration: repeated pass/ellipsis alone
             // must never match methods whose names or signatures differ.
-            let synthetic = format!("{signature} {placeholder}");
-            let mut map = vec![body_column; signature.len() + 2];
+            let synthetic = format!("{}{placeholder}", marker(row));
+            let mut map = vec![body_column; synthetic.len() - placeholder.len() + 1];
             map.extend((1..=placeholder.len()).map(|i| body_column + i));
             text.push_str(&synthetic);
             text.push('\n');

@@ -103,21 +103,29 @@ def versions(_root: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
     return {}, []
 
 
-def report(root: Path) -> dict[str, Any]:
+def report(root: Path, corrupt_native: Callable[[Path], None] | None = None) -> dict[str, Any]:
     """Run the real wheel exact pass at the ordinary check-runner seam.
 
     Args:
         root (Path): Discovered fixture consumer root.
+        corrupt_native (Callable[[Path], None] | None, default=None): Optional
+            mutation of the real exact archive before full-check normalization.
 
     Returns:
         dict[str, Any]: Full check report with other jobs mocked.
+
+    Raises:
+        AssertionError: Batch archive is missing or incomplete.
     """
     fake, _ = fake_tools()
     python, _ = wheel()
 
     def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
         if Path(argv[1]).name == "_clone_engine_worker.py":
-            return capture([str(python), *argv[1:]], cwd, timeout)
+            result = capture([str(python), *argv[1:]], cwd, timeout)
+            if corrupt_native is not None and result["exit_code"] == 0:
+                corrupt_native(Path(argv[argv.index("--output") + 1]))
+            return result
         return fake(argv, cwd, timeout)
 
     with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):

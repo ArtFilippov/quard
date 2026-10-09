@@ -253,15 +253,18 @@ does, even after different leading fields and across syntax forms. Different
 names or types are not normalized; schema declarations do not enter renamed or
 similar behavior views. Native reports retain original columns and fragments.
 Ordinary annotation-only fields remain excluded. The exact Rust view also
-matches ordered one-line method declarations in local Protocols and abstract
-interfaces, regardless of class name. Exact names and signatures and their
-one-line `pass`, `...` or `raise NotImplementedError` placeholders count as
-physical eligible lines; changed names, signatures or method order do not
-become equivalent through normalization. Contract headers, decorators and
-documentation do not count. Property accessors and special `__dunder__`
-declarations are excluded from this method view;
-executable contract and special-method bodies remain behavioral. Declaration
-placeholders do not enter renamed/similar. Views with no qualifying
+matches ordered method declarations in local Protocols and abstract interfaces,
+regardless of class name. Exact names and signatures and their one-line `pass`,
+`...` or `raise NotImplementedError` placeholders count as physical eligible
+lines. Getter, setter and deleter declarations carry the public property name
+and accessor kind; changed names, signatures or method order do not become
+equivalent through normalization. Supported multiline signatures count their
+original signature lines. Native JSON and normalized details retain original
+columns, ranges and verbatim multiline fragments, never flattened declarations.
+Contract headers, decorators and documentation do not count, regardless of
+the length of the reported original range. Special `__dunder__` declarations
+are excluded; executable contract, property and special-method bodies remain
+behavioral. Declaration placeholders do not enter renamed/similar. Views with no qualifying
 unit are explicitly skipped with a reason.
 Rust reports retain
 original paths, positions and verbatim fragments, with source digests and
