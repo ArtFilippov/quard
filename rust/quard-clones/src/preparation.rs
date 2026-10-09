@@ -8,6 +8,11 @@ pub struct Unit {
     pub lines: Vec<usize>,
 }
 
+pub struct Views {
+    pub behavior: Vec<Unit>,
+    pub schemas: Vec<Unit>,
+}
+
 #[derive(Default)]
 struct Selection {
     keep: Vec<Vec<(usize, usize)>>,
@@ -17,6 +22,9 @@ struct Selection {
     local_imports: bool,
     alias_names: HashSet<String>,
     typing_modules: HashSet<String>,
+    typed_dict_names: HashSet<String>,
+    typed_dict_modules: HashSet<String>,
+    schemas: Vec<Vec<(usize, usize)>>,
 }
 
 impl Selection {
@@ -62,8 +70,11 @@ impl Selection {
                     );
                     self.alias_names.remove(binding);
                     self.typing_modules.remove(binding);
+                    self.typed_dict_names.remove(binding);
+                    self.typed_dict_modules.remove(binding);
                     if matches!(module, "typing" | "typing_extensions") {
                         self.typing_modules.insert(binding.to_owned());
+                        self.typed_dict_modules.insert(binding.to_owned());
                     }
                 }
             }
@@ -72,6 +83,8 @@ impl Selection {
                     let binding = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
                     self.alias_names.remove(binding);
                     self.typing_modules.remove(binding);
+                    self.typed_dict_names.remove(binding);
+                    self.typed_dict_modules.remove(binding);
                     if node.level.is_none_or(|level| level.to_u32() == 0)
                         && node.module.as_ref().is_some_and(|module| {
                             matches!(module.as_str(), "typing" | "typing_extensions")
@@ -79,6 +92,14 @@ impl Selection {
                         && alias.name.as_str() == "TypeAlias"
                     {
                         self.alias_names.insert(binding.to_owned());
+                    }
+                    if node.level.is_none_or(|level| level.to_u32() == 0)
+                        && node.module.as_ref().is_some_and(|module| {
+                            matches!(module.as_str(), "typing" | "typing_extensions")
+                        })
+                        && alias.name.as_str() == "TypedDict"
+                    {
+                        self.typed_dict_names.insert(binding.to_owned());
                     }
                 }
             }
@@ -91,6 +112,8 @@ impl Selection {
             Expr::Name(name) => {
                 self.alias_names.remove(name.id.as_str());
                 self.typing_modules.remove(name.id.as_str());
+                self.typed_dict_names.remove(name.id.as_str());
+                self.typed_dict_modules.remove(name.id.as_str());
             }
             Expr::Tuple(items) => {
                 for item in &items.elts {
@@ -116,10 +139,48 @@ impl Selection {
         {
             self.alias_names.remove(argument.def.arg.as_str());
             self.typing_modules.remove(argument.def.arg.as_str());
+            self.typed_dict_names.remove(argument.def.arg.as_str());
+            self.typed_dict_modules.remove(argument.def.arg.as_str());
         }
         for argument in [&args.vararg, &args.kwarg].into_iter().flatten() {
             self.alias_names.remove(argument.arg.as_str());
             self.typing_modules.remove(argument.arg.as_str());
+            self.typed_dict_names.remove(argument.arg.as_str());
+            self.typed_dict_modules.remove(argument.arg.as_str());
+        }
+    }
+
+    fn is_typed_dict(&self, base: &Expr) -> bool {
+        match base {
+            Expr::Name(name) => self.typed_dict_names.contains(name.id.as_str()),
+            Expr::Attribute(attr) => {
+                attr.attr.as_str() == "TypedDict"
+                    && matches!(attr.value.as_ref(), Expr::Name(name)
+                    if self.typed_dict_modules.contains(name.id.as_str()))
+            }
+            _ => false,
+        }
+    }
+
+    fn schema_fields(&mut self, body: &[Stmt]) {
+        let mut run = Vec::new();
+        for stmt in body {
+            if let Stmt::AnnAssign(field) = stmt {
+                if field.value.is_none()
+                    && matches!(field.target.as_ref(), Expr::Name(_))
+                    && !self.is_type_alias(&field.annotation)
+                {
+                    let range = stmt.range();
+                    run.push((range.start().into(), range.end().into()));
+                    continue;
+                }
+            }
+            if !run.is_empty() {
+                self.schemas.push(std::mem::take(&mut run));
+            }
+        }
+        if !run.is_empty() {
+            self.schemas.push(run);
         }
     }
 
@@ -157,6 +218,8 @@ impl Selection {
         let parent_imports = self.local_imports;
         let parent_aliases = self.alias_names.clone();
         let parent_modules = self.typing_modules.clone();
+        let parent_dict_names = self.typed_dict_names.clone();
+        let parent_dict_modules = self.typed_dict_modules.clone();
         self.keep.push(Vec::new());
         self.remove.push(Vec::new());
         self.current = self.keep.len() - 1;
@@ -171,6 +234,8 @@ impl Selection {
         self.local_imports = parent_imports;
         self.alias_names = parent_aliases;
         self.typing_modules = parent_modules;
+        self.typed_dict_names = parent_dict_names;
+        self.typed_dict_modules = parent_dict_modules;
     }
 }
 
@@ -183,16 +248,25 @@ impl Visitor for Selection {
                 self.unit(def.body, span, false, Some(&def.args));
                 self.alias_names.remove(def.name.as_str());
                 self.typing_modules.remove(def.name.as_str());
+                self.typed_dict_names.remove(def.name.as_str());
+                self.typed_dict_modules.remove(def.name.as_str());
             }
             Stmt::AsyncFunctionDef(def) => {
                 self.unit(def.body, span, false, Some(&def.args));
                 self.alias_names.remove(def.name.as_str());
                 self.typing_modules.remove(def.name.as_str());
+                self.typed_dict_names.remove(def.name.as_str());
+                self.typed_dict_modules.remove(def.name.as_str());
             }
             Stmt::ClassDef(def) => {
+                if def.bases.iter().any(|base| self.is_typed_dict(base)) {
+                    self.schema_fields(&def.body);
+                }
                 self.unit(def.body, span, true, None);
                 self.alias_names.remove(def.name.as_str());
                 self.typing_modules.remove(def.name.as_str());
+                self.typed_dict_names.remove(def.name.as_str());
+                self.typed_dict_modules.remove(def.name.as_str());
             }
             Stmt::Import(_) | Stmt::ImportFrom(_) => {
                 self.import_bindings(&node);
@@ -229,25 +303,17 @@ impl Visitor for Selection {
     }
 }
 
-pub fn prepare(text: &str, path: &str) -> Result<Vec<Unit>, String> {
-    let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
-    let mut selection = Selection {
-        keep: vec![Vec::new()],
-        remove: vec![Vec::new()],
-        attribute_docs: true,
-        ..Selection::default()
-    };
-    selection.suite(suite);
-    let starts: Vec<usize> = std::iter::once(0)
-        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-        .collect();
+fn compact_units(
+    text: &str,
+    path: &str,
+    starts: &[usize],
+    spans: impl Iterator<Item = (Vec<(usize, usize)>, Vec<(usize, usize)>)>,
+) -> Result<Vec<Unit>, String> {
     let mut result = Vec::new();
-    for (keep, remove) in selection.keep.into_iter().zip(selection.remove) {
+    for (keep, remove) in spans {
         let mut bytes = vec![b' '; text.len()];
         for (begin, end) in keep {
-            for i in begin..end {
-                bytes[i] = text.as_bytes()[i];
-            }
+            bytes[begin..end].copy_from_slice(&text.as_bytes()[begin..end]);
         }
         for (begin, end) in remove {
             bytes[begin..end].fill(b' ');
@@ -258,7 +324,6 @@ pub fn prepare(text: &str, path: &str) -> Result<Vec<Unit>, String> {
             let end = starts.get(index + 1).copied().unwrap_or(text.len());
             let slice = &bytes[*start..end];
             if slice.iter().any(|b| !b.is_ascii_whitespace()) {
-                // Keep original indentation, byte columns and text on retained lines.
                 let masked = std::str::from_utf8(slice)
                     .map_err(|_| format!("{path}: masked syntax split a Unicode character"))?;
                 compact.push_str(masked.trim_end_matches('\n'));
@@ -274,4 +339,32 @@ pub fn prepare(text: &str, path: &str) -> Result<Vec<Unit>, String> {
         }
     }
     Ok(result)
+}
+
+pub fn prepare(text: &str, path: &str) -> Result<Views, String> {
+    let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
+    let mut selection = Selection {
+        keep: vec![Vec::new()],
+        remove: vec![Vec::new()],
+        attribute_docs: true,
+        ..Selection::default()
+    };
+    selection.suite(suite);
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    Ok(Views {
+        behavior: compact_units(
+            text,
+            path,
+            &starts,
+            selection.keep.into_iter().zip(selection.remove),
+        )?,
+        schemas: compact_units(
+            text,
+            path,
+            &starts,
+            selection.schemas.into_iter().map(|run| (run, Vec::new())),
+        )?,
+    })
 }

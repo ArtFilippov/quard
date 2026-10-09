@@ -37,7 +37,14 @@ violations baseline.
    Ordinary standalone `pass`, `...` and bare or literal-argument
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including
-   `return None`) do count; future exact contract declarations may separately
+   `return None`) do count. The exact Rust view additionally includes consecutive
+   class-based `typing`/`typing_extensions.TypedDict` fields, with a separate unit
+   per uninterrupted run in each schema. Identical fields count their original
+   eligible lines toward the same minimum regardless of class names; matching
+   trailing fields survive different leading fields. Different field names and
+   types are never normalized in renamed/similar, whose behavior view excludes
+   these declarations entirely. Ordinary annotation-only fields remain excluded.
+   Future exact contract declarations may separately
    count eligible declaration placeholders as physical lines. This minimum is
    distinct from Pylint's mandatory `min_similarity_lines` readability limit.
   With a separately installed, first-party `quard-clones==0.1.0` wheel and

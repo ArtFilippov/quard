@@ -68,6 +68,10 @@ struct SourceSession {
     unit_lines: HashMap<String, Vec<usize>>,
     scanned_unit_lines: HashMap<String, Vec<usize>>,
     scannable: bool,
+    exact_eligible_lines: HashMap<String, usize>,
+    exact_unit_lines: HashMap<String, Vec<usize>>,
+    exact_scanned_unit_lines: HashMap<String, Vec<usize>>,
+    exact_scannable: bool,
     min_lines: usize,
     renamed: bool,
 }
@@ -108,23 +112,46 @@ impl SourceSession {
         let mut unit_lines = HashMap::new();
         let mut scanned_unit_lines = HashMap::new();
         let mut scannable = false;
+        let mut exact_eligible_lines = HashMap::new();
+        let mut exact_unit_lines = HashMap::new();
+        let mut exact_scanned_unit_lines = HashMap::new();
+        let mut exact_scannable = false;
         for (path, text) in sources {
             if !path.starts_with('/') || !path.ends_with(".py") || texts.contains_key(&path) {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "unique absolute .py paths required",
                 ));
             }
-            let units = preparation::prepare(&text, &path)
+            let views = preparation::prepare(&text, &path)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
             eligible_lines.insert(
                 path.clone(),
-                units.iter().map(|unit| unit.lines.len()).sum(),
+                views.behavior.iter().map(|unit| unit.lines.len()).sum(),
             );
             unit_lines.insert(
                 path.clone(),
-                units.iter().map(|unit| unit.lines.len()).collect(),
+                views.behavior.iter().map(|unit| unit.lines.len()).collect(),
             );
             scanned_unit_lines.insert(path.clone(), Vec::new());
+            exact_eligible_lines.insert(
+                path.clone(),
+                views
+                    .behavior
+                    .iter()
+                    .chain(&views.schemas)
+                    .map(|unit| unit.lines.len())
+                    .sum(),
+            );
+            exact_unit_lines.insert(
+                path.clone(),
+                views
+                    .behavior
+                    .iter()
+                    .chain(&views.schemas)
+                    .map(|unit| unit.lines.len())
+                    .collect(),
+            );
+            exact_scanned_unit_lines.insert(path.clone(), Vec::new());
             let file_index = files.len();
             files.push(SourceFile {
                 id: path.clone(),
@@ -132,9 +159,18 @@ impl SourceSession {
                 tokens: Vec::new(),
                 bytes: text.len() as u64,
             });
-            for (number, unit) in units.into_iter().enumerate() {
+            for (number, (schema, unit)) in views
+                .behavior
+                .into_iter()
+                .map(|unit| (false, unit))
+                .chain(views.schemas.into_iter().map(|unit| (true, unit)))
+                .enumerate()
+            {
                 let id = format!("{path}#quard-unit-{number}");
-                scannable |= unit.lines.len() >= min_lines;
+                if !schema {
+                    scannable |= unit.lines.len() >= min_lines;
+                }
+                exact_scannable |= unit.lines.len() >= min_lines;
                 if let Some((display, detection)) =
                     preparer.prepare(id.clone(), String::new(), "python", &unit.text)
                 {
@@ -158,18 +194,30 @@ impl SourceSession {
                             loc.line = line as u32;
                             loc.offset = (offset + loc.column as usize) as u32;
                         }
-                        files[file_index].tokens.push(token);
+                        if !schema || !renamed {
+                            files[file_index].tokens.push(token);
+                        }
                     }
-                    prepared_similar.extend(detection.iter().cloned().map(|mut source| {
-                        anchor_whitespace_spans(&mut source, &unit.text);
-                        source
-                    }));
-                    prepared.extend(detection);
-                    scanned_unit_lines
+                    if !schema {
+                        prepared_similar.extend(detection.iter().cloned().map(|mut source| {
+                            anchor_whitespace_spans(&mut source, &unit.text);
+                            source
+                        }));
+                    }
+                    if !schema || !renamed {
+                        prepared.extend(detection);
+                    }
+                    exact_scanned_unit_lines
                         .get_mut(&path)
                         .expect("discovered source")
                         .push(unit.lines.len());
-                    if !renamed {
+                    if !schema {
+                        scanned_unit_lines
+                            .get_mut(&path)
+                            .expect("discovered source")
+                            .push(unit.lines.len());
+                    }
+                    if !renamed && !schema {
                         let (_, normalized) = normalized_preparer
                             .prepare(id.clone(), String::new(), "python", &unit.text)
                             .ok_or_else(|| {
@@ -210,6 +258,10 @@ impl SourceSession {
             unit_lines,
             scanned_unit_lines,
             scannable,
+            exact_eligible_lines,
+            exact_unit_lines,
+            exact_scanned_unit_lines,
+            exact_scannable,
             min_lines,
             renamed,
         })
@@ -245,6 +297,22 @@ impl SourceSession {
 
     fn scannable(&self) -> bool {
         self.scannable
+    }
+
+    fn exact_eligible_lines(&self) -> HashMap<String, usize> {
+        self.exact_eligible_lines.clone()
+    }
+
+    fn exact_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.exact_unit_lines.clone()
+    }
+
+    fn exact_scanned_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.exact_scanned_unit_lines.clone()
+    }
+
+    fn exact_scannable(&self) -> bool {
+        self.exact_scannable
     }
 }
 

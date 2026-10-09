@@ -105,7 +105,8 @@ def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
 def run_pass(session: Any, kind: str, output: Path, count: int,
              evidence: dict[str, Any]) -> dict[str, object]:
     """Archive one independent native pass or an explicit eligible-free skip."""
-    if session is not None and session.scannable():
+    if session is not None and (session.exact_scannable() if kind == "exact"
+                                else session.scannable()):
         report = json.loads(getattr(session, kind)())
         if report["statistics"]["total"]["sources"] != count:
             raise RuntimeError("native source count mismatch")
@@ -128,7 +129,12 @@ def run_passes(args: argparse.Namespace, session: Any, count: int,
             args.output.parent / ("" if kind == "exact" else "jscpd-" + kind) /
             "jscpd-report.json")
         try:
-            statuses[kind] = run_pass(session, kind, output, count, evidence)
+            view = evidence.copy()
+            if kind == "exact" and session is not None:
+                view.update({"eligibleLines": session.exact_eligible_lines(),
+                             "unitLines": session.exact_unit_lines(),
+                             "scannedUnitLines": session.exact_scanned_unit_lines()})
+            statuses[kind] = run_pass(session, kind, output, count, view)
         except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
             statuses[kind] = {"exit_code": 2, "stderr": f"CLONE_ENGINE_ERROR: {exc}"}
     return statuses

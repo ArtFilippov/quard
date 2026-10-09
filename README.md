@@ -241,7 +241,14 @@ aliases). Ordinary standalone `pass`, `...` and `raise NotImplementedError`
 (bare or constructed with literal arguments) are excluded, including in
 documented stubs. They cannot turn two executable lines into a three-line clone.
 Other executable statements, including `return None`, computed raise arguments,
-and real bodies in contracts or special methods remain eligible. A later exact
+and real bodies in contracts or special methods remain eligible. The exact Rust
+pass also scans consecutive annotation-only fields of class-based TypedDicts
+imported from `typing` or `typing_extensions`, including explicit import aliases.
+Each schema is its own unit: the class header/name does not count, but an identical
+trailing run of at least `min_lines` original eligible field lines does, even
+after different leading fields. Different names or types are not normalized;
+schema declarations do not enter renamed or similar behavior views. Ordinary
+annotation-only fields remain excluded. A later exact
 contract-declaration view may count eligible declaration placeholders toward its
 physical line minimum; this behavior view does not. Views with no qualifying
 unit are explicitly skipped with a reason.

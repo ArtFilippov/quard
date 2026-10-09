@@ -87,6 +87,16 @@ Strict native Python whitespace tokens are anchored to their preceding eligible
 line before detection: matching indentation on the next, otherwise different
 line cannot turn two executable lines into a three-line clone.
 
+#121 adds exact-only units for uninterrupted class-based TypedDict field runs
+when the base resolves to an explicitly imported `typing` or
+`typing_extensions.TypedDict` (including aliases). The class header and name are
+not eligible. Each schema/run stays independent, and the same minimum counts
+original eligible field lines; a different first field need not prevent an
+identical trailing run. Exact uses native strict tokens, while renamed and similar
+still consume only the behavior view. Both views retain independent per-unit
+accounting and explicit empty-view skips; original mappings and native diagnostics
+apply to schema fragments too. Functional declarations remain a separate slice.
+
 ## Reporting and failures
 
 The three jobs retain the `jscpd`, `jscpd-renamed` and `jscpd-similar` identities,
@@ -113,7 +123,8 @@ requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
 and verifying the prepared-view fixtures with the real component.
 The ordinary CLI still uses original-source physical lines. The opt-in Rust
 path applies the shared minimum to eligible prepared lines. Declaration-only
-material for exact contract/schema clones remains for later slices of #112.
+material for exact contract and functional schema clones remains for later slices
+of #112.
 An explicit wheel-selection switch keeps the existing CLI executable and its
 independent native diagnostics in ordinary installations while the rest of the
 three-pass installation contract is built.
