@@ -38,10 +38,14 @@ violations baseline.
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including
    `return None`) do count. The exact Rust view additionally includes consecutive
-   class-based `typing`/`typing_extensions.TypedDict` fields, with a separate unit
-   per uninterrupted run in each schema. Identical fields count their original
-   eligible lines toward the same minimum regardless of class names; matching
-   trailing fields survive different leading fields. Different field names and
+   class-based and supported functional `typing`/`typing_extensions.TypedDict`
+   fields, with a separate unit per uninterrupted run in each schema. Functional
+   dictionary or keyword fields must each occupy a distinct original line, with
+   the name and type on that line and no opening/closing syntax there; compact
+   forms are excluded. Identical fields count their original eligible lines
+   toward the same minimum regardless of class/factory names or syntax;
+   matching trailing fields survive different leading fields. Original field
+   columns and verbatim fragments remain in reports. Different field names and
    types are never normalized in renamed/similar, whose behavior view excludes
    these declarations entirely. Ordinary annotation-only fields remain excluded.
    Future exact contract declarations may separately

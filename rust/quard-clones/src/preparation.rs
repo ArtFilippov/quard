@@ -6,6 +6,8 @@ use std::collections::HashSet;
 pub struct Unit {
     pub text: String,
     pub lines: Vec<usize>,
+    // Canonical schema columns map byte boundaries back to original columns.
+    pub columns: Option<Vec<Vec<usize>>>,
 }
 
 pub struct Views {
@@ -25,6 +27,16 @@ struct Selection {
     typed_dict_names: HashSet<String>,
     typed_dict_modules: HashSet<String>,
     schemas: Vec<Vec<(usize, usize)>>,
+    canonical_schemas: Vec<Unit>,
+    text: String,
+    error: Option<String>,
+}
+
+struct Field {
+    name: String,
+    name_span: (usize, usize),
+    annotation: (usize, usize),
+    line: usize,
 }
 
 impl Selection {
@@ -162,8 +174,161 @@ impl Selection {
         }
     }
 
+    fn field(
+        &self,
+        name: String,
+        name_span: (usize, usize),
+        annotation: (usize, usize),
+        functional: bool,
+    ) -> Option<Field> {
+        let text = &self.text;
+        let start = text[..name_span.0].rfind('\n').map_or(0, |i| i + 1);
+        let end = text[annotation.1..]
+            .find('\n')
+            .map_or(text.len(), |i| annotation.1 + i);
+        if annotation.1 > end
+            || text[name_span.0..annotation.1].contains('\n')
+            || !text[start..name_span.0].trim().is_empty()
+        {
+            return None;
+        }
+        if functional {
+            let suffix = text[annotation.1..end]
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !matches!(suffix, "" | ",") {
+                return None;
+            }
+        }
+        Some(Field {
+            name,
+            name_span,
+            annotation,
+            line: text[..start].bytes().filter(|byte| *byte == b'\n').count() + 1,
+        })
+    }
+
+    fn canonical_schema(&mut self, fields: &[Field]) {
+        if fields.is_empty() || fields.windows(2).any(|pair| pair[0].line >= pair[1].line) {
+            return;
+        }
+        let mut text = String::new();
+        let mut lines = Vec::new();
+        let mut columns = Vec::new();
+        for field in fields {
+            let original_start = self.text[..field.name_span.0]
+                .rfind('\n')
+                .map_or(0, |i| i + 1);
+            let name_start = field.name_span.0 - original_start;
+            let name_end = field.name_span.1 - original_start;
+            let type_start = field.annotation.0 - original_start;
+            let type_end = field.annotation.1 - original_start;
+            let mut map = vec![name_start; 5]; // Four uniform indentation bytes.
+            let mut canonical = format!("    {}: ", field.name);
+            // Original literal keys include quotes; only mapped boundaries are
+            // exposed to the reporter, never the canonical spelling.
+            for offset in 1..=field.name.len() {
+                map.push(if offset == field.name.len() {
+                    name_end
+                } else {
+                    (name_start + offset).min(name_end)
+                });
+            }
+            map.push(name_end);
+            map.push(type_start);
+            let annotation = &self.text[field.annotation.0..field.annotation.1];
+            canonical.push_str(annotation);
+            for offset in 1..=annotation.len() {
+                map.push(type_start + offset);
+            }
+            if map.len() != canonical.len() + 1 || map.last() != Some(&type_end) {
+                self.error = Some("schema field column map is incomplete".to_owned());
+                return;
+            }
+            text.push_str(&canonical);
+            text.push('\n');
+            columns.push(map);
+            lines.push(field.line);
+        }
+        self.canonical_schemas.push(Unit {
+            text,
+            lines,
+            columns: Some(columns),
+        });
+    }
+
+    fn functional_schema(&mut self, call: &ast::ExprCall) {
+        if !self.is_typed_dict(&call.func)
+            || call.args.is_empty()
+            || !matches!(&call.args[0], Expr::Constant(value) if matches!(value.value, Constant::Str(_)))
+        {
+            return;
+        }
+        let mut fields = Vec::new();
+        if call.args.len() == 2
+            && call
+                .keywords
+                .iter()
+                .all(|kw| kw.arg.as_ref().is_some_and(|n| n.as_str() == "total"))
+        {
+            let Expr::Dict(dictionary) = &call.args[1] else {
+                return;
+            };
+            for (key, value) in dictionary.keys.iter().zip(&dictionary.values) {
+                let Some(Expr::Constant(key)) = key else {
+                    return;
+                };
+                let Constant::Str(name) = &key.value else {
+                    return;
+                };
+                let key_range = key.range();
+                let span = (key_range.start().into(), key_range.end().into());
+                let literal = &self.text[span.0..span.1];
+                if !((literal.starts_with('\'') && literal.ends_with('\''))
+                    || (literal.starts_with('"') && literal.ends_with('"')))
+                {
+                    return;
+                }
+                let range = value.range();
+                let annotation = (range.start().into(), range.end().into());
+                let identifier = matches!(Expr::parse(name, "<schema-field>"), Ok(Expr::Name(_)));
+                let canonical_name = if identifier {
+                    name.clone()
+                } else {
+                    serde_json::to_string(name).expect("string field name")
+                };
+                let Some(field) = self.field(canonical_name, span, annotation, true) else {
+                    return;
+                };
+                fields.push(field);
+            }
+        } else if call.args.len() == 1 {
+            for kw in &call.keywords {
+                let Some(name) = &kw.arg else { return };
+                if name.as_str() == "total" {
+                    continue;
+                }
+                let range = kw.range();
+                let value = kw.value.range();
+                let annotation = (value.start().into(), value.end().into());
+                let start: usize = range.start().into();
+                let span = (start, start + name.len());
+                let Some(field) = self.field(name.to_string(), span, annotation, true) else {
+                    return;
+                };
+                fields.push(field);
+            }
+        } else {
+            return;
+        }
+        self.canonical_schema(&fields);
+    }
+
     fn schema_fields(&mut self, body: &[Stmt]) {
         let mut run = Vec::new();
+        let mut fields = Vec::new();
         for stmt in body {
             if let Stmt::AnnAssign(field) = stmt {
                 if field.value.is_none()
@@ -172,16 +337,38 @@ impl Selection {
                 {
                     let range = stmt.range();
                     run.push((range.start().into(), range.end().into()));
+                    if let Expr::Name(name) = field.target.as_ref() {
+                        let name_range = name.range();
+                        let annotation = field.annotation.range();
+                        if let Some(item) = self.field(
+                            name.id.to_string(),
+                            (name_range.start().into(), name_range.end().into()),
+                            (annotation.start().into(), annotation.end().into()),
+                            false,
+                        ) {
+                            fields.push(item);
+                        }
+                    }
                     continue;
                 }
             }
             if !run.is_empty() {
-                self.schemas.push(std::mem::take(&mut run));
+                self.finish_schema(&mut run, &mut fields);
             }
         }
         if !run.is_empty() {
-            self.schemas.push(run);
+            self.finish_schema(&mut run, &mut fields);
         }
+    }
+
+    fn finish_schema(&mut self, run: &mut Vec<(usize, usize)>, fields: &mut Vec<Field>) {
+        if run.len() == fields.len() && fields.windows(2).all(|pair| pair[0].line < pair[1].line) {
+            self.canonical_schema(fields);
+        } else {
+            self.schemas.push(std::mem::take(run));
+        }
+        run.clear();
+        fields.clear();
     }
 
     fn suite(&mut self, body: Vec<Stmt>) {
@@ -289,7 +476,20 @@ impl Visitor for Selection {
                 self.forget_target(&def.target);
             }
             Stmt::Assign(def) => {
-                self.keep[self.current].push(span);
+                let mut schema = false;
+                if def.targets.len() == 1 && matches!(&def.targets[0], Expr::Name(_)) {
+                    if let Expr::Call(call) = def.value.as_ref() {
+                        if self.is_typed_dict(&call.func) {
+                            self.functional_schema(call);
+                            schema = true;
+                        }
+                    }
+                }
+                if schema {
+                    self.remove[self.current].push(span);
+                } else {
+                    self.keep[self.current].push(span);
+                }
                 for target in &def.targets {
                     self.forget_target(target);
                 }
@@ -335,6 +535,7 @@ fn compact_units(
             result.push(Unit {
                 text: compact,
                 lines,
+                columns: None,
             });
         }
     }
@@ -347,9 +548,13 @@ pub fn prepare(text: &str, path: &str) -> Result<Views, String> {
         keep: vec![Vec::new()],
         remove: vec![Vec::new()],
         attribute_docs: true,
+        text: text.to_owned(),
         ..Selection::default()
     };
     selection.suite(suite);
+    if let Some(error) = selection.error.take() {
+        return Err(format!("{path}: {error}"));
+    }
     let starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
@@ -365,6 +570,9 @@ pub fn prepare(text: &str, path: &str) -> Result<Views, String> {
             path,
             &starts,
             selection.schemas.into_iter().map(|run| (run, Vec::new())),
-        )?,
+        )?
+        .into_iter()
+        .chain(selection.canonical_schemas)
+        .collect(),
     })
 }

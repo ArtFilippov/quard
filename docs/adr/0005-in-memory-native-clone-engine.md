@@ -95,7 +95,17 @@ original eligible field lines; a different first field need not prevent an
 identical trailing run. Exact uses native strict tokens, while renamed and similar
 still consume only the behavior view. Both views retain independent per-unit
 accounting and explicit empty-view skips; original mappings and native diagnostics
-apply to schema fragments too. Functional declarations remain a separate slice.
+apply to schema fragments too. #122 adds functional calls proven from the same
+imports: literal dictionary keys or keyword fields each on a separate original
+line, with a single-line type expression and no surrounding call/dictionary
+syntax on a field line. Compact or mixed-line calls are outside the supported
+schema view; their declaration material also stays out of behavior views.
+In-memory canonical field tokens let class and functional schemas match exactly
+without treating the class/factory name, quotes or commas as fields. Per-byte
+column maps restore the real field positions; archived fragments are extracted
+from original files, including their original syntax. Each schema remains its
+own unit and uses the same eligible-line minimum; mapping/parser errors fail
+as infrastructure errors rather than silently returning an empty scan.
 
 ## Reporting and failures
 
@@ -123,8 +133,7 @@ requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
 and verifying the prepared-view fixtures with the real component.
 The ordinary CLI still uses original-source physical lines. The opt-in Rust
 path applies the shared minimum to eligible prepared lines. Declaration-only
-material for exact contract and functional schema clones remains for later slices
-of #112.
+material for exact contract clones remains for later slices of #112.
 An explicit wheel-selection switch keeps the existing CLI executable and its
 independent native diagnostics in ordinary installations while the rest of the
 three-pass installation contract is built.

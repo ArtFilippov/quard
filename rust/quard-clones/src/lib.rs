@@ -14,6 +14,26 @@ mod preparation;
 struct SourceMap {
     path: String,
     lines: Vec<usize>,
+    columns: Option<Vec<Vec<usize>>>,
+}
+
+fn original_column(map: &SourceMap, line: usize, column: usize) -> PyResult<usize> {
+    if let Some(columns) = &map.columns {
+        let boundaries = columns
+            .get(line - 1)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("unmapped schema line"))?;
+        // The pinned tokenizer can point one byte past a final newline.
+        if column > boundaries.len() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "unmapped schema column",
+            ));
+        }
+        return boundaries
+            .get(column.min(boundaries.len() - 1))
+            .copied()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("unmapped schema column"));
+    }
+    Ok(column)
 }
 
 // Strict Python tokenization includes newlines and indentation in whitespace
@@ -167,6 +187,11 @@ impl SourceSession {
                 .enumerate()
             {
                 let id = format!("{path}#quard-unit-{number}");
+                let map = SourceMap {
+                    path: path.clone(),
+                    lines: unit.lines.clone(),
+                    columns: unit.columns.clone(),
+                };
                 if !schema {
                     scannable |= unit.lines.len() >= min_lines;
                 }
@@ -181,6 +206,8 @@ impl SourceSession {
                     }
                     for mut token in display.into_iter().flat_map(|source| source.tokens) {
                         for loc in [&mut token.start, &mut token.end] {
+                            let column =
+                                original_column(&map, loc.line as usize, loc.column as usize)?;
                             let line = *unit.lines.get(loc.line as usize - 1).ok_or_else(|| {
                                 pyo3::exceptions::PyRuntimeError::new_err(
                                     "unmapped native display token",
@@ -192,7 +219,8 @@ impl SourceSession {
                                 .map(str::len)
                                 .sum();
                             loc.line = line as u32;
-                            loc.offset = (offset + loc.column as usize) as u32;
+                            loc.column = column as u32;
+                            loc.offset = (offset + column) as u32;
                         }
                         if !schema || !renamed {
                             files[file_index].tokens.push(token);
@@ -232,13 +260,7 @@ impl SourceSession {
                         }
                         prepared_renamed.extend(normalized);
                     }
-                    maps.insert(
-                        id,
-                        SourceMap {
-                            path: path.clone(),
-                            lines: unit.lines,
-                        },
-                    );
+                    maps.insert(id, map);
                 } else if unit.lines.len() >= min_lines {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "eligible unit rejected by native preparation",
@@ -422,6 +444,8 @@ impl SourceSession {
                 })?;
                 let text = &self.texts[&map.path];
                 for location in [&mut fragment.start, &mut fragment.end] {
+                    let column =
+                        original_column(map, location.line as usize, location.column as usize)?;
                     let line = *map.lines.get(location.line as usize - 1).ok_or_else(|| {
                         pyo3::exceptions::PyRuntimeError::new_err("unmapped prepared line")
                     })?;
@@ -431,11 +455,10 @@ impl SourceSession {
                         .map(str::len)
                         .sum::<usize>();
                     let length = text.lines().nth(line - 1).map(str::len).unwrap_or(0);
-                    if location.column as usize == length + 1 {
-                        location.column = length as u32;
-                    }
+                    let column = column.min(length);
+                    location.column = column as u32;
                     location.line = line as u32;
-                    location.offset = (original + location.column as usize) as u32;
+                    location.offset = (original + column) as u32;
                 }
                 fragment.source_id = map.path.clone();
             }

@@ -30,7 +30,7 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                        verify_prepared_similar, verify_similar_boundaries,
                                        verify_similar_failure,
                                        prepared_native, report as prepared_report, versions, wheel)
-from typed_dict_clone_utils import verify_typed_dict_fields
+from typed_dict_clone_utils import verify_functional_typed_dict_fields, verify_typed_dict_fields
 
 PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
                 "raise NotImplementedError()", 'raise NotImplementedError("pending")')
@@ -173,6 +173,9 @@ class TestCheckRunner(unittest.TestCase):
         self._verify_alias_shadowing()
         self._verify_behavioral_bodies()
         verify_typed_dict_fields(self, self.root)
+
+    def test_real_wheel_functional_typed_dict_fields(self) -> None:
+        verify_functional_typed_dict_fields(self, self.root)
 
     def _inspect_placeholder_source(self, source: str, eligible: int,
                                     clone: bool) -> dict[str, Any]:
