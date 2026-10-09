@@ -1,4 +1,8 @@
-# #127: clone rollout integration record (local, release blocked)
+# #127: historical wheel rollout integration record
+
+This records the earlier unpublished-wheel proposal. Issue #125 supersedes its
+publication gate with a private, pinned Git source build. See the current
+installation and supported-target contract in [README.md](../README.md#install).
 
 ## Current gate
 

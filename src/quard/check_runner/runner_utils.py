@@ -48,7 +48,7 @@ def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str
                        "Run the installer or uv sync --locked --group dev.")
             problems.append(diagnostic("system", "TOOL_VERSION_MISMATCH", message,
                                        is_infrastructure_error=True))
-    if clone_engine_enabled():
+    if clone_engine_enabled(root):
         try:
             actual = metadata.version("quard-clones")
         except metadata.PackageNotFoundError:
@@ -66,7 +66,7 @@ def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str
             except (ImportError, OSError, RuntimeError, ValueError, TypeError) as exc:
                 problems.append(diagnostic("system", "TOOL_VERSION_MISMATCH",
                                            f"quard-clones binary/ABI: {exc}. "
-                                           "Reinstall the pinned binary wheel.",
+                                            "Reinstall the pinned source-built component.",
                                            is_infrastructure_error=True))
     return versions, problems
 
@@ -144,7 +144,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         min_lines = read_duplication_min_lines(root)
         clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
                               if path.endswith(".py"))
-        engine = clone_engine_enabled()
+        engine = clone_engine_enabled(root)
         eligible = clone_files if engine else [path for path in clone_files if len(
             (root / path).read_text(encoding="utf-8").splitlines()) >= min_lines]
         # An explicit empty config prevents consumer-owned jscpd settings from changing scope.

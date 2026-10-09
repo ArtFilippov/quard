@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 from pathlib import Path
+import subprocess
 import sys
 sys.dont_write_bytecode = True
 from typing import Any, cast
@@ -34,9 +35,43 @@ def dependency_specs(tool: Path) -> list[str]:
     for name, version in manifest["dependencies"].items():
         extras = manifest.get("extras", {}).get(name)
         specs.append(name + ("[" + ",".join(extras) + "]" if extras else "") + "==" + version)
-    if manifest.get("native_wheel"):
+    if manifest.get("native_source") or manifest.get("native_wheel"):
         specs.append("quard-clones==" + manifest["native_components"]["quard-clones"])
     return specs
+
+
+def clone_source(root: Path, tool: Path) -> dict[str, str] | None:
+    """Pin uv to the selected tool revision, including its locked Rust crate graph."""
+    if not read_json(tool / "tools.json").get("native_source"):
+        return None
+
+    def git(cwd: Path, *args: str) -> str:
+        result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True,
+                                text=True, check=False, timeout=30)
+        if result.returncode:
+            raise QuardError("CLONE_SOURCE_UNAVAILABLE", f"Cannot resolve Quard Git source: {result.stderr.strip()}")
+        return result.stdout.strip()
+
+    revision = git(tool, "rev-parse", "HEAD")
+    if git(tool, "status", "--porcelain", "--untracked-files=all", "--",
+           "rust/quard-clones"):
+        raise QuardError("CLONE_SOURCE_DIRTY",
+                         "Commit the Rust component and Cargo.lock before installing from source.")
+    origin = git(tool, "remote", "get-url", "origin")
+    if not origin:
+        raise QuardError("CLONE_SOURCE_UNAVAILABLE", "Quard needs a reachable origin to pin its Rust source.")
+    if Path(origin).is_absolute():
+        origin = Path(origin).as_uri()
+    elif origin.startswith("git@") and ":" in origin:
+        host, repo = origin.split(":", 1)
+        origin = f"ssh://{host}/{repo}"
+    if tool != root and tool.is_relative_to(root):
+        relative = tool.relative_to(root).as_posix()
+        entry = git(root, "ls-files", "--stage", "--", relative)
+        if not entry.startswith(f"160000 {revision} 0\t{relative}"):
+            raise QuardError("CLONE_GITLINK_MISMATCH",
+                             "The selected Quard revision must match the consumer's staged gitlink.")
+    return {"git": origin, "rev": revision, "subdirectory": "rust/quard-clones"}
 
 
 def initialize_state(root: Path, tool: Path) -> None:
@@ -117,7 +152,7 @@ def validate_project(root: Path) -> dict[str, Any]:
     return project
 
 
-def prepare_project(root: Path) -> None:
+def prepare_project(root: Path, source: dict[str, str] | None = None) -> None:
     doc = tomlkit.parse((root / "pyproject.toml").read_text(encoding="utf-8"))
     # Preserve runtime Python support and upper bounds. Only the dev group requires a modern interpreter.
     project = doc["project"]
@@ -128,6 +163,8 @@ def prepare_project(root: Path) -> None:
     group = groups.setdefault("dev", {})
     current = group.get("requires-python", "")
     group["requires-python"] = (current + ",>=3.12") if current and ">=3.12" not in current else (current or ">=3.12")
+    if source is not None:
+        doc["tool"]["uv"].setdefault("sources", {})["quard-clones"] = source
     atomic_write(root / "pyproject.toml", tomlkit.dumps(doc), root)
 
 

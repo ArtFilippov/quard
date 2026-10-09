@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from packaging.tags import Tag, parse_tag, sys_tags
 
-from quard._common import QuardError, read_json, tool_dir
+from quard._common import QuardError, load_toml, read_json, tool_dir
 from quard.duplication_utils import read_duplication_min_lines
 
 EXPECTED = read_json(tool_dir() / "tools.json")["native_components"]
@@ -24,14 +24,19 @@ RENAMED_KIND = "renamed"
 SKIP_REASON = "No prepared unit meets the effective minimum"
 
 
-def enabled() -> bool:
-    """Select the released wheel when pinned, or honor explicit developer opt-in.
+def enabled(root: Path | None = None) -> bool:
+    """Select the installed source build, or honor explicit developer opt-in.
 
     Returns:
         bool: Whether the Rust engine is selected.
     """
-    return bool(read_json(tool_dir() / "tools.json").get("native_wheel")) or (
-        os.environ.get("QUARD_CLONE_ENGINE") == "rust")
+    manifest = read_json(tool_dir() / "tools.json")
+    if os.environ.get("QUARD_CLONE_ENGINE") == "rust" or manifest.get("native_wheel"):
+        return True
+    if root is None or not manifest.get("native_source") or not (root / "pyproject.toml").is_file():
+        return False
+    sources = load_toml(root / "pyproject.toml").get("tool", {}).get("uv", {}).get("sources", {})
+    return "quard-clones" in sources
 
 
 def installed_engine() -> dict[str, str]:

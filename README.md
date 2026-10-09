@@ -13,6 +13,22 @@ git submodule add git@github.com:ArtFilippov/quard.git quard
 bash quard/install.sh --project .
 ```
 
+Install requires Rust/Cargo and a working C compiler/linker on every consumer
+machine. uv builds `quard-clones==0.1.0` from the selected Quard Git revision
+using pinned `maturin==1.9.6` and `rust/quard-clones/Cargo.lock`; no manual wheel
+step or published wheel is needed. The revision must be fetchable from the
+tool clone's `origin` and, for submodules, match the consumer's staged gitlink.
+Commit the generated `[tool.uv.sources].quard-clones` and `uv.lock` alongside
+the gitlink; push that commit before running locked sync on a fresh machine.
+Use a shared private Git remote for committed locks, not a developer-local
+`file://` origin (the latter is used only by the disposable public test fixture).
+Verify the `rev` in `pyproject.toml` against the staged gitlink (`git ls-files
+--stage -- path/to/quard`), and the `quard-clones` Git source in `uv.lock`
+against that same commit. `uv sync --locked --group dev` rejects stale lock
+metadata and builds from the pinned source without writing to the tool checkout.
+uv caches the source and built wheels outside the tool checkout; a new revision
+or interpreter/build environment may trigger another build.
+
 The installer pins dev dependencies, updates the consumer lockfile, synchronizes
 its environment, initializes `.quard/` and native configs, then runs real analyzer
 smoke tests. It does not copy or modify Quard sources. Inspect a plan with:
@@ -210,7 +226,7 @@ Check supports `--serial`, `--timeout 900` (per analyzer) and
 `--max-diagnostics 50` (human output only). All jobs complete independently, with
 up to four concurrent analyzers. Pylint runs production and test profiles separately,
 with `jobs=1` to preserve whole-project checks. No concurrent dependency syncing.
-The pinned `jscpd` binary checks Type 1 (`exact`), Type 2 (`renamed`) and
+The pinned first-party `quard-clones` engine checks Type 1 (`exact`), Type 2 (`renamed`) and
 gap-merged Type 3 (`similar`) Python clones in independent native jobs over the
 same discovered `src/` and `tests/` `.py` files, including cross-profile matches.
 `.pyi` stubs are not a supported jscpd Python extension. Type 2 matches normalize
@@ -226,8 +242,8 @@ configs without the section or key also use 3 without migration. An explicit
 value is retained by install, reinstall and apply. This setting is independent of
 Pylint's required `[readability.production] min_similarity_lines` limit and
 `[checks] duplicate_detection`, which selects the three jscpd jobs together.
-The default native CLI scans unprepared `.py` files and counts physical source
-lines. The opt-in Rust path prepares discovered files in memory, applying the
+The historical native CLI scans unprepared `.py` files and counts physical source
+lines. The installed Rust path prepares discovered files in memory, applying the
 same minimum to eligible lines within each module, class or function unit.
 File-level and class-level imports, actual docstrings, attribute documentation,
 ordinary class/function headers (including decorators, multiline signatures and
@@ -269,11 +285,8 @@ unit are explicitly skipped with a reason.
 Rust reports retain
 original paths, positions and verbatim fragments, with source digests and
 per-unit accounting.
-For developer comparison, build the locked `rust/quard-clones` wheel with
-`maturin build --manifest-path rust/quard-clones/Cargo.toml --locked --release`,
-install it into the selected consumer's uv environment, then set
-`QUARD_CLONE_ENGINE=rust` for a full check. All three jobs then run independently
-through the pinned Rust in-memory engine over the same discovered scope. Similar
+Ordinary installs run all three independent jobs through the pinned Rust
+in-memory engine over the same discovered scope. Similar
 merges native fragments separated by at most two unmatched lines in each file;
 each constituent fragment must clear the same detection minimum (and one token)
 before merging. Gap detection and merging stay inside the same prepared
@@ -286,38 +299,25 @@ refer to the original source, which may span more lines than were eligible.
 It reports only native Type 3 `similar` clones with score and `gap` method.
 Renamed uses native strict identifier and string/numeric literal
 normalization and reports only native Type 2 clones; the exact job retains its
-Type 1 findings. Each job has its own archived native JSON and streams. The
-wheel contains native code; consumers need no Rust toolchain. A
-missing or mismatched wheel is an infrastructure error for the affected jobs. See
-[ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md) for the report and
-version contract. Ordinary installs continue to use the three native CLI jobs
-until all three in-memory parity and #125 installation gates are complete.
-The `clones-wheels` GitHub workflow builds and probes four `cp312-abi3` Linux
-wheels (x86-64/ARM64 × glibc/musl) with Rust in its build containers. It checks
-linked crate versions and original-source exact, renamed and gap findings in
-each built wheel. Release publishing to PyPI requires all four builds, an
-isolated full consumer check, a trusted publisher and a `clones-v0.1.0` release
-tag. `cp312-abi3` targets CPython 3.12 and newer, not PyPy. A local build is
-not a published artifact. Until reachable wheels and target installs are
-verified, `tools.json` does not activate `native_wheel`, so ordinary consumers
-stay on the CLI path. After release verification, activation adds the pinned
-`quard-clones==0.1.0` via the consumer's existing uv indexes and sources,
-disallowing a source build for that distribution. The consumer `uv.lock` fixes
-resolved wheel hashes. Install and check validate the loaded distribution,
-wheel platform/ABI and linked crate versions; install also runs packaged
-exact/renamed/similar probes with logs under `.quard/logs/install-probes/`.
-Developers can continue testing local wheels with `QUARD_CLONE_ENGINE=rust`;
-consumer installs do not need Cargo or Rust.
+Type 1 findings. Each job has its own archived native JSON and streams. A
+missing or mismatched built component is an infrastructure error for the affected
+jobs. See [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md).
+On Linux x86-64 glibc, source builds and CPython 3.12/3.13 have been exercised;
+ARM64, musl and CPython 3.14 source installs remain unverified. The PyO3
+`abi3-py312` build targets CPython 3.12+, not PyPy. `Cargo.lock` fixes the Rust
+dependencies, including linked jscpd 5.4.0 crates `cpd-core 0.1.20`,
+`cpd-finder 0.1.20`, `cpd-tokenizer 0.1.19` and `cpd-reporter 0.1.21`.
+Install and check validate the distribution, wheel ABI and linked crate versions;
+install also runs packaged exact/renamed/gap-similar and clean probes with logs
+under `.quard/logs/install-probes/`. The jscpd CLI remains pinned and version
+probed independently, as does Pylint's required duplication analysis.
+Projects installed before this source rollout retain their CLI jobs until they
+reinstall to acquire the source pin.
 The reproducible same-scope CLI/Rust performance comparison and seven-run
 measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
-The isolated release fixture runs uv install, reinstall and full check from a
-separately located tool copy and a nested path with spaces, using a local wheel
-as a pre-publication test. After publication, verify uv resolves each target's
-wheel from the consumer's real index before enabling the default path. The
-fixture also runs apply and verifies that install/apply/check do not modify
-either external tool copy. The local wheel test does not establish published
-wheel availability or replace checks on the affected consumer. The rollout
-gate and autonomous coverage audit are in
+The isolated source fixture runs uv install, reinstall, locked sync and full
+check from a separate tool clone and a nonstandard submodule path with spaces,
+checking that neither tool tree changes. The rollout history is in
 [the #127 integration record](docs/issue-127-clone-rollout.md).
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or

@@ -34,7 +34,7 @@ from quard.installation.transactional_installation import TransactionalInstallat
 
 
 class TestTransactionalInstallation(unittest.TestCase):
-    def test_released_wheel_is_binary_only_and_sync_failure_rolls_back(self):
+    def test_source_build_failure_rolls_back_and_logs(self):
         root = self.configured_project()
         before = managed_bytes(root)
         commands: list[list[str]] = []
@@ -42,19 +42,21 @@ class TestTransactionalInstallation(unittest.TestCase):
 
         def fail_sync(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             commands.append(argv)
-            return native_result(argv, stderr="unavailable wheel", code=int(argv[1] == "sync"))
+            return native_result(argv, stderr="cargo is required", code=int(argv[1] == "sync"))
 
         with patch.object(entry, "dependency_specs", return_value=specs), patch.object(
                 entry, "capture", fail_sync), self.assertRaises(QuardError):
             self.installation().install(root, QUARD, progress=False)
         self.assertEqual(len(commands), 2)
         for argv in commands:
-            self.assertEqual(argv[argv.index("--no-build-package") + 1], "quard-clones")
+            self.assertNotIn("--no-build-package", argv)
         self.assertIn("quard-clones==0.1.0", commands[0])
+        source = load_toml(root / "pyproject.toml").get("tool", {}).get("uv", {}).get("sources", {})
+        self.assertNotIn("quard-clones", source)
         self.assertEqual(managed_bytes(root), before)
         self.assertTrue(read_json(root / ".quard/logs/install-error.json")
                         ["managed_files_rolled_back"])
-        self.assertIn("unavailable wheel", (root / ".quard/logs/install.log").read_text())
+        self.assertIn("cargo is required", (root / ".quard/logs/install.log").read_text())
 
     def test_real_native_installer_smoke_probes(self):
         root = self.configured_project()
@@ -62,7 +64,12 @@ class TestTransactionalInstallation(unittest.TestCase):
         (root / "pyproject.toml").write_bytes((QUARD / "pyproject.toml").read_bytes())
         logs = root / ".quard/logs/install-probes"
         logs.mkdir(parents=True)
-        result = smoke_tests(root, logs)
+        with patch("quard.audit_utils.read_json", wraps=read_json) as manifest:
+            # The standalone CLI smoke fixture runs without installing a wheel.
+            manifest.side_effect = lambda path: ({"dependencies": {"jscpd": "5.4.0"}}
+                                                if Path(path).name == "tools.json"
+                                                else read_json(path))
+            result = smoke_tests(root, logs)
         self.assertEqual(result["pylint_config_and_fixture"], "passed")
         self.assertEqual(result["pyright_type_error"], "detected")
         self.assertEqual(result["pydoclint_signature_error"], "detected")
@@ -147,6 +154,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(result["status"], "planned")
         self.assertIn("pyright[nodejs]==1.1.414", result["dependencies"])
         self.assertIn("jscpd==5.4.0", result["dependencies"])
+        self.assertTrue(result["clone_source"]["git"].startswith(("ssh://", "https://")))
         self.assertEqual(managed_bytes(root), before)
 
     def test_rollback_on_uv_failure_leaves_failure_log(self):
@@ -369,8 +377,12 @@ class TestTransactionalInstallation(unittest.TestCase):
         actual = load_toml(path)
         self.assertIn("foreign.Framework", actual["tool"]["pylint"]["design"]["ignored-parents"])
         self.assertEqual(actual["tool"]["pyright"]["stubPath"], "src/stubs")
-        for key in ("sources", "index", "dependency-metadata"):
+        for key in ("index", "dependency-metadata"):
             self.assertEqual(actual["tool"]["uv"][key], document["tool"]["uv"][key])
+        self.assertEqual(actual["tool"]["uv"]["sources"]["foreign"],
+                         document["tool"]["uv"]["sources"]["foreign"])
+        self.assertEqual(actual["tool"]["uv"]["sources"]["quard-clones"]["rev"],
+                         self.installation().plan(root, QUARD)["clone_source"]["rev"])
         self.assertEqual(_policy.read_limits(root)["production"]["max_complexity"], 6)
         self.assertTrue((root / ".quard/config.toml").exists())
         self.assertTrue(all(not (root / ".quard" / name).exists() for name in

@@ -324,7 +324,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                            {"versions": {}, "smoke_tests": {"native": "mocked"}})
             return native_result(argv)
 
-        with patch.object(entry, "capture", fake_uv):
+        with patch.object(entry, "capture", fake_uv), patch.object(
+                entry, "clone_source", return_value=None):
             return TransactionalInstallation(entry).install(root, QUARD, progress=False)
 
     def generated_report(self, root: Path) -> dict[str, Any]:

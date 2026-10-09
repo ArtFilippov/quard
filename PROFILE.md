@@ -22,15 +22,15 @@ violations baseline.
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
-* **jscpd 5.4.0**: independent native Type 1 (`exact`), Type 2 (`renamed`) and
+* **jscpd 5.4.0 + quard-clones 0.1.0**: independent native Type 1 (`exact`), Type 2 (`renamed`) and
   gap-merged Type 3 (`similar`) Python clone jobs in strict mode, blocking each
   fragment. Keeping the exact pass separate preserves Type 1 findings that
   native normalization can miss on a combined scan. Type 2 normalizes identifiers
   and string/numeric literals.
   `[duplication] min_lines` in `.quard/config.toml` sets a shared positive integer
   minimum (default 3, also for older configs without the section or key). It is
-   passed to every job and used in each job's expected-source count. The default
-   CLI scans physical `.py` lines; the opt-in Rust path counts eligible lines
+    passed to every job and used in each job's expected-source count. The historical
+    CLI scans physical `.py` lines; the installed Rust path counts eligible lines
    within a prepared module/class/function unit. Ordinary definition headers,
    decorators, annotation-only fields and recognized type aliases are excluded;
    actual assignments, control flow and executable bodies remain eligible.
@@ -63,8 +63,8 @@ violations baseline.
    length of a reported original range cannot raise the prepared minimum.
    Declarations do not enter renamed/similar. This minimum is
    distinct from Pylint's mandatory `min_similarity_lines` readability limit.
-  With a separately installed, first-party `quard-clones==0.1.0` wheel and
-  `QUARD_CLONE_ENGINE=rust`, all three jobs use the linked `cpd-core==0.1.20`,
+   With the ordinary source-built first-party `quard-clones==0.1.0` component,
+   all three jobs use the linked `cpd-core==0.1.20`,
   `cpd-finder==0.1.20`, `cpd-tokenizer==0.1.19` and
   `cpd-reporter==0.1.21` crates in memory. Renamed uses strict native
   identifier and string/numeric literal normalization and keeps only native

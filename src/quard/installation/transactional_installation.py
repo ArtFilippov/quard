@@ -26,6 +26,7 @@ class TransactionalInstallation(Installation):
              ) -> dict[str, Any]:
         entry = self._entry
         specs = entry.dependency_specs(tool)
+        source = entry.clone_source(root, tool)
         previous = (read_json(root / ".quard/installation.json")
                     if (root / ".quard/installation.json").exists() else {})
         selected_extras = sorted(set(extras if extras is not None else previous.get("extras", [])))
@@ -36,6 +37,7 @@ class TransactionalInstallation(Installation):
             "pyproject.toml", "pyrightconfig.json", "uv.lock", "tach.toml", ".gitignore",
         ])
         return {"project": str(root), "dependencies": specs, "extras": selected_extras,
+                 "clone_source": source,
                 "managed_files": managed,
                 "architecture_initialization": "separate; no source layout is changed"}
 
@@ -51,8 +53,6 @@ class TransactionalInstallation(Installation):
         plan = self.plan(root, tool, extras=extras)
         saved = entry.snapshot(root, plan["managed_files"])
         specs = plan["dependencies"]
-        binary_only = (["--no-build-package", "quard-clones"] if any(
-            spec.startswith("quard-clones==") for spec in specs) else [])
         selected_extras = plan["extras"]
         extra_args = [arg for extra in selected_extras for arg in ("--extra", extra)]
         if dry_run:
@@ -73,12 +73,12 @@ class TransactionalInstallation(Installation):
             _ = policy.checks()
             if not policy.files()["production"]:
                 raise QuardError("EMPTY_SOURCE_SCOPE", "No Python files under src/.")
-            entry.prepare_project(root)
+            entry.prepare_project(root, plan["clone_source"])
             commands = [
-                [uv, "add", "--dev", "--no-sync", "--python", ">=3.12",
-                 *binary_only, *specs],
-                [uv, "sync", "--locked", "--group", "dev", "--python", ">=3.12",
-                 *binary_only, *extra_args],
+                [uv, "add", "--dev", "--no-sync",
+                  *specs],
+                [uv, "sync", "--locked", "--group", "dev",
+                  *extra_args],
                 [uv, "run", "--locked", "--no-sync", "--group", "dev", *extra_args,
                  "python", str(tool / "_audit.py"), "--project", str(root), "--json"],
             ]

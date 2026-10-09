@@ -200,7 +200,8 @@ class Probe:
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
             "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected",
             "jscpd_similar_clone": "detected"}
-    if read_json(tool_dir() / "tools.json").get("native_wheel"):
+    if any(read_json(tool_dir() / "tools.json").get(key) for key in
+           ("native_source", "native_wheel")):
         native = probe([sys.executable, str(tool_dir() / "rust/quard-clones/smoke.py")],
                        root, "clone-wheel-smoke", log_root)
         if native["exit_code"] != 0:
@@ -226,7 +227,8 @@ def audit(root: Path) -> dict[str, Any]:
         if actual != expected:
             raise QuardError("VERSION_MISMATCH", f"{name}: expected {expected}, installed {actual}")
         versions[name] = actual
-    if read_json(tool_dir() / "tools.json").get("native_wheel"):
+    if any(read_json(tool_dir() / "tools.json").get(key) for key in
+           ("native_source", "native_wheel")):
         try:
             versions.update(installed_engine())
         except (ImportError, OSError, ValueError, RuntimeError, TypeError) as exc:

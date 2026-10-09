@@ -789,6 +789,7 @@ def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
         ".git", ".venv", ".quard", ".tach", "__pycache__", "target"))
     manifest = json.loads((tool / "tools.json").read_text(encoding="utf-8"))
     manifest["native_wheel"] = True  # Simulate activation without claiming publication.
+    manifest["native_source"] = False
     (tool / "tools.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def tree_contents(directory: Path) -> dict[str, str]:

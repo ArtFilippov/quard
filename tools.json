@@ -19,6 +19,7 @@
     "cpd-reporter": "0.1.21",
     "cpd-tokenizer": "0.1.19"
   },
+  "native_source": true,
   "upstream_release_checked": "2026-09-21",
   "note": "Exact top-level pins; uv.lock resolves and fixes transitive dependencies. No third-party wheels are embedded."
 }

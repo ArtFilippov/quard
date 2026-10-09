@@ -40,15 +40,15 @@ PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
 
 
 class TestCheckRunner(unittest.TestCase):
-    def test_release_pin_activates_only_with_manifest(self) -> None:
+    def test_source_pin_activates_component(self) -> None:
         manifest = read_json(QUARD / "tools.json")
         tool = self.root / "candidate-tool"
         tool.mkdir()
         write_json(tool / "tools.json", manifest)
-        self.assertNotIn("quard-clones==0.1.0", dependency_specs(tool))
-        manifest["native_wheel"] = True
-        write_json(tool / "tools.json", manifest)
         self.assertIn("quard-clones==0.1.0", dependency_specs(tool))
+        manifest["native_source"] = False
+        write_json(tool / "tools.json", manifest)
+        self.assertNotIn("quard-clones==0.1.0", dependency_specs(tool))
 
     def test_real_wheel_rejects_incompatible_abi_tag(self) -> None:
         python, _ = wheel()
