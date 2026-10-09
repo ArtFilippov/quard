@@ -27,7 +27,8 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                        verify_mismatched_engine, verify_missing_wheel,
                                        verify_real_full_check, verify_same_file_and_mapping,
                                        verify_prepared_renamed, verify_renamed_failure,
-                                       verify_prepared_similar, verify_similar_failure,
+                                       verify_prepared_similar, verify_similar_boundaries,
+                                       verify_similar_failure,
                                        prepared_native, report as prepared_report, versions, wheel)
 
 PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
@@ -409,6 +410,7 @@ class TestCheckRunner(unittest.TestCase):
 
     def test_real_wheel_similar_prepared(self) -> None:
         verify_prepared_similar(self, self.root)
+        verify_similar_boundaries(self, self.root)
 
     def test_real_wheel_similar_failure_keeps_peers(self) -> None:
         verify_similar_failure(self, self.root)

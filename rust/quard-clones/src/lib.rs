@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cpd_core::detect::{detect_prepared, merge_gapped_clones, PathFilters};
 use cpd_core::models::{CpdClone, KindFilter, SourceFile};
@@ -14,6 +14,35 @@ mod preparation;
 struct SourceMap {
     path: String,
     lines: Vec<usize>,
+}
+
+// Strict Python tokenization includes newlines and indentation in whitespace
+// tokens. A match of two executable lines plus only the indentation of the
+// next line must not clear a three-eligible-line minimum. Keep the native
+// hashes and token boundaries, but anchor such whitespace spans to their
+// preceding eligible line before native detection applies its line threshold.
+fn anchor_whitespace_spans(source: &mut cpd_core::detect::PreparedSource, text: &str) {
+    for (start, end) in &mut source.spans {
+        let whitespace = text
+            .get(start.offset as usize..end.offset as usize)
+            .is_some_and(|slice| slice.chars().all(char::is_whitespace));
+        if !whitespace {
+            continue;
+        }
+        if start.column == 0 && start.line > 1 {
+            // Indentation alone must not be a match on the next line.
+            let preceding = &text[..start.offset as usize];
+            if let Some(newline) = preceding.rfind('\n') {
+                let previous_start = preceding[..newline].rfind('\n').map_or(0, |i| i + 1);
+                start.line -= 1;
+                start.column = (newline - previous_start) as u32;
+                start.offset = newline as u32;
+            }
+        }
+        if end.line > start.line || start.offset > end.offset {
+            *end = start.clone();
+        }
+    }
 }
 
 #[pyfunction]
@@ -32,6 +61,7 @@ struct SourceSession {
     texts: HashMap<String, String>,
     files: Vec<SourceFile>,
     prepared: Vec<cpd_core::detect::PreparedSource>,
+    prepared_similar: Vec<cpd_core::detect::PreparedSource>,
     prepared_renamed: Vec<cpd_core::detect::PreparedSource>,
     maps: HashMap<String, SourceMap>,
     eligible_lines: HashMap<String, usize>,
@@ -71,6 +101,7 @@ impl SourceSession {
         let mut texts = HashMap::new();
         let mut files = Vec::new();
         let mut prepared = Vec::new();
+        let mut prepared_similar = Vec::new();
         let mut prepared_renamed = Vec::new();
         let mut maps = HashMap::new();
         let mut eligible_lines = HashMap::new();
@@ -129,6 +160,10 @@ impl SourceSession {
                         }
                         files[file_index].tokens.push(token);
                     }
+                    prepared_similar.extend(detection.iter().cloned().map(|mut source| {
+                        anchor_whitespace_spans(&mut source, &unit.text);
+                        source
+                    }));
                     prepared.extend(detection);
                     scanned_unit_lines
                         .get_mut(&path)
@@ -168,6 +203,7 @@ impl SourceSession {
             texts,
             files,
             prepared,
+            prepared_similar,
             prepared_renamed,
             maps,
             eligible_lines,
@@ -219,7 +255,9 @@ impl SourceSession {
                 "clone session normalization does not match requested pass",
             ));
         }
-        let source = if renamed && !self.renamed {
+        let source = if kind == KindFilter::Similar {
+            &self.prepared_similar
+        } else if renamed && !self.renamed {
             &self.prepared_renamed
         } else {
             &self.prepared
@@ -284,10 +322,24 @@ impl SourceSession {
                 &PathFilters::default(),
             )
         };
-        // The CLI merges only constituent clones that already cleared the native
-        // detection minimum; filtering before merging would lose Type-3 matches.
+        // Detection has already applied the shared eligible-line minimum to
+        // each constituent. Partition before native merging so only fragments
+        // from the same pair of prepared units can form a Type-3 clone. In
+        // particular, two functions in one original file are separate units.
         let clones = if kind == KindFilter::Similar {
-            merge_gapped_clones(clones, 2)
+            let mut by_units: BTreeMap<(String, String, String), Vec<CpdClone>> = BTreeMap::new();
+            for clone in clones {
+                let key = (
+                    clone.format.clone(),
+                    clone.fragment_a.source_id.clone(),
+                    clone.fragment_b.source_id.clone(),
+                );
+                by_units.entry(key).or_default().push(clone);
+            }
+            by_units
+                .into_values()
+                .flat_map(|group| merge_gapped_clones(group, 2))
+                .collect()
         } else {
             clones
         };

@@ -75,6 +75,18 @@ when a real match spans a placeholder. A future exact contract-declaration slice
 may count eligible declaration placeholders as physical lines without altering
 the behavior view.
 
+#120 keeps the gap pass on that same prepared session: native detection first
+requires each constituent to meet the configured eligible-line minimum, then
+merges at most two unmatched prepared lines in each unit. Unit-specific native
+source IDs prevent adjacent, nested and same-file functions or classes from
+merging. Comments, blanks and excluded scaffolding inside a unit contribute
+neither to the minimum nor to the gap allowance. Native `unmatchedLines` is
+measured in prepared lines; report `lines`, positions and verbatim fragments
+describe the original source span, including any omitted interior material.
+Strict native Python whitespace tokens are anchored to their preceding eligible
+line before detection: matching indentation on the next, otherwise different
+line cannot turn two executable lines into a three-line clone.
+
 ## Reporting and failures
 
 The three jobs retain the `jscpd`, `jscpd-renamed` and `jscpd-similar` identities,

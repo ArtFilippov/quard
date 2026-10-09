@@ -65,7 +65,13 @@ violations baseline.
   discovered by gap merging. The AST `--similarity` pass covers JavaScript and
   TypeScript functions, not Python. Empty or incomplete native scans, invalid
   similarity/report data and execution failures are infrastructure errors;
-  the native report and streams are archived.
+  the native report and streams are archived. In the Rust behavior view, gaps
+  are measured between eligible prepared lines inside one unit on each side;
+  comments, blank lines and omitted declarations do not consume the two-line
+  allowance or supply matching lines. Native `unmatchedLines` refers to that
+  prepared gap, while fragment ranges, `lines` and text refer to original
+  source. Separate functions and classes (including adjacent or nested ones)
+  remain separate detection and merge units, even in the same file.
   Set `duplicate_detection = false` under `[checks]` to skip all three jobs; the
   Pylint profile and its duplicate-code rule are unaffected.
 * **LCOM4**: Quard's basic AST-based class cohesion check, run as its own job.

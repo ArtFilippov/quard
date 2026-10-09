@@ -255,8 +255,15 @@ install it into the selected consumer's uv environment, then set
 through the pinned Rust in-memory engine over the same discovered scope. Similar
 merges native fragments separated by at most two unmatched lines in each file;
 each constituent fragment must clear the same detection minimum (and one token)
-before merging. It reports only native Type 3 `similar` clones with score and `gap`
-method. Renamed uses native strict identifier and string/numeric literal
+before merging. Gap detection and merging stay inside the same prepared
+module, class or function unit on both sides; independent units in one file
+cannot be joined. Blank lines, comments and excluded scaffolding inside a unit
+do not count toward the minimum or the two unmatched *eligible*-line gap,
+but remain in original source ranges when a match spans them. Native
+`unmatchedLines` counts prepared gap lines; `lines`, positions and `fragment`
+refer to the original source, which may span more lines than were eligible.
+It reports only native Type 3 `similar` clones with score and `gap` method.
+Renamed uses native strict identifier and string/numeric literal
 normalization and reports only native Type 2 clones; the exact job retains its
 Type 1 findings. Each job has its own archived native JSON and streams. The
 wheel contains native code; consumers need no Rust toolchain. A

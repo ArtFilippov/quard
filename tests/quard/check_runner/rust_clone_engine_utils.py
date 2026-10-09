@@ -174,12 +174,13 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
               "    total = right - 6\n    adjusted = total / 9\n")
     first = root / "src/demo/first.py"
     second = root / "tests/second.py"
-    for gap in (0, 1, 2, 5):
-        with test.subTest(gap=gap):
+    for gap, decoration in ((0, ""), (1, ""), (2, ""), (2, "\n    # harmless\n"),
+                            (5, "")):
+        with test.subTest(gap=gap, decoration=decoration):
             first.write_text("def calculate(value):\n" + top +
                              bottom + "    return adjusted\n", encoding="utf-8")
-            second.write_text("def calculate(value):\n" + top +
-                              "".join(f"    inserted_{n} = {n}\n" for n in range(gap)) +
+            second.write_text("def calculate(value):\n" + top + decoration +
+                               "".join(f"    inserted_{n} = {n}\n" for n in range(gap)) +
                               bottom + "    return adjusted\n",
                               encoding="utf-8")
             result = report(root)
@@ -196,9 +197,16 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
                                   if d["rule"] == "SIMILAR_CLONE"},
                                  {"src/demo/first.py", "tests/second.py"})
                 test.assertTrue(all(d["native_details"] in native["duplicates"]
-                                    and d["line"] >= 1 and d["column"] >= 1
-                                    for d in result["diagnostics"]
-                                    if d["rule"] == "SIMILAR_CLONE"))
+                                     and d["line"] >= 1 and d["column"] >= 1
+                                     for d in result["diagnostics"]
+                                     if d["rule"] == "SIMILAR_CLONE"))
+                if decoration:
+                    test.assertTrue(any(any("# harmless" in line for line in
+                                            second.read_text(encoding="utf-8").splitlines()[
+                                                item["secondFile"]["start"] - 1:
+                                                item["secondFile"]["end"]])
+                        and 0 < item["unmatchedLines"][1] <= 2
+                        for item in native["duplicates"]), native["duplicates"])
     setting = root / ".quard/config.toml"
     setting.write_text(setting.read_text(encoding="utf-8").replace(
         "min_lines = 3", "min_lines = 6"), encoding="utf-8")
@@ -216,6 +224,80 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
     test.assertEqual(next(j for j in clean["tools"] if j["name"] == "jscpd-similar")[
         "status"], "passed", clean["diagnostics"])
     test.assertFalse(prepared_native(test, root, clean, 3, "similar")["duplicates"])
+    # A same-file near-miss within one function remains detectable.
+    first.write_text("def one(value):\n" + top + bottom + "    return adjusted\n\n" +
+                     "def two(value):\n" + top + "    inserted = 91\n" +
+                     bottom + "    return adjusted\n", encoding="utf-8")
+    native = prepared_native(test, root, report(root), 3, "similar")
+    test.assertTrue(native["duplicates"])
+    test.assertTrue(all(item["firstFile"]["name"] == item["secondFile"]["name"]
+                        == str(first) for item in native["duplicates"]))
+
+
+def verify_similar_boundaries(test: unittest.TestCase, root: Path) -> None:
+    """Real prepared scans cannot join independent units or short fragments.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+        root (Path): Isolated fixture consumer root.
+    """
+    first = root / "src/demo/first.py"
+    second = root / "tests/second.py"
+    top = ("    first = value + 17\n    second = first * 3\n"
+           "    third = second - 4\n")
+    bottom = ("    fourth = value + 71\n    fifth = fourth * 8\n"
+              "    return fifth - 6\n")
+    cases = {
+        "cross_function": ("def one(value):\n" + top + "def two(value):\n" + bottom,
+                           "def one(value):\n" + top + "def two(value):\n" +
+                           "    inserted = 91\n" + bottom),
+        "cross_class": ("class One:\n    def run(self, value):\n" +
+                        "".join("    " + line for line in top.splitlines(keepends=True)) +
+                        "class Two:\n    def run(self, value):\n" +
+                        "".join("    " + line for line in bottom.splitlines(keepends=True)),
+                        "class One:\n    def run(self, value):\n" +
+                        "".join("    " + line for line in top.splitlines(keepends=True)) +
+                        "class Two:\n    def run(self, value):\n        inserted = 91\n" +
+                        "".join("    " + line for line in bottom.splitlines(keepends=True))),
+        "class_body": ("class One:\n" + top + "class Two:\n" + bottom,
+                       "class One:\n" + top + "class Two:\n    inserted = 91\n" + bottom),
+        "nested": ("def outer(value):\n" + top +
+                   "    def inner(value):\n" +
+                   "".join("    " + line for line in bottom.splitlines(keepends=True)) +
+                   "    return inner(value)\n",
+                   "def outer(value):\n" + top +
+                   "    def inner(value):\n        inserted = 91\n" +
+                   "".join("    " + line for line in bottom.splitlines(keepends=True)) +
+                   "    return inner(value)\n"),
+        "short_mixed": ("def one(value):\n" + top[:top.index("    third")] +
+                        "    pass\n    ...\n    raise NotImplementedError\n",
+                        "def one(value):\n" + top[:top.index("    third")] +
+                        "    # comment\n    pass\n    ...\n    raise NotImplementedError\n"),
+    }
+    for label, (left, right) in cases.items():
+        with test.subTest(label=label):
+            first.write_text(left, encoding="utf-8")
+            second.write_text(right, encoding="utf-8")
+            result = report(root)
+            similar = next(job for job in result["tools"] if job["name"] == "jscpd-similar")
+            native = prepared_native(test, root, result, 3, "similar") if (
+                similar["status"] != "skipped") else None
+            test.assertEqual(similar["status"], "passed", (result["diagnostics"], native))
+            if native is not None:
+                test.assertFalse(native["duplicates"])
+                if label == "short_mixed":
+                    test.assertEqual(native["scannedUnitLines"][str(first)], [])
+                    test.assertEqual(native["scannedUnitLines"][str(second)], [])
+            test.assertFalse([d for d in result["diagnostics"]
+                              if d["rule"] == "SIMILAR_CLONE"])
+    # Same-file fragments belong to distinct functions even if the other side
+    # supplies a matching pair and a gap small enough for native merging.
+    first.write_text(cases["cross_function"][0] + "\n" +
+                     cases["cross_function"][1], encoding="utf-8")
+    second.unlink()
+    result = report(root)
+    native = prepared_native(test, root, result, 3, "similar")
+    test.assertFalse(native["duplicates"], native)
 
 
 def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
@@ -227,6 +309,13 @@ def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
     """
     (root / "src/demo/first.py").write_text(SAMPLE, encoding="utf-8")
     (root / "tests/second.py").write_text(SAMPLE, encoding="utf-8")
+    (root / "tests/third.py").write_text(SAMPLE.replace("repeat", "change")
+                                          .replace("value", "number")
+                                          .replace("first", "alpha")
+                                          .replace("second", "beta")
+                                          .replace("third", "gamma")
+                                          .replace("fourth", "delta")
+                                          .replace("17", "23"), encoding="utf-8")
     fake, _ = fake_tools({"pydoclint": {"stderr": "src/demo/first.py:1: DOC101: Issue\n",
                                         "code": 1}})
     python, _ = wheel()
@@ -247,8 +336,9 @@ def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
     jobs = {j["name"]: j for j in result["tools"]}
     test.assertEqual((result["exit_code"], jobs["jscpd"]["status"],
                       jobs["jscpd-renamed"]["status"], jobs["jscpd-similar"]["status"]),
-                     (2, "violations", "passed", "error"))
-    test.assertTrue({"EXACT_CLONE", "DOC101"} <= {d["rule"] for d in result["diagnostics"]})
+                     (2, "violations", "violations", "error"))
+    test.assertTrue({"EXACT_CLONE", "RENAMED_CLONE", "DOC101"}
+                    <= {d["rule"] for d in result["diagnostics"]})
     test.assertTrue(any(d["is_infrastructure_error"] and d["job"] == "jscpd-similar"
                         for d in result["diagnostics"]))
     native = read_json(root / jobs["jscpd-similar"]["raw_output"]["native_json"])
@@ -266,8 +356,8 @@ def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
     second.write_text(top + "    extra = 2\n" + bottom + "    return adjusted\n",
                       encoding="utf-8")
     valid = report(root)
-    similar = next(j for j in valid["tools"] if j["name"] == "jscpd-similar")
-    payload = read_json(root / similar["raw_output"]["native_json"])
+    payload = read_json(root / next(j for j in valid["tools"] if j["name"] ==
+                                    "jscpd-similar")["raw_output"]["native_json"])
     test.assertTrue(payload["duplicates"], payload)
     paths = read_json((root / valid["report_path"]).parent / "clone-engine-files.json")["paths"]
     output = root / "invalid-gap.json"
@@ -612,7 +702,7 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
                                  capture_output=True, text=True, timeout=180, check=False)
         result = read_json(consumer / ".quard/reports/latest.json")
         test.assertEqual((process.returncode, result["exit_code"]), (expected, expected),
-                         process.stderr + process.stdout[-2000:])
+                         result["diagnostics"])
         test.assertEqual(result["summary"]["infrastructure_errors"], 0,
                          result["diagnostics"])
         jobs = {job["name"]: job for job in result["tools"]}
@@ -644,7 +734,7 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     renamed_result = check(1, exact_code=0)
     test.assertEqual({item["path"] for item in renamed_result["diagnostics"]
                       if item["rule"] == "RENAMED_CLONE"},
-                      {"src/demo/main/first.py", "src/demo/main/second.py"})
+                     {"src/demo/main/first.py", "src/demo/main/second.py"})
     # A third real packaged-wheel scan proves Type-3 detection, not just output files.
     beginning = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n"
                  "    gamma = beta - 4\n    delta = gamma / 2\n")
@@ -658,4 +748,17 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     test.assertEqual(next(j for j in gap["tools"] if j["name"] == "jscpd-similar")["status"],
                      "violations")
     test.assertEqual({d["path"] for d in gap["diagnostics"] if d["rule"] == "SIMILAR_CLONE"},
-                     {"src/demo/main/first.py", "src/demo/main/second.py"})
+                      {"src/demo/main/first.py", "src/demo/main/second.py"})
+    # Strict Type-3 must not promote two matching executable lines with the
+    # indentation of the different third line; the independent Type-1 result
+    # retains its native finding in this full run.
+    short = ("def calculate(value: int) -> int:\n    first = value + 17\n"
+             "    second = first * 3\n")
+    for name, ending in (("first", "    return second\n"),
+                         ("second", "    raise ValueError(second)\n")):
+        (consumer / f"src/demo/main/{name}.py").write_text(short + ending, encoding="utf-8")
+    insufficient = check(1, exact_code=1)
+    test.assertEqual(next(j for j in insufficient["tools"] if j["name"] == "jscpd-similar")[
+        "status"], "passed")
+    test.assertFalse([d for d in insufficient["diagnostics"] if d["rule"] == "SIMILAR_CLONE"])
+    test.assertTrue([d for d in insufficient["diagnostics"] if d["rule"] == "EXACT_CLONE"])
