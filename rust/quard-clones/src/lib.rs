@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use cpd_core::detect::{detect_prepared, merge_gapped_clones, PathFilters};
 use cpd_core::models::{CpdClone, KindFilter, SourceFile};
@@ -7,6 +8,7 @@ use cpd_finder::statistics;
 use cpd_reporter::shared::extract_lines;
 use cpd_tokenizer::tokenizer::Mode;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde_json::{json, Value};
 
 mod preparation;
@@ -15,6 +17,7 @@ struct SourceMap {
     path: String,
     lines: Vec<usize>,
     columns: Option<Vec<Vec<usize>>>,
+    offsets: Arc<[usize]>,
 }
 
 fn original_column(map: &SourceMap, line: usize, column: usize) -> PyResult<usize> {
@@ -145,6 +148,17 @@ impl SourceSession {
             }
             let views = preparation::prepare(&text, &path)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            // Original offsets are shared by every unit from this source. Rewalking
+            // all preceding lines for every display token is quadratic in file size.
+            let mut offset = 0;
+            let offsets: Arc<[usize]> = text
+                .split_inclusive('\n')
+                .map(|line| {
+                    let start = offset;
+                    offset += line.len();
+                    start
+                })
+                .collect();
             eligible_lines.insert(
                 path.clone(),
                 views.behavior.iter().map(|unit| unit.lines.len()).sum(),
@@ -192,6 +206,7 @@ impl SourceSession {
                     path: path.clone(),
                     lines: unit.lines.clone(),
                     columns: unit.columns.clone(),
+                    offsets: Arc::clone(&offsets),
                 };
                 if !schema {
                     scannable |= unit.lines.len() >= min_lines;
@@ -214,11 +229,11 @@ impl SourceSession {
                                     "unmapped native display token",
                                 )
                             })?;
-                            let offset: usize = text
-                                .split_inclusive('\n')
-                                .take(line - 1)
-                                .map(str::len)
-                                .sum();
+                            let offset = *map.offsets.get(line - 1).ok_or_else(|| {
+                                pyo3::exceptions::PyRuntimeError::new_err(
+                                    "unmapped native display offset",
+                                )
+                            })?;
                             loc.line = line as u32;
                             loc.column = column as u32;
                             loc.offset = (offset + column) as u32;
@@ -381,19 +396,23 @@ impl SourceSession {
                     }
                 }
             }
-            let mut found = Vec::new();
-            for index in 0..source.len() {
-                found.extend(detect_prepared(
-                    vec![vec![source[index].clone()]],
-                    1,
-                    self.min_lines.saturating_sub(1),
-                    &PathFilters::default(),
-                ));
-            }
-            for (first, second) in candidates {
-                // Each unit's own findings were collected above. Pair scans can
-                // otherwise repeat those same native findings many times.
-                found.extend(
+            let mut found: Vec<CpdClone> = source
+                .par_iter()
+                .flat_map_iter(|unit| {
+                    detect_prepared(
+                        vec![vec![unit.clone()]],
+                        1,
+                        self.min_lines.saturating_sub(1),
+                        &PathFilters::default(),
+                    )
+                })
+                .collect();
+            let pairs: Vec<_> = candidates.into_iter().collect();
+            let cross: Vec<CpdClone> = pairs
+                .into_par_iter()
+                .flat_map_iter(|(first, second)| {
+                    // Each unit's own findings were collected above. Pair scans can
+                    // otherwise repeat those same native findings many times.
                     detect_prepared(
                         vec![vec![source[first].clone(), source[second].clone()]],
                         1,
@@ -401,9 +420,10 @@ impl SourceSession {
                         &PathFilters::default(),
                     )
                     .into_iter()
-                    .filter(|clone| clone.fragment_a.source_id != clone.fragment_b.source_id),
-                );
-            }
+                    .filter(|clone| clone.fragment_a.source_id != clone.fragment_b.source_id)
+                })
+                .collect();
+            found.extend(cross);
             found
         } else {
             detect_prepared(
@@ -450,11 +470,9 @@ impl SourceSession {
                     let line = *map.lines.get(location.line as usize - 1).ok_or_else(|| {
                         pyo3::exceptions::PyRuntimeError::new_err("unmapped prepared line")
                     })?;
-                    let original = text
-                        .split_inclusive('\n')
-                        .take(line - 1)
-                        .map(str::len)
-                        .sum::<usize>();
+                    let original = *map.offsets.get(line - 1).ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err("unmapped prepared offset")
+                    })?;
                     let length = text.lines().nth(line - 1).map(str::len).unwrap_or(0);
                     let column = column.min(length);
                     location.column = column as u32;

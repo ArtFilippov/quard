@@ -308,6 +308,8 @@ wheel platform/ABI and linked crate versions; install also runs packaged
 exact/renamed/similar probes with logs under `.quard/logs/install-probes/`.
 Developers can continue testing local wheels with `QUARD_CLONE_ENGINE=rust`;
 consumer installs do not need Cargo or Rust.
+The reproducible same-scope CLI/Rust performance comparison and seven-run
+measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
 The isolated release fixture runs uv install, reinstall and full check from a
 separately located tool copy and a nested path with spaces, using a local wheel
 as a pre-publication test. After publication, verify uv resolves each target's

@@ -471,6 +471,9 @@ def verify_missing_wheel(test: unittest.TestCase, root: Path) -> None:
     clean = root / ".quard/without-wheel"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(clean)],
                    check=True, capture_output=True, text=True)
+    # Reach the wheel-version seam with Quard's ordinary Python dependency present.
+    subprocess.run(["uv", "pip", "install", "--python", str(clean / "bin/python"),
+                    "packaging==25.0"], check=True, capture_output=True, text=True)
     (root / "src/demo/first.py").write_text("one = 1\ntwo = one + 2\nthree = two * 3\n",
                                              encoding="utf-8")
     manifest = root / ".quard/clone-manifest.json"
