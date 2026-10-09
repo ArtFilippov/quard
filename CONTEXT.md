@@ -9,8 +9,10 @@ check selection. Consumer-owned native options are retained when settings are ap
 ## Selectable check
 
 A **selectable check** is an independent Quard job that a consumer can enable in
-`.quard/config.toml` under `[checks]`. Currently only `constructor_purity` is
-selectable; disabled jobs are reported as skipped, not passed.
+`.quard/config.toml` under `[checks]`. The three clone jobs are selected together
+by `duplicate_detection`; other independent jobs have their own switches.
+`constructor_purity` is opt-in. Disabled jobs are reported as skipped, not
+passed; the required Pylint profile remains independent of these switches.
 
 ## Source scope
 
@@ -42,11 +44,18 @@ standalone `pass`, `...` and bare or literal-argument `raise NotImplementedError
 are placeholders, even alongside a docstring, and do not contribute to the
 shared behavior view. Other real statements, including `return None`, executable
 decorator implementations and real contract/special-method bodies remain eligible.
-The exact contract-declaration view includes ordered one-line signatures and
-eligible placeholder lines of local Protocol and abstract-interface methods.
+The exact view also contains consecutive class-based and supported functional
+TypedDict fields, keeping each schema separate; functional fields need one
+unambiguous original line apiece. Field names and types must match exactly.
+Exact contract-declaration units include ordered signatures (including
+supported multiline signatures) and eligible placeholder lines of local
+Protocol and abstract-interface methods. Property declarations use the public
+property name and accessor kind.
 Contract names and special double-underscore declarations do not count. Its
 placeholders can satisfy the physical line minimum without entering behavior;
-executable contract and special-method bodies remain behavioral.
+executable contract and special-method bodies remain behavioral. TypedDict
+fields and contract declarations never enter the renamed/similar behavior
+view. Each clone job retains its own native kind and report.
 The effective clone minimum counts **eligible material** within a unit. Removing lines does not
 allow neighboring independent classes or functions to form one clone.
 

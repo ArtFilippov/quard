@@ -79,9 +79,9 @@ view. Stub-only bodies (with or without documentation) have no eligible lines;
 two real lines plus a placeholder remain below the default minimum. Other
 executable statements, including computed exception arguments and `return None`,
 still count. The source map retains original lines and archives verbatim fragments
-when a real match spans a placeholder. A future exact contract-declaration slice
-may count eligible declaration placeholders as physical lines without altering
-the behavior view.
+when a real match spans a placeholder. The exact contract-declaration units
+added in #123/#124 count eligible declaration placeholders as physical lines
+without altering the behavior view.
 
 #120 keeps the gap pass on that same prepared session: native detection first
 requires each constituent to meet the configured eligible-line minimum, then
@@ -165,7 +165,9 @@ The native API is pinned deliberately: updating the CLI or any engine crate
 requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
 and verifying the prepared-view fixtures with the real component.
 The ordinary CLI still uses original-source physical lines. The opt-in Rust
-path applies the shared minimum to eligible prepared lines.
-An explicit wheel-selection switch keeps the existing CLI executable and its
-independent native diagnostics in ordinary installations while the rest of the
-three-pass installation contract is built.
+path applies the shared minimum to eligible prepared lines. The CLI remains
+the default until #125's published-wheel and target-installation gates pass;
+the opt-in switch and the historical CLI benchmark remain available for
+parity and performance checks. The CLI dependency/version probe can be
+removed only after real reporter parity, packaged probes and linked-library
+checks hold for all three jobs on the released integration.

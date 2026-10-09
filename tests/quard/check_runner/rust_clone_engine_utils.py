@@ -4,6 +4,7 @@ from __future__ import annotations
 import atexit
 from collections.abc import Callable
 from functools import cache
+import hashlib
 from importlib import util
 import json
 import math
@@ -789,6 +790,20 @@ def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
     manifest = json.loads((tool / "tools.json").read_text(encoding="utf-8"))
     manifest["native_wheel"] = True  # Simulate activation without claiming publication.
     (tool / "tools.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def tree_contents(directory: Path) -> dict[str, str]:
+        """Detect both changed and newly created files in the external tool tree.
+
+        Args:
+            directory (Path): External tool tree to inspect.
+
+        Returns:
+            dict[str, str]: Relative paths and hashes of file contents.
+        """
+        return {str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in directory.rglob("*") if path.is_file()}
+
+    original_tool = tree_contents(tool)
     consumer = root / "public consumer"
     consumer.mkdir()
     adoption_consumer(consumer)
@@ -818,6 +833,7 @@ def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
     test.assertEqual(first["versions"]["quard-clones"], "0.1.0")
     test.assertEqual(first["exit_code"], 0)
     test.assertEqual(invoke(tool / "install.py")["exit_code"], 0)
+    test.assertEqual(invoke(tool / "apply.py")["exit_code"], 0)
     test.assertEqual(invoke(tool / "check.py")["exit_code"], 0)
     test.assertEqual((consumer / ".quard/config.toml").read_text().count(
         "min_lines = 5"), 1)
@@ -826,10 +842,13 @@ def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
     lock = (consumer / "uv.lock").read_text(encoding="utf-8")
     test.assertIn('name = "quard-clones"', lock)
     test.assertIn("sha256:", lock)
-    test.assertFalse((tool / ".quard").exists())
+    test.assertEqual(tree_contents(tool), original_tool)
     nested = consumer / "tools with spaces/analyzer"
     nested.parent.mkdir()
     shutil.copytree(tool, nested)
+    original_nested = tree_contents(nested)
     test.assertEqual(invoke(nested / "install.py")["exit_code"], 0)
+    test.assertEqual(invoke(nested / "apply.py")["exit_code"], 0)
     test.assertEqual(invoke(nested / "check.py")["exit_code"], 0)
-    test.assertFalse((nested / ".quard").exists())
+    test.assertEqual(tree_contents(nested), original_nested)
+    test.assertEqual(tree_contents(tool), original_tool)

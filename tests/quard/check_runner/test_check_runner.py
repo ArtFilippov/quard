@@ -198,6 +198,48 @@ class TestCheckRunner(unittest.TestCase):
                          {"jscpd": "error", "jscpd-renamed": "error", "jscpd-similar": "error"})
         self.assertTrue(any(item["is_infrastructure_error"] for item in broken["diagnostics"]))
 
+    def test_real_wheel_same_file_class_docstrings_from_91(self) -> None:
+        """Repeated class openings are inert; copied bodies still fail in one file."""
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        first = self.root / "src/demo/first.py"
+        module = '''"""Shared module description."""
+import json
+import pathlib
+import collections
+
+'''
+        scaffolding = '''    """Shared class description, first paragraph.
+    Second paragraph.
+    Third paragraph.
+    """
+    def build(self, value):
+        """Shared method description."""
+        pass
+'''
+        first.write_text(module + "\n".join(
+            f"class {name}:\n{scaffolding}" for name in ("Records", "Profiles")),
+            encoding="utf-8")
+        empty = prepared_report(self.root)
+        self.assertEqual(empty["exit_code"], 0, empty["diagnostics"])
+        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+            job = next(item for item in empty["tools"] if item["name"] == name)
+            self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+        body = ("        initial = value + 17\n"
+                "        result = initial * 3\n"
+                "        return result - 4\n")
+        first.write_text(module + "\n".join(
+            f"class {name}:\n{scaffolding.replace('        pass', body.rstrip())}"
+            for name in ("Records", "Profiles")), encoding="utf-8")
+        found = prepared_report(self.root)
+        native = prepared_native(self, self.root, found, 3)
+        self.assertEqual(next(j for j in found["tools"] if j["name"] == "jscpd")["status"],
+                         "violations", found["diagnostics"])
+        self.assertTrue(any(clone["firstFile"]["name"] == clone["secondFile"]["name"]
+                            == str(first) and body.strip() in clone["fragment"]
+                            for clone in native["duplicates"]))
+        self.assertEqual({d["path"] for d in found["diagnostics"]
+                          if d["rule"] == "EXACT_CLONE"}, {"src/demo/first.py"})
+
     def test_real_wheel_behavioral_declarations(self) -> None:
         self._verify_excluded_declarations()
         self._verify_mixed_declarations()

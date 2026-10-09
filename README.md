@@ -313,7 +313,12 @@ measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
 The isolated release fixture runs uv install, reinstall and full check from a
 separately located tool copy and a nested path with spaces, using a local wheel
 as a pre-publication test. After publication, verify uv resolves each target's
-wheel from the consumer's real index before enabling the default path.
+wheel from the consumer's real index before enabling the default path. The
+fixture also runs apply and verifies that install/apply/check do not modify
+either external tool copy. The local wheel test does not establish published
+wheel availability or replace checks on the affected consumer. The rollout
+gate and autonomous coverage audit are in
+[the #127 integration record](docs/issue-127-clone-rollout.md).
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.
