@@ -1,0 +1,96 @@
+name: Clone wheels
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  wheels:
+    if: github.event_name == 'workflow_dispatch' || github.event.release.tag_name == 'clones-v0.1.0'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        libc: [manylinux, musllinux]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch == 'aarch64'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.21'
+      - name: Build and test binary wheel in target container
+        env:
+          CIBW_BUILD: cp312-${{ matrix.libc }}_${{ matrix.arch }}
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
+          CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2
+          CIBW_MUSLLINUX_AARCH64_IMAGE: musllinux_1_2
+          CIBW_BUILD_FRONTEND: build
+          CIBW_ENVIRONMENT: 'PATH=$HOME/.cargo/bin:$PATH'
+          CIBW_BEFORE_ALL: 'curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain 1.99.0 --profile minimal'
+          CIBW_TEST_COMMAND: 'python {project}/smoke.py'
+        run: |
+          uvx --from cibuildwheel==2.23.3 cibuildwheel rust/quard-clones --output-dir wheelhouse
+          uv run --no-project --with packaging==25.0 python scripts/verify_clone_wheels.py wheelhouse --arch ${{ matrix.arch }} --libc ${{ matrix.libc }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clones-${{ matrix.libc }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+  verify:
+    needs: wheels
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clones-*
+          path: wheelhouse
+          merge-multiple: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: uv run --no-project --with packaging==25.0 python scripts/verify_clone_wheels.py wheelhouse
+      - run: uv sync --locked --group dev --python 3.12
+      - name: Isolated real consumer with packaged wheel and no Rust
+        run: |
+          mkdir -p /tmp/opencode
+          QUARD_TEST_WHEEL="$(ls wheelhouse/*manylinux*x86_64.whl)" uv run --locked --group dev python -B -m unittest discover -s tests/quard/check_runner -p test_check_runner.py -k full_consumer_without_rust -v
+          QUARD_TEST_WHEEL="$(ls wheelhouse/*manylinux*x86_64.whl)" uv run --locked --group dev python -B -m unittest discover -s tests/quard/check_runner -p test_check_runner.py -k uv_install_separate_tool -v
+      - name: Stable ABI across available consumer Python versions
+        run: |
+          for version in 3.12 3.13 3.14; do
+            uv python install "$version"
+            uv run --no-project --python "$version" --with "$(ls wheelhouse/*manylinux*x86_64.whl)" python rust/quard-clones/smoke.py
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clones-linux-wheel-matrix
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+  publish:
+    if: github.event_name == 'release' && github.event.release.tag_name == 'clones-v0.1.0'
+    needs: verify
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: clones-linux-wheel-matrix
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

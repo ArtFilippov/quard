@@ -51,6 +51,8 @@ class TransactionalInstallation(Installation):
         plan = self.plan(root, tool, extras=extras)
         saved = entry.snapshot(root, plan["managed_files"])
         specs = plan["dependencies"]
+        binary_only = (["--no-build-package", "quard-clones"] if any(
+            spec.startswith("quard-clones==") for spec in specs) else [])
         selected_extras = plan["extras"]
         extra_args = [arg for extra in selected_extras for arg in ("--extra", extra)]
         if dry_run:
@@ -73,8 +75,10 @@ class TransactionalInstallation(Installation):
                 raise QuardError("EMPTY_SOURCE_SCOPE", "No Python files under src/.")
             entry.prepare_project(root)
             commands = [
-                [uv, "add", "--dev", "--no-sync", "--python", ">=3.12", *specs],
-                [uv, "sync", "--locked", "--group", "dev", "--python", ">=3.12", *extra_args],
+                [uv, "add", "--dev", "--no-sync", "--python", ">=3.12",
+                 *binary_only, *specs],
+                [uv, "sync", "--locked", "--group", "dev", "--python", ">=3.12",
+                 *binary_only, *extra_args],
                 [uv, "run", "--locked", "--no-sync", "--group", "dev", *extra_args,
                  "python", str(tool / "_audit.py"), "--project", str(root), "--json"],
             ]

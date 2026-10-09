@@ -20,13 +20,15 @@ from jsonschema import validate
 from quard._common import capture, read_json, write_json
 from quard.check_runner.native_check_runner import NativeCheckRunner
 from quard.check_runner.runner_utils import installed_versions
+from quard.install_utils import dependency_specs
 from quard.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
 from contract_clone_utils import verify_contract_methods, verify_contract_properties
 from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_report,
                                        verify_mismatched_engine, verify_missing_wheel,
-                                       verify_real_full_check, verify_same_file_and_mapping,
+                                        verify_real_full_check, verify_real_wheel_install,
+                                        verify_same_file_and_mapping,
                                        verify_prepared_renamed, verify_renamed_failure,
                                        verify_prepared_similar, verify_similar_boundaries,
                                        verify_similar_failure,
@@ -38,6 +40,34 @@ PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
 
 
 class TestCheckRunner(unittest.TestCase):
+    def test_release_pin_activates_only_with_manifest(self) -> None:
+        manifest = read_json(QUARD / "tools.json")
+        tool = self.root / "candidate-tool"
+        tool.mkdir()
+        write_json(tool / "tools.json", manifest)
+        self.assertNotIn("quard-clones==0.1.0", dependency_specs(tool))
+        manifest["native_wheel"] = True
+        write_json(tool / "tools.json", manifest)
+        self.assertIn("quard-clones==0.1.0", dependency_specs(tool))
+
+    def test_real_wheel_rejects_incompatible_abi_tag(self) -> None:
+        python, _ = wheel()
+        script = ("import sys\nsys.path.insert(0, sys.argv[1])\n"
+                  "from quard import clone_engine_utils as engine\n"
+                  "from unittest.mock import patch\n"
+                  "from importlib import metadata\n"
+                  "wheel = metadata.distribution('quard-clones')\n"
+                  "read = wheel.read_text\n"
+                  "with patch.object(type(wheel), 'read_text',\n"
+                  "    lambda self, name: 'Tag: cp311-cp311-win_amd64\\n'\n"
+                  "    if name == 'WHEEL' else read(name)):\n"
+                  "    engine.installed_engine()\n")
+        # Verify the same distribution through a real interpreter, changing only
+        # its claimed WHEEL tag. Importable code alone cannot prove wheel ABI.
+        result = capture([str(python), "-c", script, str(QUARD / "src")], self.root, 30)
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("wheel ABI/platform does not match", result["stderr"])
+
     def test_real_wheel_read_failure_keeps_peer_findings(self) -> None:
         first = self.root / "src/demo/domain/api.py"
         fake, _ = fake_tools({"pydoclint": {"stderr": "tests/test_value.py:1: DOC101: Issue\n",
@@ -451,6 +481,9 @@ class TestCheckRunner(unittest.TestCase):
 
     def test_real_wheel_full_consumer_without_rust(self) -> None:
         verify_real_full_check(self, self.root)
+
+    def test_real_wheel_uv_install_separate_tool_without_rust(self) -> None:
+        verify_real_wheel_install(self, self.root)
 
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)

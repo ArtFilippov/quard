@@ -34,6 +34,28 @@ from quard.installation.transactional_installation import TransactionalInstallat
 
 
 class TestTransactionalInstallation(unittest.TestCase):
+    def test_released_wheel_is_binary_only_and_sync_failure_rolls_back(self):
+        root = self.configured_project()
+        before = managed_bytes(root)
+        commands: list[list[str]] = []
+        specs = entry.dependency_specs(QUARD) + ["quard-clones==0.1.0"]
+
+        def fail_sync(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            commands.append(argv)
+            return native_result(argv, stderr="unavailable wheel", code=int(argv[1] == "sync"))
+
+        with patch.object(entry, "dependency_specs", return_value=specs), patch.object(
+                entry, "capture", fail_sync), self.assertRaises(QuardError):
+            self.installation().install(root, QUARD, progress=False)
+        self.assertEqual(len(commands), 2)
+        for argv in commands:
+            self.assertEqual(argv[argv.index("--no-build-package") + 1], "quard-clones")
+        self.assertIn("quard-clones==0.1.0", commands[0])
+        self.assertEqual(managed_bytes(root), before)
+        self.assertTrue(read_json(root / ".quard/logs/install-error.json")
+                        ["managed_files_rolled_back"])
+        self.assertIn("unavailable wheel", (root / ".quard/logs/install.log").read_text())
+
     def test_real_native_installer_smoke_probes(self):
         root = self.configured_project()
         self.disable_native_checks(root)

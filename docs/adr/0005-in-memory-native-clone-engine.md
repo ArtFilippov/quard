@@ -1,5 +1,13 @@
 # In-memory native clone engine alongside the CLI
 
+The #125 release pipeline prepares four Linux `cp312-abi3` artifacts for
+CPython >=3.12. Activation is separate from a local build: only after PyPI
+contains reachable wheels and isolated uv consumer probes pass may the
+`native_wheel` manifest field enable the default Rust path. The installed
+binary's WHEEL tags, distribution version and linked crate versions are
+checked at the normal version seam; release builds include native packaged
+detection probes in each target container.
+
 ## Decision
 
 The first-party `quard-clones` Python wheel links the pinned jscpd Rust engine

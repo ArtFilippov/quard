@@ -48,7 +48,7 @@ def adoption_consumer(root: Path) -> None:
 
 @cache
 def wheel() -> tuple[Path, Path]:
-    """Build and install one real wheel for the current test process.
+    """Build or use QUARD_TEST_WHEEL and install it for the current test process.
 
     Returns:
         tuple[Path, Path]: Isolated Python interpreter and built wheel artifact.
@@ -57,31 +57,36 @@ def wheel() -> tuple[Path, Path]:
         RuntimeError: No Rust developer toolchain is available.
         AssertionError: Wheel build or linked version evidence is incomplete.
     """
-    cargo = shutil.which("cargo") or "/tmp/opencode/cargo/bin/cargo"
-    if not Path(cargo).is_file():
-        raise RuntimeError("Rust developer toolchain is required for real wheel verification")
     base = Path(mkdtemp(prefix="quard-real-wheel-", dir="/tmp/opencode"))
     _ = atexit.register(shutil.rmtree, base)
-    env = os.environ.copy()
-    env["PATH"] = str(Path(cargo).parent) + os.pathsep + env.get("PATH", "")
-    if cargo.startswith("/tmp/opencode/"):
-        env["CARGO_HOME"] = "/tmp/opencode/cargo"
-        env["RUSTUP_HOME"] = "/tmp/opencode/rustup"
-    env["CARGO_TARGET_DIR"] = str(QUARD / "rust/quard-clones/target")
-    build = subprocess.run(["uvx", "--from", "maturin==1.9.6", "maturin", "build",
-                     "--locked", "--release", "--manifest-path",
-                     str(QUARD / "rust/quard-clones/Cargo.toml"), "--interpreter",
-                     sys.executable, "--out", str(base)], env=env, check=False,
-                    capture_output=True, text=True, timeout=300)
-    if build.returncode:
-        raise AssertionError(build.stderr)
-    artifacts = list(base.glob("quard_clones-*.whl"))
-    if len(artifacts) != 1:
-        raise AssertionError(f"Expected one real wheel, got {artifacts}")
+    published = os.environ.get("QUARD_TEST_WHEEL")
+    if published:
+        artifacts = [Path(published).resolve(strict=True)]
+    else:
+        cargo = shutil.which("cargo") or "/tmp/opencode/cargo/bin/cargo"
+        if not Path(cargo).is_file():
+            raise RuntimeError("Rust developer toolchain is required for real wheel verification")
+        env = os.environ.copy()
+        env["PATH"] = str(Path(cargo).parent) + os.pathsep + env.get("PATH", "")
+        if cargo.startswith("/tmp/opencode/"):
+            env["CARGO_HOME"] = "/tmp/opencode/cargo"
+            env["RUSTUP_HOME"] = "/tmp/opencode/rustup"
+        env["CARGO_TARGET_DIR"] = str(QUARD / "rust/quard-clones/target")
+        build = subprocess.run(["uvx", "--from", "maturin==1.9.6", "maturin", "build",
+                          "--locked", "--release", "--manifest-path",
+                          str(QUARD / "rust/quard-clones/Cargo.toml"), "--interpreter",
+                          sys.executable, "--out", str(base)], env=env, check=False,
+                         capture_output=True, text=True, timeout=300)
+        if build.returncode:
+            raise AssertionError(build.stderr)
+        artifacts = list(base.glob("quard_clones-*.whl"))
+        if len(artifacts) != 1:
+            raise AssertionError(f"Expected one real wheel, got {artifacts}")
     python = base / "venv/bin/python"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(base / "venv")],
                    check=True, capture_output=True, text=True)
-    subprocess.run(["uv", "pip", "install", "--python", str(python), str(artifacts[0])],
+    subprocess.run(["uv", "pip", "install", "--python", str(python),
+                    "packaging==25.0", str(artifacts[0])],
                    check=True, capture_output=True, text=True)
     installed = subprocess.run([str(python), "-c",
                                 "import quard_clones; print(dict(quard_clones.versions()))"],
@@ -770,3 +775,58 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
         "status"], "passed")
     test.assertFalse([d for d in insufficient["diagnostics"] if d["rule"] == "SIMILAR_CLONE"])
     test.assertTrue([d for d in insufficient["diagnostics"] if d["rule"] == "EXACT_CLONE"])
+
+
+def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
+    """Install a binary wheel with uv through a separately located Quard tree."""
+    _, artifact = wheel()
+    tool = root / "separate tool clone"
+    shutil.copytree(QUARD, tool, ignore=shutil.ignore_patterns(
+        ".git", ".venv", ".quard", ".tach", "__pycache__", "target"))
+    manifest = json.loads((tool / "tools.json").read_text(encoding="utf-8"))
+    manifest["native_wheel"] = True  # Simulate activation without claiming publication.
+    (tool / "tools.json").write_text(json.dumps(manifest), encoding="utf-8")
+    consumer = root / "public consumer"
+    consumer.mkdir()
+    adoption_consumer(consumer)
+    settings = consumer / ".quard/config.toml"
+    settings.write_text(settings.read_text(encoding="utf-8").replace(
+        "min_lines = 3", "min_lines = 5"), encoding="utf-8")
+    environment = os.environ.copy()
+    environment["UV_FIND_LINKS"] = str(artifact.parent)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["PATH"] = (str(Path(shutil.which("uv") or "uv").parent)
+                           + ":/usr/local/bin:/usr/bin:/bin")
+    test.assertNotIn("cargo", environment["PATH"])
+
+    def invoke(script: Path, *args: str) -> dict[str, Any]:
+        interpreter = (consumer / ".venv/bin/python" if script.name == "check.py"
+                       else Path(sys.executable))
+        result = subprocess.run([str(interpreter), str(script), "--project", str(consumer),
+                                 "--json", *args], cwd=root, env=environment,
+                                capture_output=True, text=True, timeout=600, check=False)
+        test.assertEqual(result.returncode, 0, result.stderr + "\n" + str(
+            json.loads(result.stdout).get("diagnostics", []) if result.stdout else ""))
+        return json.loads(result.stdout)
+
+    first = invoke(tool / "install.py")
+    test.assertEqual(first["smoke_tests"]["clone_wheel_similar"], "detected")
+    test.assertEqual(first["versions"]["cpd-core"], "0.1.20")
+    test.assertEqual(first["versions"]["quard-clones"], "0.1.0")
+    test.assertEqual(first["exit_code"], 0)
+    test.assertEqual(invoke(tool / "install.py")["exit_code"], 0)
+    test.assertEqual(invoke(tool / "check.py")["exit_code"], 0)
+    test.assertEqual((consumer / ".quard/config.toml").read_text().count(
+        "min_lines = 5"), 1)
+    logs = consumer / ".quard/logs/install-probes"
+    test.assertTrue((logs / "clone-wheel-smoke.stdout.log").is_file())
+    lock = (consumer / "uv.lock").read_text(encoding="utf-8")
+    test.assertIn('name = "quard-clones"', lock)
+    test.assertIn("sha256:", lock)
+    test.assertFalse((tool / ".quard").exists())
+    nested = consumer / "tools with spaces/analyzer"
+    nested.parent.mkdir()
+    shutil.copytree(tool, nested)
+    test.assertEqual(invoke(nested / "install.py")["exit_code"], 0)
+    test.assertEqual(invoke(nested / "check.py")["exit_code"], 0)
+    test.assertFalse((nested / ".quard").exists())

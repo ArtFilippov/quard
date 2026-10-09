@@ -34,6 +34,8 @@ def dependency_specs(tool: Path) -> list[str]:
     for name, version in manifest["dependencies"].items():
         extras = manifest.get("extras", {}).get(name)
         specs.append(name + ("[" + ",".join(extras) + "]" if extras else "") + "==" + version)
+    if manifest.get("native_wheel"):
+        specs.append("quard-clones==" + manifest["native_components"]["quard-clones"])
     return specs
 
 

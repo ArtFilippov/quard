@@ -292,6 +292,26 @@ missing or mismatched wheel is an infrastructure error for the affected jobs. Se
 [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md) for the report and
 version contract. Ordinary installs continue to use the three native CLI jobs
 until all three in-memory parity and #125 installation gates are complete.
+The `clones-wheels` GitHub workflow builds and probes four `cp312-abi3` Linux
+wheels (x86-64/ARM64 × glibc/musl) with Rust in its build containers. It checks
+linked crate versions and original-source exact, renamed and gap findings in
+each built wheel. Release publishing to PyPI requires all four builds, an
+isolated full consumer check, a trusted publisher and a `clones-v0.1.0` release
+tag. `cp312-abi3` targets CPython 3.12 and newer, not PyPy. A local build is
+not a published artifact. Until reachable wheels and target installs are
+verified, `tools.json` does not activate `native_wheel`, so ordinary consumers
+stay on the CLI path. After release verification, activation adds the pinned
+`quard-clones==0.1.0` via the consumer's existing uv indexes and sources,
+disallowing a source build for that distribution. The consumer `uv.lock` fixes
+resolved wheel hashes. Install and check validate the loaded distribution,
+wheel platform/ABI and linked crate versions; install also runs packaged
+exact/renamed/similar probes with logs under `.quard/logs/install-probes/`.
+Developers can continue testing local wheels with `QUARD_CLONE_ENGINE=rust`;
+consumer installs do not need Cargo or Rust.
+The isolated release fixture runs uv install, reinstall and full check from a
+separately located tool copy and a nested path with spaces, using a local wheel
+as a pre-publication test. After publication, verify uv resolves each target's
+wheel from the consumer's real index before enabling the default path.
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.

@@ -20,6 +20,7 @@ from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerP
 from quard._reports import normalize
 from quard.init_architecture import sync_clean_arch
 from quard.pylint_config_utils import LEGACY_PLUGIN
+from quard.clone_engine_utils import installed_engine
 
 sys.dont_write_bytecode = True
 
@@ -193,12 +194,22 @@ class Probe:
         normalized = normalize("tach-external", result, fixture)
         if normalized["status"] != "passed":
             raise QuardError("TACH_EXTERNAL_SMOKE_FAILED", "The native external-dependency command failed on a project with no external imports. See install-probes.")
-    return {("pylint_extension_load" if generated(root) else "pylint_plugin_load"): "passed",
+    results = {("pylint_extension_load" if generated(root) else "pylint_plugin_load"): "passed",
             "pylint_config_and_fixture": "passed",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
             "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
             "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected",
             "jscpd_similar_clone": "detected"}
+    if read_json(tool_dir() / "tools.json").get("native_wheel"):
+        native = probe([sys.executable, str(tool_dir() / "rust/quard-clones/smoke.py")],
+                       root, "clone-wheel-smoke", log_root)
+        if native["exit_code"] != 0:
+            raise QuardError("CLONE_WHEEL_SMOKE_FAILED", "Pinned wheel did not detect native "
+                             "exact, renamed and gap-similar clones; see install-probes logs.")
+        results["clone_wheel_exact"] = "detected"
+        results["clone_wheel_renamed"] = "detected"
+        results["clone_wheel_similar"] = "detected"
+    return results
 
 
 def audit(root: Path) -> dict[str, Any]:
@@ -215,6 +226,12 @@ def audit(root: Path) -> dict[str, Any]:
         if actual != expected:
             raise QuardError("VERSION_MISMATCH", f"{name}: expected {expected}, installed {actual}")
         versions[name] = actual
+    if read_json(tool_dir() / "tools.json").get("native_wheel"):
+        try:
+            versions.update(installed_engine())
+        except (ImportError, OSError, ValueError, RuntimeError, TypeError) as exc:
+            raise QuardError("CLONE_WHEEL_INCOMPATIBLE", f"Pinned wheel/ABI or linked engine "
+                             f"mismatch: {exc}; see .quard/logs/install.log") from exc
     plugins, catalog = discover_plugins(root, log_root)
     write_json(root / ".quard/pylint-catalog.json", catalog, root)
     changed = ConfiguredConsumerPolicy(root).apply(initial=True, plugins=plugins, catalog=catalog)

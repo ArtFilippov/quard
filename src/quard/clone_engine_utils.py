@@ -6,9 +6,12 @@ import hashlib
 from importlib import metadata
 import importlib
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, cast
+
+from packaging.tags import Tag, parse_tag, sys_tags
 
 from quard._common import QuardError, read_json, tool_dir
 from quard.duplication_utils import read_duplication_min_lines
@@ -19,6 +22,44 @@ KINDS = ("exact", "renamed", "similar")
 BATCH_KIND = "all"
 RENAMED_KIND = "renamed"
 SKIP_REASON = "No prepared unit meets the effective minimum"
+
+
+def enabled() -> bool:
+    """Select the released wheel when pinned, or honor explicit developer opt-in.
+
+    Returns:
+        bool: Whether the Rust engine is selected.
+    """
+    return bool(read_json(tool_dir() / "tools.json").get("native_wheel")) or (
+        os.environ.get("QUARD_CLONE_ENGINE") == "rust")
+
+
+def installed_engine() -> dict[str, str]:
+    """Load the installed binary and verify its distribution, ABI and linked crates.
+
+    Returns:
+        dict[str, str]: The wheel and actual linked crate versions.
+
+    Raises:
+        RuntimeError: The wheel, ABI or linked libraries do not match the pin.
+    """
+    distribution = metadata.distribution("quard-clones")
+    if distribution.version != EXPECTED["quard-clones"]:
+        raise RuntimeError("quard-clones distribution version mismatch")
+    wheel_metadata = distribution.read_text("WHEEL")
+    tags: set[Tag] = set()
+    for line in (wheel_metadata or "").splitlines():
+        if line.startswith("Tag: "):
+            tags.update(parse_tag(line[5:].strip()))
+    if not tags or not tags.intersection(sys_tags()):
+        raise RuntimeError("quard-clones wheel ABI/platform does not match this interpreter")
+    native = importlib.import_module("quard_clones")
+    if not str(importlib.import_module("quard_clones._native").__file__).endswith(".so"):
+        raise RuntimeError("quard-clones native extension is missing")
+    versions = dict(native.versions())
+    if versions != EXPECTED:
+        raise RuntimeError("quard-clones linked engine library version mismatch")
+    return versions
 
 
 def validate_source_evidence(report: dict[str, object], root: Path,
@@ -146,10 +187,8 @@ def main() -> int:
     _ = parser.add_argument("--output", type=Path, required=True)
     _ = parser.add_argument("--kind", choices=(*KINDS, BATCH_KIND), default="exact")
     args = parser.parse_args()
+    _ = installed_engine()
     native = importlib.import_module("quard_clones")
-    if (metadata.version("quard-clones") != EXPECTED["quard-clones"]
-            or dict(native.versions()) != EXPECTED):
-        raise RuntimeError("quard-clones wheel or linked engine library version mismatch")
     sources, minimum = load_sources(args.manifest)
     session = native.SourceSession(sources, minimum,
                                    renamed=args.kind == RENAMED_KIND) if sources else None
