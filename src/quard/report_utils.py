@@ -614,11 +614,12 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
 
 def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list[str],
                            expected_kind: str) -> None:
-    from quard.clone_engine_utils import EXPECTED
+    from quard.clone_engine_utils import EXPECTED, validate_source_evidence
 
     if raw.get("engine") != EXPECTED or raw.get("sourcePaths") != [str(root / path)
-                                                                 for path in expected_paths]:
+                                                                  for path in expected_paths]:
         raise ValueError("Missing or mismatched native engine/source evidence")
+    validate_source_evidence(raw, root, expected_paths, skipped=False)
     statistics = raw.get("statistics")
     if not isinstance(statistics, dict) or not isinstance(raw.get("duplicates"), list):
         raise ValueError("Missing native engine statistics or clones")

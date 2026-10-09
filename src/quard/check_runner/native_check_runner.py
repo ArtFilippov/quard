@@ -24,7 +24,8 @@ from quard.check_runner.check_runner import CheckRunner
 from quard.check_selection_utils import (CHECK_DEFAULTS, DUPLICATE_JOBS, OPTIONAL_JOBS,
                                         TACH_JOBS, validate_architecture_checks)
 from quard.check_runner.runner_utils import (binary, execute_job, installed_versions,
-                                             inactive_job, make_jobs, select_lcom_files)
+                                              inactive_job, make_jobs, select_lcom_files,
+                                              capture_clone_batch)
 
 __all__ = ["NativeCheckRunner", "binary", "execute_job", "installed_versions",
            "make_jobs", "select_lcom_files"]
@@ -195,7 +196,8 @@ class NativeCheckRunner(CheckRunner):
             # Native analyzers complete independently. A failing job never cancels the others.
             job_results, job_diagnostics = self.run_jobs(
                 jobs, serial=serial, execute=partial(execute_job, root=root, run_dir=run_dir,
-                                                     timeout=timeout, capture_fn=capture_fn))
+                     timeout=timeout, capture_fn=capture_clone_batch(
+                         jobs, root, run_dir, timeout, capture_fn)))
             diagnostics.extend(job_diagnostics)
             results.extend(job_results)
             if any(result["name"] == "lcom4" and result["status"] in {"passed", "violations"}

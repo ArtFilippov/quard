@@ -27,15 +27,32 @@ installation gates are verified, the normal CLI remains the default and remains
 available for differential comparisons.
 #115 adds the renamed pass to `SourceSession`: it loads the same original source
 manifest and uses the same strict native `FilePreparer` pipeline with
-`ignore_identifiers` and `ignore_literals` enabled. The jobs run in separate
-processes so their sessions, failures and native reports remain independent.
+`ignore_identifiers` and `ignore_literals` enabled. Before #117 the jobs ran in
+separate processes, each with its own session and native report.
 The renamed job keeps only native Type 2 (`renamed`) matches; normalized Type 1
 matches do not displace findings from the separate unnormalized exact job.
-All jobs use the same positive physical-line minimum and discovered Python scope.
+Before preparation all jobs used the same positive physical-line minimum and
+discovered Python scope.
 #116 adds the independent gap-similar job. It calls the pinned native
 `merge_gapped_clones` after `detect_prepared`, with a two-unmatched-line limit
 in each file; each constituent must first meet the common detection minimum.
 It keeps only native Type 3 with the `gap` method, never AST similarity.
+
+#117 adds RustPython parsing before native tokenization. The session parses
+each discovered `.py` once and creates separate module/class/function detection
+units. File-level and class-level imports, actual docstrings and attribute
+documentation are omitted from the units; local imports and assigned values
+remain. Units compact eligible lines for the native minimum without changing
+the original text. A line map restores file paths, line numbers and byte
+offsets on findings; archived fragments always come from original text. The
+batch worker prepares one session for all three passes, writes each pass's
+report separately and returns independent statuses. Its own stdout/stderr are
+archived and linked from all three jobs alongside their individual streams.
+Normalized candidate
+units sharing native token windows are scanned as pairs: the pinned detector
+retains only two secondary one-token occurrences, which can otherwise lose
+Type 2 clones in a large normalized scope. These are native scans, not filters
+on reported findings.
 
 ## Reporting and failures
 
@@ -44,22 +61,26 @@ separate raw JSON reports and stdout/stderr logs, original paths, one-based
 normalized locations and both
 native fragment locations. The JSON adds `engine` (the wheel and linked-crate
 versions compiled from the actual Cargo.lock) and `sourcePaths` (the complete
-accepted source list). The worker
+accepted source list). Prepared reports also contain per-unit eligible-line
+lengths, total eligible lines, configured minimum and original-source digests.
+An entirely ineligible view is skipped with a reason. The worker
 checks wheel metadata and linked-version evidence against `tools.json`, and
 rejects missing or incomplete source preparation. The report parser checks
 the complete path list, native source count, original locations and fragment
 text. The parser validates each job's expected native kind, counts and mappings;
 similar also verifies its score, method and unmatched-line accounting.
-Mismatches, tool failures and invalid output are infrastructure errors
+Mismatches, parser failures, tool failures and invalid output are infrastructure errors
 (exit 2); other jobs finish and retain their own diagnostics. Native findings
 are never suppressed to obtain a passing result.
 
 ## Consequences
 
 The native API is pinned deliberately: updating the CLI or any engine crate
-requires rebuilding the wheel and repeating real CLI/library parity tests.
-All three passes use original source with physical-line accounting; source
-preparation and eligible-line accounting belong to later slices of #112.
+requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
+and verifying the prepared-view fixtures with the real component.
+The ordinary CLI still uses original-source physical lines. The opt-in Rust
+path applies the shared minimum to eligible prepared lines. Declaration-only
+material for exact contract/schema clones remains for later slices of #112.
 An explicit wheel-selection switch keeps the existing CLI executable and its
 independent native diagnostics in ordinary installations while the rest of the
 three-pass installation contract is built.

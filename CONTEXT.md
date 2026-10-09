@@ -24,8 +24,27 @@ optional check selection or per-change LCOM4 selection.
 An **in-memory source session** owns Quard's discovered original Python source
 text and the pinned native engine's prepared token sources for a check run.
 The session does not execute or import consumer code or create prepared files.
-Its exact-clone pass counts the same physical source lines as the CLI; later
-prepared views will apply the shared minimum to eligible lines.
+The opt-in Rust session parses each file once for all three clone jobs, then
+tokenizes eligible units for exact, renamed and gap-similar detection. The
+ordinary CLI continues to scan original files.
+
+## Prepared view and eligible material
+
+A **prepared view** is the in-memory sequence of eligible original source
+lines in one module, class or function unit. File-level and class-level imports,
+actual docstrings and attribute documentation do not contribute; function-local
+imports and assignments, including assigned strings, do. The effective clone
+minimum counts **eligible material** within a unit. Removing lines does not
+allow neighboring independent classes or functions to form one clone.
+
+## Source mapping
+
+A **source mapping** connects each prepared line and native token position to
+its original file, line and byte column. The archived clone fragment uses the
+verbatim original range, even when that range contains omitted documentation.
+The native report records the discovered paths, their source digests,
+eligible-line totals and per-unit lengths; a view without any qualifying unit
+is explicitly skipped. A changed original or invalid mapping is an error.
 
 ## Customer class
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, override
 
 from quard._common import atomic_write
+from quard.clone_engine_utils import skipped_clone_job
 from quard.report_parsing.native_report_parser import NativeReportParser
 from quard.check_job.check_job import CheckJob
 
@@ -30,12 +31,16 @@ class CapturedCheckJob(CheckJob):
             logs[stream] = path.relative_to(root).as_posix()
         if job.get("json_file") and job["json_file"].exists():
             logs["native_json"] = job["json_file"].relative_to(root).as_posix()
+        logs.update(job.get("batch_logs", {}))
         return result, logs
 
     @override
     def execute(self, job: dict[str, Any], root: Path, run_dir: Path, timeout: int, *,
                 capture_fn: Callable[..., dict[str, Any]]) -> dict[str, Any]:
         result, logs = self.capture_output(job, root, run_dir, timeout, capture_fn=capture_fn)
+        skipped = skipped_clone_job(job, root, result, logs)
+        if skipped is not None:
+            return skipped
         normalized = NativeReportParser(root).normalize(
             job["tool"], result, job.get("json_file"), job.get("expected_paths"),
             job.get("engine", False), job.get("kind", "exact"))

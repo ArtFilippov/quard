@@ -1,4 +1,4 @@
-"""Build a real wheel and compare its full-check results with the native CLI."""
+"""Build a real wheel and inspect prepared full-check results."""
 from __future__ import annotations
 
 import atexit
@@ -20,7 +20,6 @@ from unittest.mock import patch
 from offline_fixtures import fake_tools
 from quard._common import capture, read_json
 from quard.check_runner.native_check_runner import NativeCheckRunner
-from quard.check_runner.runner_utils import binary
 from quard.report_utils import normalize
 
 QUARD = Path(__file__).resolve().parents[3]
@@ -68,12 +67,14 @@ def wheel() -> tuple[Path, Path]:
     if cargo.startswith("/tmp/opencode/"):
         env["CARGO_HOME"] = "/tmp/opencode/cargo"
         env["RUSTUP_HOME"] = "/tmp/opencode/rustup"
-    env["CARGO_TARGET_DIR"] = str(base / "target")
-    subprocess.run(["uvx", "--from", "maturin==1.9.6", "maturin", "build",
-                    "--locked", "--release", "--manifest-path",
-                    str(QUARD / "rust/quard-clones/Cargo.toml"), "--interpreter",
-                    sys.executable, "--out", str(base)], env=env, check=True,
-                   capture_output=True, text=True, timeout=300)
+    env["CARGO_TARGET_DIR"] = str(QUARD / "rust/quard-clones/target")
+    build = subprocess.run(["uvx", "--from", "maturin==1.9.6", "maturin", "build",
+                     "--locked", "--release", "--manifest-path",
+                     str(QUARD / "rust/quard-clones/Cargo.toml"), "--interpreter",
+                     sys.executable, "--out", str(base)], env=env, check=False,
+                    capture_output=True, text=True, timeout=300)
+    if build.returncode:
+        raise AssertionError(build.stderr)
     artifacts = list(base.glob("quard_clones-*.whl"))
     if len(artifacts) != 1:
         raise AssertionError(f"Expected one real wheel, got {artifacts}")
@@ -120,14 +121,22 @@ def report(root: Path) -> dict[str, Any]:
         return fake(argv, cwd, timeout)
 
     with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):
-        return NativeCheckRunner().run(root, lcom_files="", serial=True, timeout=60,
-                                       capture_fn=dispatch, versions_fn=versions)
+        result = NativeCheckRunner().run(root, lcom_files="", serial=True, timeout=60,
+                                         capture_fn=dispatch, versions_fn=versions)
+    for job in result["tools"]:
+        if job["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}:
+            batch = root / job["raw_output"]["batch_stdout"]
+            if (not batch.is_file() or
+                    (job["status"] != "error" and
+                     "exact" not in batch.read_text(encoding="utf-8"))):
+                raise AssertionError("Missing archived Rust batch status stream")
+    return result
 
 
-def compare_cli(test: unittest.TestCase, root: Path, result: dict[str, Any], minimum: int,
+def prepared_native(test: unittest.TestCase, root: Path, result: dict[str, Any], minimum: int,
                 kind: str = "exact"
                 ) -> dict[str, Any]:
-    """Compare archived native JSON with the CLI on the identical scope.
+    """Check prepared native output and discovered source accounting.
 
     Args:
         test (unittest.TestCase): Assertion owner.
@@ -143,37 +152,17 @@ def compare_cli(test: unittest.TestCase, root: Path, result: dict[str, Any], min
             "similar": "jscpd-similar"}[kind]
     job = next(item for item in result["tools"] if item["name"] == name)
     native = read_json(root / job["raw_output"]["native_json"])
-    run_dir = root / result["report_path"].replace("/report.json", "")
-    manifest = read_json(run_dir / "clone-engine-files.json")
+    manifest = read_json((root / result["report_path"]).parent / "clone-engine-files.json")
     test.assertEqual(manifest["min_lines"], minimum)
-    output = root / ".quard/cli"
-    output.mkdir(exist_ok=True)
-    command = [binary("jscpd"), "--config", str(run_dir / "jscpd-config.json"),
-               "--no-gitignore", "--absolute", "--kind", kind,
-               *(["--ignore-identifiers", "--ignore-literals"] if kind == "renamed" else []),
-               *(["--max-gap-lines", "2"] if kind == "similar" else []),
-               "--mode", "strict",
-               "--min-lines", str(minimum), "--min-tokens", "1", "--fail-on-empty",
-               "--reporters", "json", "--output", str(output), "--exit-code", "1",
-               *manifest["paths"]]
-    cli = capture(command, root, 60)
-    test.assertEqual(cli["exit_code"], job["exit_code"], cli)
-    original = read_json(output / "jscpd-report.json")
-    for key in ("sources", "clones", "lines", "tokens"):
-        test.assertEqual(native["statistics"]["total"][key],
-                         original["statistics"]["total"][key])
-    for key in ("kind", "lines", "tokens", "fragment", "firstFile", "secondFile"):
-        test.assertEqual([item[key] for item in native["duplicates"]],
-                         [item[key] for item in original["duplicates"]], key)
-    if kind == "similar":
-        for key in ("similarity", "method"):
-            test.assertEqual([item[key] for item in native["duplicates"]],
-                             [item[key] for item in original["duplicates"]], key)
+    test.assertEqual(native["sourcePaths"], [str(root / path) for path in manifest["paths"]])
+    test.assertEqual(native["statistics"]["total"]["sources"], len(manifest["paths"]))
+    test.assertEqual(native["statistics"]["total"]["clones"], len(native["duplicates"]))
+    test.assertEqual(job["exit_code"], int(bool(native["duplicates"])))
     return native
 
 
-def verify_similar_parity(test: unittest.TestCase, root: Path) -> None:
-    """Real gap and clean scans agree with the CLI within one function.
+def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
+    """Real prepared gap and clean scans keep one function's behavior.
 
     Args:
         test (unittest.TestCase): Assertion owner.
@@ -195,7 +184,7 @@ def verify_similar_parity(test: unittest.TestCase, root: Path) -> None:
                               encoding="utf-8")
             result = report(root)
             job = next(j for j in result["tools"] if j["name"] == "jscpd-similar")
-            native = compare_cli(test, root, result, 3, "similar")
+            native = prepared_native(test, root, result, 3, "similar")
             test.assertIn("_clone_engine_worker.py", job["argv"][1])
             test.assertEqual(job["status"], "violations" if 1 <= gap <= 2 else "passed")
             test.assertEqual(bool(native["duplicates"]), 1 <= gap <= 2)
@@ -216,7 +205,7 @@ def verify_similar_parity(test: unittest.TestCase, root: Path) -> None:
     second.write_text("def calculate(value):\n" + top + "    inserted = 91\n" +
                       bottom + "    return adjusted\n", encoding="utf-8")
     insufficient = report(root)
-    test.assertFalse(compare_cli(test, root, insufficient, 6, "similar")["duplicates"])
+    test.assertFalse(prepared_native(test, root, insufficient, 6, "similar")["duplicates"])
     test.assertEqual(next(j for j in insufficient["tools"] if j["name"] == "jscpd-similar")[
         "status"], "passed")
     setting.write_text(setting.read_text(encoding="utf-8").replace(
@@ -226,7 +215,7 @@ def verify_similar_parity(test: unittest.TestCase, root: Path) -> None:
     clean = report(root)
     test.assertEqual(next(j for j in clean["tools"] if j["name"] == "jscpd-similar")[
         "status"], "passed", clean["diagnostics"])
-    test.assertFalse(compare_cli(test, root, clean, 3, "similar")["duplicates"])
+    test.assertFalse(prepared_native(test, root, clean, 3, "similar")["duplicates"])
 
 
 def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
@@ -246,8 +235,10 @@ def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
         if Path(argv[1]).name != "_clone_engine_worker.py":
             return fake(argv, cwd, timeout)
         result = capture([str(python), *argv[1:]], cwd, timeout)
-        if argv[-1] == "similar":
-            return {**result, "exit_code": 2, "stderr": "native similar failure"}
+        if argv[-1] == "all" and result["exit_code"] == 0:
+            statuses = json.loads(result["stdout"])
+            statuses["similar"] = {"exit_code": 2, "stderr": "native similar failure"}
+            return {**result, "stdout": json.dumps(statuses)}
         return result
 
     with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):
@@ -299,8 +290,8 @@ def verify_similar_failure(test: unittest.TestCase, root: Path) -> None:
                                "similar")["status"], "error")
 
 
-def verify_cli_parity(test: unittest.TestCase, root: Path) -> None:
-    """Compare cross-profile clones, clean scans, ignored folders and stubs.
+def verify_prepared_scope(test: unittest.TestCase, root: Path) -> None:
+    """Check cross-profile clones, clean scans, ignored folders and stubs.
 
     Args:
         test (unittest.TestCase): Assertion owner.
@@ -323,10 +314,11 @@ def verify_cli_parity(test: unittest.TestCase, root: Path) -> None:
             result = report(root)
             exact = next(job for job in result["tools"] if job["name"] == "jscpd")
             test.assertEqual((result["exit_code"], exact["status"], exact["exit_code"]),
-                             (0, "passed", 0) if clean else (1, "violations", 1),
+                             (0, "skipped", None) if clean else (1, "violations", 1),
                              result["diagnostics"])
-            _ = compare_cli(test, root, result, 5)
-            _ = compare_cli(test, root, result, 5, "renamed")
+            if not clean:
+                _ = prepared_native(test, root, result, 5)
+                _ = prepared_native(test, root, result, 5, "renamed")
             test.assertEqual({d["path"] for d in result["diagnostics"] if d["tool"] == "jscpd"},
                              set() if clean else {"src/demo/first.py", "tests/second.py"})
 
@@ -349,7 +341,7 @@ def verify_corrupt_report(test: unittest.TestCase, root: Path) -> None:
     def corrupt(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
         if Path(argv[1]).name == "_clone_engine_worker.py":
             native_result = capture([str(python), *argv[1:]], cwd, timeout)
-            test.assertEqual(native_result["exit_code"], 1, native_result["stderr"])
+            test.assertEqual(native_result["exit_code"], 0, native_result["stderr"])
             output = Path(argv[argv.index("--output") + 1])
             payload = read_json(output)
             payload["statistics"]["total"]["sources"] = 0
@@ -423,7 +415,7 @@ def verify_mismatched_engine(test: unittest.TestCase, root: Path) -> None:
 
 
 def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
-    """Same-file fragments agree with the CLI; invalid original text fails.
+    """Same-file prepared fragments preserve originals; invalid mappings fail.
 
     Args:
         test (unittest.TestCase): Assertion owner.
@@ -434,10 +426,10 @@ def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
     result = report(root)
     exact = next(job for job in result["tools"] if job["name"] == "jscpd")
     test.assertEqual((exact["status"], exact["exit_code"]), ("violations", 1),
-                     result["diagnostics"])
+                      (result["diagnostics"], (root / exact["raw_output"]["stderr"]).read_text()))
     test.assertEqual({d["path"] for d in result["diagnostics"] if d["tool"] == "jscpd"},
                      {"src/demo/first.py"})
-    native = compare_cli(test, root, result, 3)
+    native = prepared_native(test, root, result, 3)
     test.assertEqual(native["statistics"]["total"]["clones"], len(native["duplicates"]))
     native["duplicates"][0]["fragment"] = "invented source"
     bad = root / "altered.json"
@@ -452,19 +444,29 @@ def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
     native["duplicates"][0]["firstFile"]["startLoc"]["position"] += 1
     bad.write_text(json.dumps(native), encoding="utf-8")
     wrong_location = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
-                                         "error": None}, root, bad, paths, True)
+                                          "error": None}, root, bad, paths, True)
     test.assertEqual(wrong_location["status"], "error")
+    for field in ("unitLines", "scannedUnitLines", "sourceDigests"):
+        with test.subTest(field=field):
+            altered = read_json(root / exact["raw_output"]["native_json"])
+            altered[field][str(root / "src/demo/first.py")] = (
+                [] if field != "sourceDigests" else "wrong")
+            bad.write_text(json.dumps(altered), encoding="utf-8")
+            invalid = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
+                                           "error": None}, root, bad, paths, True)
+            test.assertEqual(invalid["status"], "error")
+            test.assertTrue(any(d["is_infrastructure_error"] for d in invalid["diagnostics"]))
 
 
-def verify_renamed_parity(test: unittest.TestCase, root: Path) -> None:
-    """Compare changed identifiers/literals, same-file and exact peer findings."""
+def verify_prepared_renamed(test: unittest.TestCase, root: Path) -> None:
+    """Check changed identifiers/literals, same-file and exact peer findings."""
     first = ("def compute(value):\n    alpha = value + 17\n    beta = alpha * 3\n"
              "    gamma = beta - 4\n    delta = gamma / 2\n    return delta + 10\n")
     other = ("def compute(number):\n    start = number + 17\n    middle = start * 3\n"
              "    end = middle - 4\n    result = end / 2\n    return result + 10\n")
-    (root / "src/demo/first.py").write_text(first + "\n" + other + "\n" + other,
-                                               encoding="utf-8")
-    (root / "tests/second.py").write_text(other, encoding="utf-8")
+    (root / "src/demo/first.py").write_text(first + "\n" + other,
+                                                encoding="utf-8")
+    (root / "tests/second.py").write_text("unique = object()\n", encoding="utf-8")
     for selection in (None, "", "src/demo/first.py"):
         with test.subTest(lcom_files=selection):
             fake, _ = fake_tools()
@@ -482,16 +484,15 @@ def verify_renamed_parity(test: unittest.TestCase, root: Path) -> None:
             jobs = {item["name"]: item for item in result["tools"]}
             test.assertEqual((result["exit_code"], jobs["jscpd"]["status"],
                               jobs["jscpd-renamed"]["status"]),
-                             (1, "violations", "violations"), result["diagnostics"])
-            exact = compare_cli(test, root, result, 3)
-            renamed = compare_cli(test, root, result, 3, "renamed")
-            test.assertTrue(exact["duplicates"])
+                             (1, "passed", "violations"), result["diagnostics"])
+            exact = prepared_native(test, root, result, 3)
+            renamed = prepared_native(test, root, result, 3, "renamed")
+            test.assertFalse(exact["duplicates"])
             test.assertTrue(renamed["duplicates"])
             test.assertEqual({item["kind"] for item in renamed["duplicates"]}, {"renamed"})
             test.assertIn("src/demo/first.py", {d["path"] for d in result["diagnostics"]
                                                 if d["rule"] == "RENAMED_CLONE"})
-            test.assertEqual({d["rule"] for d in result["diagnostics"] if d["job"] == "jscpd"},
-                             {"EXACT_CLONE"})
+            test.assertFalse([d for d in result["diagnostics"] if d["job"] == "jscpd"])
             test.assertEqual(jobs["lcom4"]["status"] == "skipped", selection == "")
             test.assertEqual(result["coverage"]["lcom4"]["mode"],
                              "skipped" if selection == "" else
@@ -501,7 +502,7 @@ def verify_renamed_parity(test: unittest.TestCase, root: Path) -> None:
                                           .replace("first", "alpha")
                                           .replace("second", "beta"), encoding="utf-8")
     cross = report(root)
-    _ = compare_cli(test, root, cross, 3, "renamed")
+    _ = prepared_native(test, root, cross, 3, "renamed")
     test.assertEqual({d["path"] for d in cross["diagnostics"]
                       if d["rule"] == "RENAMED_CLONE"},
                      {"src/demo/first.py", "tests/second.py"})
@@ -511,7 +512,7 @@ def verify_renamed_parity(test: unittest.TestCase, root: Path) -> None:
         changed = changed.replace(old, new)
     (root / "tests/second.py").write_text(changed, encoding="utf-8")
     literals = report(root)
-    literal_native = compare_cli(test, root, literals, 3, "renamed")
+    literal_native = prepared_native(test, root, literals, 3, "renamed")
     test.assertTrue(literal_native["duplicates"])
     test.assertEqual({d["path"] for d in literals["diagnostics"]
                       if d["rule"] == "RENAMED_CLONE"},
@@ -521,7 +522,7 @@ def verify_renamed_parity(test: unittest.TestCase, root: Path) -> None:
     (root / "tests/second.py").write_text(changed.replace("23", "'world'"),
                                           encoding="utf-8")
     strings = report(root)
-    string_native = compare_cli(test, root, strings, 3, "renamed")
+    string_native = prepared_native(test, root, strings, 3, "renamed")
     test.assertTrue(string_native["duplicates"])
 
 
@@ -541,10 +542,12 @@ def verify_renamed_failure(test: unittest.TestCase, root: Path) -> None:
     def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
         if Path(argv[1]).name != "_clone_engine_worker.py":
             return fake(argv, cwd, timeout)
-        if argv[-1] == "renamed":
-            return {**capture([str(python), *argv[1:]], cwd, timeout),
-                    "exit_code": 2, "stderr": "native renamed failure"}
-        return capture([str(python), *argv[1:]], cwd, timeout)
+        result = capture([str(python), *argv[1:]], cwd, timeout)
+        if argv[-1] == "all" and result["exit_code"] == 0:
+            statuses = json.loads(result["stdout"])
+            statuses["renamed"] = {"exit_code": 2, "stderr": "native renamed failure"}
+            return {**result, "stdout": json.dumps(statuses)}
+        return result
 
     with patch.dict(os.environ, {"QUARD_CLONE_ENGINE": "rust"}):
         result = NativeCheckRunner().run(root, lcom_files="", serial=True, timeout=60,
@@ -590,9 +593,11 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     python = consumer / ".venv/bin/python"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(consumer / ".venv")],
                    check=True, capture_output=True, text=True)
-    subprocess.run(["uv", "pip", "install", "--python", str(python),
-                    "--group", "dev", "--project", str(QUARD)],
-                   check=True, capture_output=True, text=True, timeout=180)
+    install = subprocess.run(["uv", "pip", "install", "--python", str(python),
+                     "--group", "dev", "--project", str(QUARD)],
+                   check=False, capture_output=True, text=True, timeout=180)
+    if install.returncode:
+        raise AssertionError(install.stderr)
     _, artifact = wheel()
     subprocess.run(["uv", "pip", "install", "--python", str(python), str(artifact)],
                    check=True, capture_output=True, text=True)
@@ -611,7 +616,9 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
         test.assertEqual(result["summary"]["infrastructure_errors"], 0,
                          result["diagnostics"])
         jobs = {job["name"]: job for job in result["tools"]}
-        test.assertEqual(jobs["jscpd"]["exit_code"], expected if exact_code is None else exact_code)
+        test.assertEqual(jobs["jscpd"]["exit_code"],
+                         None if expected == 0 and exact_code is None else
+                         expected if exact_code is None else exact_code)
         test.assertIn("_clone_engine_worker.py", jobs["jscpd"]["argv"][1])
         for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
             test.assertIn("native_json", jobs[name]["raw_output"])

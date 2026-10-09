@@ -2,17 +2,72 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from importlib import metadata
 import importlib
 import json
 from pathlib import Path
 import sys
-from typing import cast
+from typing import Any, cast
 
 from quard._common import QuardError, read_json, tool_dir
+from quard.duplication_utils import read_duplication_min_lines
 
 EXPECTED = read_json(tool_dir() / "tools.json")["native_components"]
 PARENT = ".."
+KINDS = ("exact", "renamed", "similar")
+BATCH_KIND = "all"
+RENAMED_KIND = "renamed"
+SKIP_REASON = "No prepared unit meets the effective minimum"
+
+
+def validate_source_evidence(report: dict[str, object], root: Path,
+                             paths: list[str], *, skipped: bool) -> None:
+    """Verify the original file set, line accounting and intentional empty view."""
+    originals = [str(root / path) for path in paths]
+    counts = report.get("eligibleLines")
+    units = report.get("unitLines")
+    scanned = report.get("scannedUnitLines")
+    digests = report.get("sourceDigests")
+    minimum = read_duplication_min_lines(root)
+    if (report.get("sourcePaths") != originals or report.get("minimum") != minimum
+            or not isinstance(counts, dict) or not isinstance(units, dict)
+            or not isinstance(scanned, dict)
+            or not isinstance(digests, dict)
+            or any(set(evidence) != set(originals)
+                   for evidence in (counts, units, scanned, digests))):
+        raise ValueError("Incomplete native source evidence")
+    scannable = False
+    for original in originals:
+        count, lengths, digest = counts[original], units[original], digests[original]
+        if (type(count) is not int or count < 0 or not isinstance(lengths, list)
+                or any(type(length) is not int or length < 1 for length in lengths)
+                or sum(lengths) != count
+                or scanned[original] != [length for length in lengths if length >= minimum]
+                or not isinstance(digest, str)
+                or hashlib.sha256(Path(original).read_bytes()).hexdigest() != digest):
+            raise ValueError("Invalid prepared source accounting or changed original")
+        scannable |= any(length >= minimum for length in lengths)
+    if scannable == skipped:
+        raise ValueError("Prepared scan status disagrees with eligible units")
+
+
+def skipped_clone_job(job: dict[str, Any], root: Path, result: dict[str, Any],
+                      logs: dict[str, str]) -> dict[str, Any] | None:
+    """Return an intentional Rust skip only when original evidence proves it."""
+    if not job.get("engine") or result.get("exit_code") != 3 or not job.get("json_file"):
+        return None
+    try:
+        payload = json.loads(job["json_file"].read_text(encoding="utf-8"))
+        validate_source_evidence(payload, root, job["expected_paths"], skipped=True)
+        if payload["engine"] != EXPECTED or payload["skipped"] != SKIP_REASON:
+            return None
+    except (ValueError, KeyError, TypeError, OSError, QuardError):
+        return None
+    return {"name": job["name"], "tool": job["tool"], "status": "skipped",
+            "exit_code": None, "duration_seconds": result["duration_seconds"],
+            "argv": job["argv"], "raw_output": logs, "diagnostics": [],
+            "error": payload["skipped"]}
 
 
 def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
@@ -25,7 +80,7 @@ def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
         tuple[list[tuple[str, str]], int]: Absolute paths, original text and minimum.
 
     Raises:
-        RuntimeError: The manifest is malformed or has no eligible paths.
+        RuntimeError: The manifest is malformed.
     """
     loaded: object = read_json(manifest_path)
     if not isinstance(loaded, dict):
@@ -37,7 +92,7 @@ def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
             or isinstance(minimum, bool) or minimum < 1):
         raise RuntimeError("invalid clone source manifest")
     paths = cast(list[object], source_paths)
-    if (not paths or any(not isinstance(path, str) or Path(path).is_absolute()
+    if (any(not isinstance(path, str) or Path(path).is_absolute()
                          or PARENT in Path(path).parts or not path.endswith(".py")
                          for path in paths) or len(set(paths)) != len(paths)):
         raise RuntimeError("invalid clone source paths")
@@ -47,33 +102,74 @@ def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
     return sources, minimum
 
 
+def run_pass(session: Any, kind: str, output: Path, count: int,
+             evidence: dict[str, Any]) -> dict[str, object]:
+    """Archive one independent native pass or an explicit eligible-free skip."""
+    if session is not None and session.scannable():
+        report = json.loads(getattr(session, kind)())
+        if report["statistics"]["total"]["sources"] != count:
+            raise RuntimeError("native source count mismatch")
+        code = int(bool(report["duplicates"]))
+    else:
+        report = {"skipped": SKIP_REASON}
+        code = 3
+    report.update(evidence)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return {"exit_code": code, "stderr": ""}
+
+
+def run_passes(args: argparse.Namespace, session: Any, count: int,
+               evidence: dict[str, Any]) -> dict[str, dict[str, object]]:
+    """Keep one pass's native failure from erasing the other archived results."""
+    statuses: dict[str, dict[str, object]] = {}
+    for kind in KINDS if args.kind == BATCH_KIND else (args.kind,):
+        output = args.output if args.kind != BATCH_KIND else (
+            args.output.parent / ("" if kind == "exact" else "jscpd-" + kind) /
+            "jscpd-report.json")
+        try:
+            statuses[kind] = run_pass(session, kind, output, count, evidence)
+        except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+            statuses[kind] = {"exit_code": 2, "stderr": f"CLONE_ENGINE_ERROR: {exc}"}
+    return statuses
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     _ = parser.add_argument("--manifest", type=Path, required=True)
     _ = parser.add_argument("--output", type=Path, required=True)
-    _ = parser.add_argument("--kind", choices=("exact", "renamed", "similar"), default="exact")
+    _ = parser.add_argument("--kind", choices=(*KINDS, BATCH_KIND), default="exact")
     args = parser.parse_args()
     native = importlib.import_module("quard_clones")
-    versions = native.versions
-    if metadata.version("quard-clones") != EXPECTED["quard-clones"] or dict(versions()) != EXPECTED:
+    if (metadata.version("quard-clones") != EXPECTED["quard-clones"]
+            or dict(native.versions()) != EXPECTED):
         raise RuntimeError("quard-clones wheel or linked engine library version mismatch")
     sources, minimum = load_sources(args.manifest)
-    session = native.SourceSession(sources, minimum, renamed=args.kind == "renamed")
-    if session.source_count() != len(sources):
+    session = native.SourceSession(sources, minimum,
+                                   renamed=args.kind == RENAMED_KIND) if sources else None
+    if session is not None and session.source_count() != len(sources):
         raise RuntimeError("incomplete in-memory clone scan")
-    report = json.loads(getattr(session, args.kind)())
-    if report["statistics"]["total"]["sources"] != len(sources):
-        raise RuntimeError("native source count mismatch")
-    report["engine"] = dict(versions())
-    report["sourcePaths"] = [path for path, _ in sources]
-    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    return int(bool(report["duplicates"]))
+    evidence = {"engine": dict(native.versions()),
+                "sourcePaths": [path for path, _ in sources],
+                "eligibleLines": session.eligible_lines() if session else {},
+                "unitLines": session.unit_lines() if session else {},
+                "scannedUnitLines": session.scanned_unit_lines() if session else {},
+                "minimum": minimum,
+                "sourceDigests": {path: hashlib.sha256(text.encode("utf-8")).hexdigest()
+                                  for path, text in sources}}
+    statuses = run_passes(args, session, len(sources), evidence)
+    if args.kind == BATCH_KIND:
+        print(json.dumps(statuses))
+        return 0
+    if statuses[args.kind]["exit_code"] == 2:
+        raise RuntimeError(str(statuses[args.kind]["stderr"]))
+    return cast(int, statuses[args.kind]["exit_code"])
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (ImportError, OSError, ValueError, KeyError, TypeError, RuntimeError,
-            QuardError) as exc:
+    except (ImportError, OSError, UnicodeError, ValueError, KeyError, TypeError, RuntimeError,
+             QuardError) as exc:
         print(f"CLONE_ENGINE_ERROR: {exc}", file=sys.stderr)
         sys.exit(2)

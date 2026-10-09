@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from importlib import metadata
+import json
 import os
 from pathlib import Path
 import shlex
 import sys
 from typing import Any
 
-from quard._common import QuardError, capture, read_json, tool_dir, write_json
+from quard._common import QuardError, atomic_write, capture, read_json, tool_dir, write_json
 from quard._reports import diagnostic
 from quard.check_job.captured_check_job import CapturedCheckJob
 from quard.clone_engine_utils import EXPECTED
@@ -134,8 +135,9 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         min_lines = read_duplication_min_lines(root)
         clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
                               if path.endswith(".py"))
-        eligible = [path for path in clone_files if len((root / path).read_text(
-            encoding="utf-8").splitlines()) >= min_lines]
+        engine = os.environ.get("QUARD_CLONE_ENGINE") == "rust"
+        eligible = clone_files if engine else [path for path in clone_files if len(
+            (root / path).read_text(encoding="utf-8").splitlines()) >= min_lines]
         # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
         config = run_dir / "jscpd-config.json"
         write_json(config, {}, root)
@@ -152,14 +154,13 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                     "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
                     "--reporters", "json", "--output", str(output_dir), "--exit-code",
                     "1", *clone_files]
-            engine = os.environ.get("QUARD_CLONE_ENGINE") == "rust"
             if engine:
                 manifest = run_dir / "clone-engine-files.json"
-                write_json(manifest, {"paths": eligible, "min_lines": min_lines}, root)
+                write_json(manifest, {"paths": clone_files, "min_lines": min_lines}, root)
                 argv = [sys.executable, str(tool_dir() / "_clone_engine_worker.py"),
                         "--manifest", str(manifest), "--output",
                         str(output_dir / "jscpd-report.json"), "--kind", kind]
-            jobs.append({"name": name, "tool": "jscpd", "expected_paths": eligible,
+            jobs.append({"name": name, "tool": "jscpd", "expected_paths": clone_files if engine else eligible,
                          "engine": engine, "kind": kind,
                          "json_file": output_dir / "jscpd-report.json", "argv": argv})
     full_scope = sorted(files["production"] + files["tests"])
@@ -205,5 +206,43 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
 
 
 def execute_job(job: dict[str, Any], root: Path, run_dir: Path, timeout: int,
-                capture_fn: Callable[..., dict[str, Any]] = capture) -> dict[str, Any]:
+                 capture_fn: Callable[..., dict[str, Any]] = capture) -> dict[str, Any]:
     return CapturedCheckJob().execute(job, root, run_dir, timeout, capture_fn=capture_fn)
+
+
+def capture_clone_batch(jobs: list[dict[str, Any]], root: Path, run_dir: Path,
+                        timeout: int, capture_fn: Callable[..., dict[str, Any]]
+                        ) -> Callable[..., dict[str, Any]]:
+    """Prepare Rust sources once and adapt per-pass native results to ordinary jobs."""
+    clone_jobs = [job for job in jobs if job.get("engine")]
+    if not clone_jobs:
+        return capture_fn
+    argv = clone_jobs[0]["argv"][:]
+    argv[argv.index("--kind") + 1] = "all"
+    argv[argv.index("--output") + 1] = str(run_dir / "raw/jscpd-report.json")
+    try:
+        batch = capture_fn(argv, root, timeout)
+    except Exception as exc:
+        batch = {"exit_code": 2, "stderr": str(exc), "duration_seconds": 0}
+    batch_logs: dict[str, str] = {}
+    for stream in ("stdout", "stderr"):
+        log = run_dir / "raw" / f"clone-batch.{stream}.log"
+        atomic_write(log, str(batch.get(stream, "")), root)
+        batch_logs[f"batch_{stream}"] = log.relative_to(root).as_posix()
+    for job in clone_jobs:
+        job["batch_logs"] = batch_logs
+    try:
+        states = json.loads(batch.get("stdout", "")) if batch["exit_code"] == 0 else {}
+    except (ValueError, TypeError, KeyError):
+        states = {}
+
+    def dispatch(command: list[str], cwd: Path, limit: int) -> dict[str, Any]:
+        if Path(command[1]).name != "_clone_engine_worker.py":
+            return capture_fn(command, cwd, limit)
+        kind = command[command.index("--kind") + 1]
+        state = states.get(kind, {}) if isinstance(states, dict) else {}
+        return {"argv": command, "exit_code": state.get("exit_code", 2), "stdout": "",
+                "stderr": state.get("stderr", batch.get("stderr", "")),
+                "duration_seconds": batch.get("duration_seconds", 0), "error": None}
+
+    return dispatch

@@ -29,9 +29,9 @@ violations baseline.
   and string/numeric literals.
   `[duplication] min_lines` in `.quard/config.toml` sets a shared positive integer
   minimum (default 3, also for older configs without the section or key). It is
-  passed to every job and used in each job's expected-source count. The current
-  CLI scans physical `.py` lines; prepared-view eligible-line counting will use
-  this same setting in the later in-memory integration. This minimum is distinct
+   passed to every job and used in each job's expected-source count. The default
+   CLI scans physical `.py` lines; the opt-in Rust path counts eligible lines
+   within a prepared module/class/function unit. This minimum is distinct
   from Pylint's mandatory `min_similarity_lines` readability limit.
   With a separately installed, first-party `quard-clones==0.1.0` wheel and
   `QUARD_CLONE_ENGINE=rust`, all three jobs use the linked `cpd-core==0.1.20`,

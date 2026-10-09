@@ -17,34 +17,165 @@ sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from jsonschema import validate
-from quard._common import read_json, write_json
+from quard._common import capture, read_json, write_json
 from quard.check_runner.native_check_runner import NativeCheckRunner
 from quard.check_runner.runner_utils import installed_versions
 from quard.check_selection_utils import DUPLICATE_JOBS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
-from rust_clone_engine_utils import (verify_cli_parity, verify_corrupt_report,
-                                     verify_mismatched_engine, verify_missing_wheel,
-                                     verify_real_full_check, verify_same_file_and_mapping,
-                                     verify_renamed_parity, verify_renamed_failure,
-                                     verify_similar_parity, verify_similar_failure)
+from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_report,
+                                      verify_mismatched_engine, verify_missing_wheel,
+                                      verify_real_full_check, verify_same_file_and_mapping,
+                                      verify_prepared_renamed, verify_renamed_failure,
+                                      verify_prepared_similar, verify_similar_failure,
+                                      report as prepared_report, versions, wheel)
 
 
 class TestCheckRunner(unittest.TestCase):
-    def test_real_wheel_similar_cli_parity(self) -> None:
-        verify_similar_parity(self, self.root)
+    def test_real_wheel_read_failure_keeps_peer_findings(self) -> None:
+        first = self.root / "src/demo/domain/api.py"
+        fake, _ = fake_tools({"pydoclint": {"stderr": "tests/test_value.py:1: DOC101: Issue\n",
+                                            "code": 1}})
+        python, _ = wheel()
+
+        def dispatch(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+            if Path(argv[1]).name == "_clone_engine_worker.py":
+                first.unlink()
+                return capture([str(python), *argv[1:]], cwd, timeout)
+            return fake(argv, cwd, timeout)
+
+        with patch.dict("os.environ", {"QUARD_CLONE_ENGINE": "rust"}):
+            result = NativeCheckRunner().run(self.root, lcom_files="", serial=True,
+                                              capture_fn=dispatch, versions_fn=versions)
+        self.assertEqual(result["exit_code"], 2)
+        self.assertEqual({job["name"]: job["status"] for job in result["tools"]
+                          if job["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}},
+                         {name: "error" for name in ("jscpd", "jscpd-renamed", "jscpd-similar")})
+        self.assertIn("DOC101", {item["rule"] for item in result["diagnostics"]})
+
+    def test_real_wheel_stub_only_view_is_skipped(self) -> None:
+        for path in ("src/demo/__init__.py", "src/demo/domain/api.py", "tests/test_value.py"):
+            (self.root / path).unlink()
+        (self.root / "src/demo/domain/api.pyi").write_text("class Port: ...\n",
+                                                           encoding="utf-8")
+        checked = prepared_report(self.root)
+        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+            job = next(item for item in checked["tools"] if item["name"] == name)
+            self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+
+    def test_real_wheel_accepts_supported_python_syntax(self) -> None:
+        python, _ = wheel()
+        syntax = ('type Alias[T] = list[T]\n'
+                  'def identity[T](value: T) -> T:\n'
+                  '    match value:\n'
+                  '        case [first, *rest]:\n'
+                  '            return f"{first!s} {rest!r}"\n'
+                  '    return value\n'
+                  'try:\n    raise ExceptionGroup("sample", [ValueError()])\n'
+                  'except* ValueError as errors:\n    result = str(errors)\n')
+        script = ('import quard_clones, sys; '
+                  'quard_clones.SourceSession([(sys.argv[1], sys.argv[2])], 3)')
+        checked = capture([str(python), "-c", script, str(self.root / "src/demo/syntax.py"),
+                           syntax], self.root, 30)
+        self.assertEqual(checked["exit_code"], 0, checked["stderr"])
+
+    def test_real_wheel_prepared_imports_and_docstrings(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        imports = "    import json\n    import pathlib\n    import collections\n"
+        for path in (first, second):
+            path.write_text('"""Shared module documentation."""\n' +
+                            "import json\nimport pathlib\nimport collections\n" +
+                            'def action():\n    """Repeated documentation."""\n' + imports,
+                            encoding="utf-8")
+        result = prepared_report(self.root)
+        jobs = {job["name"]: job for job in result["tools"]}
+        self.assertEqual((jobs["jscpd"]["status"], jobs["jscpd"]["exit_code"]),
+                         ("violations", 1), result["diagnostics"])
+        native = read_json(self.root / jobs["jscpd"]["raw_output"]["native_json"])
+        self.assertTrue(native["duplicates"])
+        self.assertTrue(all(item["firstFile"]["start"] >= 7 for item in native["duplicates"]))
+        self.assertTrue({str(first), str(second)} <= set(native["eligibleLines"]))
+        (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
+        # Three imports at file scope are ineligible even though they are long
+        # enough for an unprepared native scan.
+        for path in (first, second):
+            path.write_text('"""Common module documentation."""\n' +
+                            "import json\nimport pathlib\nimport collections\n",
+                            encoding="utf-8")
+        excluded = prepared_report(self.root)
+        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+            job = next(item for item in excluded["tools"] if item["name"] == name)
+            self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+            self.assertIn("prepared unit", job["error"])
+        # Attribute documentation and method docstrings do not turn two
+        # assignments into a clone; the same assignments plus a third do.
+        for path in (first, second):
+            path.write_text('class Component:\n    """Class documentation."""\n' +
+                            '    field = "assigned value"\n    """Attribute documentation."""\n' +
+                            '    def action(self):\n        """Method documentation."""\n' +
+                            '        first = 1\n        second = first + 2\n', encoding="utf-8")
+        short = prepared_report(self.root)
+        self.assertFalse([item for item in short["diagnostics"] if item["tool"] == "jscpd"],
+                         short["diagnostics"])
+        for path in (first, second):
+            with path.open("a", encoding="utf-8") as source:
+                _ = source.write("        third = second * 3\n")
+        long = prepared_report(self.root)
+        self.assertEqual({item["path"] for item in long["diagnostics"]
+                          if item["rule"] == "EXACT_CLONE"},
+                         {"src/demo/first.py", "tests/second.py"})
+        for path in (first, second):
+            path.write_text('class Holder:\n    first = "assigned value"\n' +
+                            '    """Attribute documentation."""\n' +
+                            '    second = first + " more"\n    third = second.upper()\n',
+                            encoding="utf-8")
+        mapped = prepared_report(self.root)
+        exact = next(item for item in mapped["tools"] if item["name"] == "jscpd")
+        self.assertEqual(exact["status"], "violations", mapped["diagnostics"])
+        payload = read_json(self.root / exact["raw_output"]["native_json"])
+        self.assertTrue(any('"""Attribute documentation."""' in clone["fragment"]
+                            for clone in payload["duplicates"]))
+        self.assertTrue(any('"assigned value"' in clone["fragment"]
+                            for clone in payload["duplicates"]))
+        for path in (first, second):
+            path.write_text('class Holder:\n    value = "café"\n' +
+                            '    """Attribute documentation."""\n' +
+                            '    output = value + "!"\n    result = output.upper()\n',
+                            encoding="utf-8")
+        unicode_result = prepared_report(self.root)
+        self.assertEqual(next(item for item in unicode_result["tools"]
+                              if item["name"] == "jscpd")["status"], "violations",
+                         unicode_result["diagnostics"])
+        for path in (first, second):
+            path.write_text("def left():\n    first = 1\n    second = first + 2\n\n" +
+                            "def right():\n    third = 3\n    fourth = third + 4\n",
+                            encoding="utf-8")
+        boundaries = prepared_report(self.root)
+        self.assertEqual(next(item for item in boundaries["tools"]
+                              if item["name"] == "jscpd")["status"], "skipped")
+        first.write_text("def broken(:\n", encoding="utf-8")
+        broken = prepared_report(self.root)
+        self.assertEqual(broken["exit_code"], 2)
+        self.assertEqual({item["name"]: item["status"] for item in broken["tools"]
+                          if item["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}},
+                         {"jscpd": "error", "jscpd-renamed": "error", "jscpd-similar": "error"})
+        self.assertTrue(any(item["is_infrastructure_error"] for item in broken["diagnostics"]))
+
+    def test_real_wheel_similar_prepared(self) -> None:
+        verify_prepared_similar(self, self.root)
 
     def test_real_wheel_similar_failure_keeps_peers(self) -> None:
         verify_similar_failure(self, self.root)
 
-    def test_real_wheel_renamed_cli_parity(self) -> None:
-        verify_renamed_parity(self, self.root)
+    def test_real_wheel_renamed_prepared(self) -> None:
+        verify_prepared_renamed(self, self.root)
 
     def test_real_wheel_renamed_failure_keeps_exact(self) -> None:
         verify_renamed_failure(self, self.root)
 
-    def test_real_wheel_cli_parity(self) -> None:
-        verify_cli_parity(self, self.root)
+    def test_real_wheel_prepared_scope(self) -> None:
+        verify_prepared_scope(self, self.root)
 
     def test_real_wheel_invalid_output_retains_independent_diagnostics(self) -> None:
         verify_corrupt_report(self, self.root)

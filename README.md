@@ -226,9 +226,14 @@ configs without the section or key also use 3 without migration. An explicit
 value is retained by install, reinstall and apply. This setting is independent of
 Pylint's required `[readability.production] min_similarity_lines` limit and
 `[checks] duplicate_detection`, which selects the three jscpd jobs together.
-The current native CLI scans unprepared `.py` files; the threshold and its
-expected-source accounting use physical source lines. The later prepared-view
-integration will apply the same setting to eligible lines in that view.
+The default native CLI scans unprepared `.py` files and counts physical source
+lines. The opt-in Rust path prepares discovered files in memory, applying the
+same minimum to eligible lines within each module, class or function unit.
+File-level and class-level imports, actual docstrings and attribute documentation
+do not count; function-local imports and assigned values do. Views with no
+qualifying unit are explicitly skipped with a reason. Rust reports retain
+original paths, positions and verbatim fragments, with source digests and
+per-unit accounting.
 For developer comparison, build the locked `rust/quard-clones` wheel with
 `maturin build --manifest-path rust/quard-clones/Cargo.toml --locked --release`,
 install it into the selected consumer's uv environment, then set
