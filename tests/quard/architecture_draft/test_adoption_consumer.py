@@ -19,6 +19,7 @@ from adoption_fixture_utils import temporary_consumer
 from offline_fixtures import create_repo
 from legacy_clone_fixture_utils import historical_cli
 from mutation_fixture_utils import temporary_edits
+from selected_report_utils import selected_report
 from quard._common import capture, load_toml, read_json, write_json
 from quard.architecture_draft.generated_architecture_utils import regenerate
 from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
@@ -40,8 +41,10 @@ class TestAdoptionConsumer(unittest.TestCase):
     def consumer(self) -> AbstractContextManager[Path]:
         return temporary_consumer()
 
-    def check(self, root: Path, exit_code: int = 0) -> dict[str, Any]:
-        report = NativeCheckRunner().run(root)
+    def check(self, root: Path, exit_code: int = 0, *,
+              jobs: tuple[str, ...] | None = None) -> dict[str, Any]:
+        report = (NativeCheckRunner().run(root) if jobs is None else
+                  selected_report(self, root, *jobs))
         self.assertEqual(read_json(root / ".quard/reports/latest.json"), report)
         self.assertEqual(report["exit_code"], exit_code, report["diagnostics"])
         errors = report["summary"]["infrastructure_errors"]

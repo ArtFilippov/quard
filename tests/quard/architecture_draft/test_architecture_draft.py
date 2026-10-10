@@ -18,17 +18,22 @@ if TYPE_CHECKING:
     from quard.audit_utils import discover_plugins
     from quard.architecture_draft.generated_selection_utils import IDENTITY
     from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
-    from quard.check_runner.native_check_runner import NativeCheckRunner
+    from quard.architecture_draft.generated_architecture_utils import regenerate
+    from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
+    from quard.contract_analysis.dependency_type_utils import analyze as dependency_types
     from quard.folder_analysis.folder_ownership import FolderOwnership
+    from quard.folder_analysis.folder_utils import analyze as contract_folders
     from quard.free_function_placement_utils import analyze as free_functions
+    from quard.outer_classes_worker_utils import analyze as outer_classes
     from quard.tach_worker_utils import run
-    from offline_fixtures import create_repo, fake_tools
+    from offline_fixtures import create_repo
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from legacy_clone_fixture_utils import historical_cli
+from selected_report_utils import selected_report
 
 if not TYPE_CHECKING:
     common = import_module("quard._common")
@@ -40,12 +45,16 @@ if not TYPE_CHECKING:
     IDENTITY = import_module("quard.architecture_draft.generated_selection_utils").IDENTITY
     ConfiguredArchitectureDraft = import_module(
         "quard.architecture_draft.configured_architecture_draft").ConfiguredArchitectureDraft
+    regenerate = import_module("quard.architecture_draft.generated_architecture_utils").regenerate
+    ConfiguredConsumerPolicy = import_module(
+        "quard.consumer_policy.configured_consumer_policy").ConfiguredConsumerPolicy
+    dependency_types = import_module("quard.contract_analysis.dependency_type_utils").analyze
+    contract_folders = import_module("quard.folder_analysis.folder_utils").analyze
+    outer_classes = import_module("quard.outer_classes_worker_utils").analyze
     run = import_module("quard.tach_worker_utils").run
     create_repo = import_module("offline_fixtures").create_repo
-    fake_tools = import_module("offline_fixtures").fake_tools
     FolderOwnership = import_module("quard.folder_analysis.folder_ownership").FolderOwnership
     free_functions = import_module("quard.free_function_placement_utils").analyze
-    NativeCheckRunner = import_module("quard.check_runner.native_check_runner").NativeCheckRunner
     configure = import_module("quard.policy_utils").configure
 
 
@@ -98,22 +107,33 @@ class TestArchitectureDraft(unittest.TestCase):
             configure(root, initial=True, plugins=plugins, catalog=catalog)
 
             def check(expected: int, job: str, rule: str | None = None,
-                      path: str | None = None):
-                report = NativeCheckRunner().run(root)
-                self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
-                                 (expected, 0), report["diagnostics"])
-                jobs = {item["name"]: item for item in report["tools"]}
-                self.assertEqual((jobs[job]["status"], jobs[job]["exit_code"]),
-                                 (("passed", 0) if not expected else ("violations", 1)),
-                                 report["diagnostics"])
+                      path: str | None = None, *, native: bool = False) -> None:
+                files = ConfiguredConsumerPolicy(root).files()
+                paths = sorted(files["production"] + files["tests"])
+                analyzers = {"dependency-types": dependency_types,
+                             "contract-folders": contract_folders,
+                             "outer-classes": outer_classes}
+                findings, error = analyzers[job](root, paths)
+                self.assertIsNone(error, findings)
+                self.assertFalse(any(item.get("is_infrastructure_error") for item in findings),
+                                 findings)
+                self.assertEqual(int(bool(findings)), expected, findings)
                 if rule is not None:
                     self.assertTrue(any(item["rule"] == rule and item["path"] == path and
-                                        item["line"] > 0 and item["column"] > 0
-                                        for item in report["diagnostics"]), report["diagnostics"])
-                return report
+                                         item["line"] > 0 and item["column"] > 0
+                                        for item in findings), findings)
+                if native:
+                    regenerate(root)
+                    tach = run("check", root)
+                    self.assertIsNone(tach["execution_error"], tach)
+                    self.assertFalse(any(item.get("is_infrastructure_error") for item in
+                                         tach["diagnostics"]), tach)
+                    self.assertEqual(tach["exit_code"], expected, tach)
+                    self.assertTrue(any(item["path"] == path and item["line"] > 0
+                                        for item in tach["diagnostics"]), tach)
 
-            clean = check(0, "dependency-types")
-            self.assertTrue(all(job["status"] in {"passed", "skipped"} for job in clean["tools"]))
+            check(0, "dependency-types")
+            regenerate(root)
             modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
             self.assertEqual(modules["demo.arbitrary.evidence"]["layer"], "Infrastructure")
             self.assertEqual(modules["demo.arbitrary.evidence_shape"]["layer"], "Contract")
@@ -130,10 +150,8 @@ class TestArchitectureDraft(unittest.TestCase):
             client.write_text("from demo.arbitrary.evidence import Evidence\n\n"
                               + "def read_value(value: Evidence) -> str:\n"
                               + "    return value.identity.code\n")
-            report = check(1, "dependency-types", "CONCRETE_DEPENDENCY_TYPE",
-                           "src/other/group/deep/value_utils.py")
-            tach = next(job for job in report["tools"] if job["name"] == "tach")
-            self.assertEqual((tach["status"], tach["exit_code"]), ("violations", 1))
+            check(1, "dependency-types", "CONCRETE_DEPENDENCY_TYPE",
+                  "src/other/group/deep/value_utils.py", native=True)
             client.write_text(original)
 
             client.write_text(original + "\nfrom demo.arbitrary.evidence import Evidence\n"
@@ -348,29 +366,22 @@ class TestArchitectureDraft(unittest.TestCase):
         self.assertFalse(config["ignore_type_checking_imports"])
         return run("check", root)
 
+    def folder_findings(self, root: Path) -> list[dict[str, Any]]:
+        files = ConfiguredConsumerPolicy(root).files()
+        findings, error = contract_folders(root, sorted(files["production"] + files["tests"]))
+        self.assertIsNone(error, findings)
+        self.assertFalse(any(item.get("is_infrastructure_error") for item in findings), findings)
+        return findings
+
     def test_main_folder_assembles_multiple_implementations_with_native_checks(self):
         with TemporaryDirectory(prefix="quard-main-assembly-") as directory:
             root = Path(directory)
             _, main, client = self.main_fixture(root)
             self.assertEqual(self.main_check(root)["exit_code"], 0)
-            fake, _ = fake_tools()
-
-            def real_boundaries(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
-                if any(script in " ".join(argv) for script in (
-                    "_tach_worker.py", "_contract_folders_worker.py",
-                    "_free_function_placement_worker.py")):
-                    return capture(argv, cwd, timeout)
-                return fake(argv, cwd, timeout)
-
-            def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
-                return {}, []
-
-            report = NativeCheckRunner().run(root, capture_fn=real_boundaries,
-                                             versions_fn=versions)
+            report = selected_report(self, root, "contract-folders", "free-function-placement")
             self.assertEqual(report["exit_code"], 0, report["diagnostics"])
             self.assertTrue(all(job["status"] == "passed" for job in report["tools"]
-                                if job["name"] in {"tach", "contract-folders",
-                                                   "free-function-placement"}))
+                                if job["name"] in {"contract-folders", "free-function-placement"}))
             client.write_text(client.read_text() + "from demo.reader.impl import ReaderImpl\n")
             rejected = self.main_check(root)
             self.assertEqual(rejected["exit_code"], 1, rejected)
@@ -487,25 +498,7 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertEqual(next(module for module in config["modules"]
                                   if module["path"] == "demo.reader.envelopes.assembly_types")
                              ["depends_on"], [])
-            fake, _ = fake_tools()
-
-            def real_boundaries(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
-                if any(script in " ".join(argv) for script in (
-                    "_tach_worker.py", "_contract_folders_worker.py")):
-                    return capture(argv, cwd, timeout)
-                return fake(argv, cwd, timeout)
-
-            def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
-                return {}, []
-
-            def check() -> dict[str, Any]:
-                return NativeCheckRunner().run(root, capture_fn=real_boundaries,
-                                               versions_fn=versions)
-
-            report = check()
-            self.assertEqual(report["exit_code"], 0, report["diagnostics"])
-            self.assertTrue(all(job["status"] == "passed" for job in report["tools"]
-                                if job["name"] in {"tach", "contract-folders"}))
+            self.assertEqual(self.folder_findings(root), [])
             client.write_text("from demo.writer.writer import Writer\n" +
                               "from demo.writer.impl import WriterImpl\n")
             rejected = self.main_check(root)
@@ -537,30 +530,39 @@ class TestArchitectureDraft(unittest.TestCase):
                                                         "class NamedEnvelope(ReaderImpl)"))
             named.write_text("from demo.reader.impl import ReaderImpl\n" + named.read_text())
             self.main_check(root)
-            report = check()
-            self.assertEqual(report["exit_code"], 1, report["diagnostics"])
-            self.assertIn("ENVELOPE_INHERITANCE", {item["rule"] for item in
-                                                  report["diagnostics"]})
+            findings = self.folder_findings(root)
+            self.assertTrue(any(item["rule"] == "ENVELOPE_INHERITANCE" and
+                                item["path"] == "src/demo/reader/envelopes/named_envelope.py" and
+                                item["line"] > 0 and item["column"] > 0
+                                for item in findings), findings)
             named.write_text("from demo.writer.impl import WriterImpl\n" +
                              named.read_text().replace("class NamedEnvelope(ReaderImpl)",
                                                        "class NamedEnvelope(WriterImpl)")
                              .replace("from demo.reader.impl import ReaderImpl\n", ""))
-            report = check()
-            self.assertEqual(report["exit_code"], 1, report["diagnostics"])
-            self.assertIn("ENVELOPE_FOLDER", {item["rule"] for item in
-                                             report["diagnostics"]})
+            findings = self.folder_findings(root)
+            self.assertTrue(any(item["rule"] == "ENVELOPE_FOLDER" and
+                                item["path"] == "src/demo/reader/envelopes/named_envelope.py" and
+                                item["line"] > 0 and item["column"] > 0
+                                for item in findings), findings)
 
-    def test_envelope_standalone_full_check_and_runtime(self):
+    def test_envelope_standalone_selected_report_and_runtime(self):
         with TemporaryDirectory(prefix="quard-envelope-consumer-") as directory:
             root = Path(directory)
             self.envelope_fixture(root)
             self.assertEqual(self.main_check(root)["exit_code"], 0)
-            report = NativeCheckRunner().run(root)
+            report = selected_report(self, root, "class-contracts", "tach")
             self.assertEqual(report["exit_code"], 1, report["summary"])
-            self.assertEqual(report["summary"]["infrastructure_errors"], 0, report["diagnostics"])
-            for job in report["tools"]:
-                if job["name"] in {"tach", "contract-folders"}:
-                    self.assertEqual((job["status"], job["exit_code"]), ("passed", 0), job)
+            jobs = {job["name"]: job for job in report["tools"]}
+            self.assertEqual((jobs["tach"]["status"], jobs["tach"]["exit_code"]),
+                             ("passed", 0))
+            self.assertEqual((jobs["class-contracts"]["status"],
+                              jobs["class-contracts"]["exit_code"]), ("violations", 1))
+            self.assertTrue(any(d["job"] == "class-contracts" and
+                                d["rule"] == "UNCOVERED_CLASS_MEMBER" and
+                                d["path"] == "src/demo/reader/envelopes/reader_envelope.py" and
+                                d["line"] > 0 and d["column"] > 0
+                                for d in report["diagnostics"]), report["diagnostics"])
+            self.assertEqual(self.folder_findings(root), [])
             execution = capture([sys.executable, "-c",
                                  "import sys; sys.path.insert(0, 'src'); " +
                                  "from demo.reader.envelopes.reader_envelope " +

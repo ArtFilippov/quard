@@ -206,6 +206,61 @@ Compare the same-file and whole-directory pytest-durations profiles before and
 after; verify the full unittest suite and the real checkout `check.py` per
 `AGENTS.md`, recording any unresolved native diagnostics faithfully.
 
+## Selected real-job architecture reports (10 October 2026)
+
+Applied the latest decision without changing production `NativeCheckRunner` or the
+ordinary check profile. `selected_report_utils.py` patches only the test's
+`make_jobs()` return value, before clone batching; requested real jobs still run
+through `NativeCheckRunner`, and the helper checks exact executed names, real
+statuses, no infrastructure errors, and archived raw paths. Optional disabled jobs
+may still appear as `skipped`. Adoption and configured-architecture mutation
+cases now exercise selected real workers through reports; full adoption,
+failure-propagation, Pylint-profile and other end-to-end checks remain real/full.
+Report status for a selected set does not imply that a full check passed.
+
+- Same two-file pytest-durations profile (architecture draft + review follow-up):
+  13 passing tests, 7 subtests, 64.98 s before and 15.99 s after. The 13-check
+  case changed from 30.10 s to 3.56 s; the four review tests totaled about
+  28.0 s before and 6.85 s after. JSON: `/tmp/opencode/quard-selected-before.json`
+  and `/tmp/opencode/quard-selected-after.json` (local, not committed).
+- Whole architecture directory: 46 tests, 93 subtests passed in 110.51 s,
+  versus the previous 133.27 s (separate run). JSON:
+  `/tmp/opencode/quard-architecture-selected.json`. The configured file alone
+  is slower after moving its already-focused direct analyses to real report jobs:
+  55.68 s of calls vs 46.21 s in the earlier whole-directory profile. This
+  trade-off preserves real report execution for mutations, as requested.
+- `uv sync --locked --group dev`: exit 0. Full unittest: 388 tests, 1 skipped,
+  exit 0 in 418.449 s. Checkout `check.py`: exit 1 with 5144 native diagnostics,
+  0 infrastructure errors. Findings remain unresolved in
+  `.quard/reports/latest.json` and archived raw logs. No production tool policy
+  was modified.
+
+## Final split: focused rules and minimal real reports (10 October 2026)
+
+The user clarified that tests verifying a combined report must keep the real
+`NativeCheckRunner`, selecting the smallest relevant set of jobs; the other
+mutation tests should call the real analyzers directly. This supersedes the
+earlier change that routed already-fast focused mutations through the runner.
+`test_architecture_draft.py` uses direct folder, dependency-type and outer-class
+rules and real native Tach for behavioral cases; its report checks select only
+the interacting jobs. `test_review_followup.py` uses direct folder analysis and
+real Tach for rule cases, retaining a two-job runner report for the facade/Tach
+interaction. Adoption and configured-architecture mutation loops again use
+direct rules; genuine full-report, Pylint and failure-propagation cases remain.
+
+- Same two-file pytest profile: 13 tests, 7 subtests pass in 8.03 s, compared
+  with 15.99 s for the previous selected-report-only version and 64.98 s before
+  selection. Local JSON: `/tmp/opencode/quard-architecture-focused-pair.json`.
+- Whole architecture directory: 46 tests, 93 subtests pass in 84.22 s versus
+  110.51 s for the previous selected-report-only version and 133.27 s before
+  selection. Local JSON: `/tmp/opencode/quard-architecture-hybrid.json`. These
+  are single-run wall times, not a stable benchmark.
+- `uv sync --locked --group dev`: exit 0. Full unittest: 388 tests, 1 skipped,
+  exit 0 in 386.996 s. Checkout `check.py`: exit 1 with 5160 native findings,
+  0 infrastructure errors; unresolved details and job statuses are in
+  `.quard/reports/latest.json` with archived raw logs. No analyzer policy or
+  production runner changes.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's

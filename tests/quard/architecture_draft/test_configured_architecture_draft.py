@@ -28,6 +28,7 @@ from quard.tach_worker_utils import run as native_tach
 from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
 from legacy_clone_fixture_utils import historical_cli
 from mutation_fixture_utils import temporary_edits
+from selected_report_utils import selected_report
 
 if TYPE_CHECKING:
     from quard.architecture_draft.generated_architecture_utils import (
@@ -340,17 +341,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             return TransactionalInstallation(entry).install(root, QUARD, progress=False)
 
     def generated_report(self, root: Path) -> dict[str, Any]:
-        fake, _ = fake_tools()
-
-        def real_tach(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
-            if "_tach_worker.py" in " ".join(argv):
-                return capture(argv, cwd, timeout)
-            return fake(argv, cwd, timeout)
-
-        def versions(_root: Path) -> tuple[dict[str, str], list[Any]]:
-            return {}, []
-
-        return NativeCheckRunner().run(root, capture_fn=real_tach, versions_fn=versions)
+        return selected_report(self, root, "tach")
 
     def test_generated_install_apply_check_and_external_project(self):
         root = self.generated_fixture()
@@ -535,7 +526,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                              load_toml(root / "tach.toml")["modules"] if item["path"] ==
                              "other.group.deep.operations_utils")["depends_on"])
 
-    def test_generated_package_facades_full_consumer_check(self):
+    def test_generated_package_facades_selected_jobs(self):
         with TemporaryDirectory(prefix="quard-facade-consumer-") as directory:
             root = Path(directory)
             self.multi_package_fixture(root)
@@ -570,7 +561,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                          item["line"] > 0 and item["column"] > 0 for item in
                                          diagnostics), diagnostics)
 
-            clean = NativeCheckRunner().run(root)
+            clean = selected_report(self, root, "tach", "contract-folders")
             self.assertEqual((clean["exit_code"], clean["summary"]["infrastructure_errors"]),
                              (0, 0), clean["diagnostics"])
             check(0)
@@ -688,7 +679,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 "    @override\n    def second(self, value: str) -> str: ...\n")
 
             def check() -> dict[str, Any]:
-                report = NativeCheckRunner().run(root)
+                report = selected_report(self, root, "contract-folders")
                 self.assertEqual(report["summary"]["infrastructure_errors"], 0,
                                  report["diagnostics"])
                 self.assertEqual(next(job for job in report["tools"] if job["name"] ==
@@ -770,7 +761,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                 item["path"] == "src/other/group/deep/bridge.py"
                                 for item in failed), failed)
 
-    def test_generated_exact_external_inherited_contracts_full_check(self):
+    def test_generated_exact_external_inherited_contracts_selected_jobs(self):
         with TemporaryDirectory(prefix="quard-external-contracts-") as directory:
             root = Path(directory)
             self.multi_package_fixture(root)
@@ -809,7 +800,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                            "    return items[0]\n")
 
             def check() -> dict[str, Any]:
-                report = NativeCheckRunner().run(root)
+                report = selected_report(self, root, "tach", "contract-folders")
                 self.assertEqual(report["summary"]["infrastructure_errors"], 0,
                                  report["diagnostics"])
                 return report
@@ -919,7 +910,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             plugins, catalog = discover_plugins(root, logs)
             write_json(root / ".quard/pylint-catalog.json", catalog)
             configure(root, initial=True, plugins=plugins, catalog=catalog)
-            report = NativeCheckRunner().run(root)
+            report = selected_report(self, root, "contract-folders")
             self.assertEqual(report["exit_code"], 1, report["diagnostics"])
             self.assertEqual(report["summary"]["infrastructure_errors"], 0,
                              report["diagnostics"])
@@ -950,7 +941,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                             for d in report["diagnostics"]), report["diagnostics"])
         self.assertEqual(read_json(root / ".quard/reports/latest.json")["exit_code"], 1)
 
-    def test_generated_exact_role_matrix_uses_real_tach_on_full_consumer(self):
+    def test_generated_exact_role_matrix_uses_real_tach_report(self):
         with TemporaryDirectory(prefix="quard-native-roles-") as directory:
             root = Path(directory)
             self.multi_package_fixture(root)
@@ -963,7 +954,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                  "result = Sender().first('ok')\n")
 
             def check() -> dict[str, Any]:
-                report = NativeCheckRunner().run(root)
+                report = selected_report(self, root, "tach", "tach-external")
                 self.assertEqual(report["summary"]["infrastructure_errors"], 0,
                                  report["diagnostics"])
                 return report
@@ -1107,7 +1098,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             self.assertEqual((root / "tach.toml").read_bytes(), expected)
 
-    def test_generated_full_static_and_runtime_dependency_types(self):
+    def test_generated_selected_static_jobs_and_runtime_dependency_types(self):
         root = self.generated_fixture()
         setting = root / ".quard/config.toml"
         setting.write_text(setting.read_text(encoding="utf-8").replace(
@@ -1120,7 +1111,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                           "    def send(self) -> None: pass\n"
                           "    def build(self, value: Impl) -> Port: return value\n",
                           encoding="utf-8")
-        report = NativeCheckRunner().run(root)
+        report = selected_report(self, root, "dependency-types", "tach", "pyright")
         self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]), (1, 0))
         dependency = next(job for job in report["tools"] if job["name"] == "dependency-types")
         tach = next(job for job in report["tools"] if job["name"] == "tach")
@@ -1134,7 +1125,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                             "assert isinstance(Client().build(Impl()), Impl)"], root, 10)
         self.assertEqual(executed["exit_code"], 0, executed)
 
-    def test_generated_semantic_boundaries_full_consumer(self):
+    def test_generated_semantic_boundaries_selected_jobs(self):
         with TemporaryDirectory(prefix="quard-semantic-boundaries-") as directory:
             root = Path(directory)
             self.multi_package_fixture(root)
@@ -1159,7 +1150,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                              "        self.assertEqual(Sender().first('ok'), 'ready:ok')\n")
 
             def check() -> dict[str, Any]:
-                report = NativeCheckRunner().run(root)
+                report = selected_report(self, root, "contract-folders", "dependency-types",
+                                         "test-placement", "outer-classes", "tach")
                 self.assertEqual(report["summary"]["infrastructure_errors"], 0,
                                  report["diagnostics"])
                 return report
@@ -1279,7 +1271,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             self.assertEqual(self.focused_diagnostics(root, "test-placement"), [])
             self.assertEqual(self.focused_diagnostics(root, "outer-classes"), [])
 
-    def test_generated_envelopes_and_unique_main_full_consumer(self):
+    def test_generated_envelopes_and_unique_main_selected_jobs(self):
         with TemporaryDirectory(prefix="quard-assembly-areas-") as directory:
             root = Path(directory)
             self.multi_package_fixture(root)
@@ -1344,7 +1336,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 "result = Sender().first('nested')\n")
 
             def check() -> dict[str, Any]:
-                report = NativeCheckRunner().run(root)
+                report = selected_report(self, root, "contract-folders", "tach")
                 self.assertEqual(report["summary"]["infrastructure_errors"], 0,
                                  report["diagnostics"])
                 self.assertEqual(read_json(root / ".quard/reports/latest.json")["exit_code"],
@@ -1477,7 +1469,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                     "other.group.deep.operations_utils"]["depends_on"])
                 self.assertFalse((root / ".quard/architecture.ready.json").exists())
 
-            clean = NativeCheckRunner().run(root)
+            clean = selected_report(self, root, "contract-folders", "tach")
             self.assertEqual(clean["exit_code"], 0, clean["diagnostics"])
             stub.write_text("from demo.arbitrary.sender import Sender as Port\n__all__ = ['Port']\n")
             check("CONFLICTING_CONTRACT_ALIAS", stub)
