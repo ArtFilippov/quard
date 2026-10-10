@@ -59,6 +59,55 @@ now share full-check runs while retaining individual diagnostic assertions.
   check: exit 1, 5088 diagnostics, 0 infrastructure errors; inspect
   `.quard/reports/latest.json` for the unresolved native findings.
 
+## Agreed next step: radically speed up configured architecture tests
+
+The user agreed to split rule behavior from report orchestration, retaining
+one real end-to-end Tach scenario and one real Pylint scenario. Focus first on
+`tests/quard/architecture_draft/test_configured_architecture_draft.py`.
+The saved pytest JSON predates the batching above: its 28 calls total 211.72 s;
+13 calls exceed 1 s. Do not treat that total as a current measurement. A rough
+post-batching estimate is 180–200 s for this file; a 20–50 s target is a
+**hypothesis**, not a measured result. Re-profile before and after.
+
+- Test the many forbidden/allowed mutations with the real, focused rule
+  functions, not a full `NativeCheckRunner` per mutation. Existing entry points
+  include `quard.folder_analysis.folder_utils.analyze(root, paths)` for generated
+  `contract-folders`, `quard.contract_analysis.dependency_type_utils.analyze`,
+  `quard.test_placement_analysis.placement_utils.analyze`, and
+  `quard.outer_classes_worker_utils.analyze`. Use discovered production/test
+  paths, including stubs; assert each case's rule, path, position and absence of
+  execution errors. For generated roles, allowed dependencies and public
+  exports, inspect `generated_architecture_utils.render(root)` or regenerate
+  `tach.toml` and assert its `modules`/`interfaces`, rather than inferring native
+  Tach success from a fake. Keep consumer fixtures independent of private code.
+- Where a scenario specifically promises a native Tach diagnostic, use the
+  real `tach_worker_utils.run("check", root)` (or its real worker) on regenerated
+  config and assert its native result. Keep a small real full-check scenario
+  that proves the generated policy reaches Tach, plus the real Pylint-profile
+  scenario. Do not replace either semantic analyzer with a mock in its own
+  behavior test. Existing real full-check coverage also lives in
+  `test_adoption_consumer.py`.
+- Test report assembly, job independence, statuses, exit codes and archived
+  logs separately with deterministic fake job output via `fake_tools()` and
+  `NativeCheckRunner().run(root, capture_fn=fake, versions_fn=...)`. Reuse existing
+  `test_native_check_runner.py` coverage instead of duplicating it. Fake reports
+  prove orchestration only: never claim that mocked native jobs passed, or
+  suppress real native failures to make a check green. Keep genuine integration
+  for cases explicitly testing failure propagation or real Pylint findings.
+- Highest-leverage mutation loops are facades (~17 former full checks, lines
+  512–630), external inherited contracts (759–904), semantic boundaries
+  (1143–1298), and envelopes/main (1300–1455). Role-matrix (951–1114),
+  multiple contracts (632–758), provenance (1473–1535), and directory groups
+  (443–511) also mix rule/config assertions with full checks. Preserve runtime
+  assertions where they prove executable behavior. Start by measuring each
+  targeted test and per-job report durations, then move assertions to the
+  narrowest real interface and compare timings with the original coverage.
+
+No implementation of this split has been made yet. After changes follow
+`AGENTS.md`: run locked dev sync, the full unittest suite, and the checkout's
+full `check.py`; report the real exit code and native diagnostics. Run relevant
+consumer checks if a consumer is changed. Do not use `tach sync` or relax checks.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's
@@ -71,9 +120,10 @@ now share full-check runs while retaining individual diagnostic assertions.
    assertion expects `INVALID_CHECKS` for duplicate TOML, which produces
    `INVALID_CONFIG`. Investigate and fix the test and discovery mismatch before
    treating pytest as the canonical green suite.
-3. Remaining slow calls include source builds, fresh-process Pylint compatibility
-   regressions, real wheel runs and other full-check mutation loops. Keep real
-   integration coverage; use per-job report durations before changing a loop.
+3. Carry out the agreed configured-architecture split above, then re-profile
+   tests taking more than one second. Other slow calls include source builds,
+   fresh-process Pylint compatibility regressions and real wheel runs. Keep
+   real integration coverage; use per-job report durations before changing a loop.
 
 ## Suggested skills
 
