@@ -1,12 +1,15 @@
-# In-memory native clone engine alongside the CLI
+# In-memory native clone engine from pinned source
 
-The #125 release pipeline prepares four Linux `cp312-abi3` artifacts for
-CPython >=3.12. Activation is separate from a local build: only after PyPI
-contains reachable wheels and isolated uv consumer probes pass may the
-`native_wheel` manifest field enable the default Rust path. The installed
-binary's WHEEL tags, distribution version and linked crate versions are
-checked at the normal version seam; release builds include native packaged
-detection probes in each target container.
+The #125 installation decision uses a private Git source instead of published
+binary artifacts. The consumer's uv source pin names the selected Quard Git
+revision and `rust/quard-clones` subdirectory. uv builds with pinned maturin
+and Cargo.lock using the consumer's Rust/C toolchain, outside the Quard checkout.
+Installation selects the Rust path after pinning the source and checks the
+built distribution's WHEEL tags, ABI and linked crate versions. Exact, renamed,
+gap-similar and clean packaged probes run during installation. The revision
+must be fetchable from the tool's origin; a local test remote does not establish
+reachability for another consumer. Linux x86-64 glibc on CPython 3.12/3.13
+has been exercised; ARM64, musl and 3.14 remain unverified.
 
 ## Decision
 
@@ -23,16 +26,15 @@ engine's original locations and counts and `cpd-reporter`'s original-text line
 extraction without reading source a second time in the reporter. No consumer
 module is imported and no prepared `.py` file is written.
 
-The wheel is built by developers/CI with Rust 1.99.0 and a locked Cargo
-dependency graph; the consumer installs the binary wheel without Rust. CI
-requires the real wheel build, installs that artifact into an isolated uv
-consumer, and runs its full clean and clone checks without a Rust toolchain in
-the consumer's `PATH`. The Quard runner selects the wheel for all three jobs
-with `QUARD_CLONE_ENGINE=rust`. #114 calls for a full check that *can* use the
-wheel, not for every consumer to install it by default. Normal uv pinning and
-publication across supported Linux targets belong to #125. Until the #125
-installation gates are verified, the normal CLI remains the default and remains
-available for differential comparisons.
+The consumer builds the versioned wheel from its locked Git source with a Rust
+toolchain and a C compiler/linker; maturin and the Cargo dependency graph are
+pinned. The installer verifies the staged gitlink for in-project submodules;
+the isolated public fixture verifies install, reinstall, locked sync and full
+check from a separate clone and a nested nonstandard submodule without dirtying
+either tool tree. The runner selects the built component for all three jobs
+when the consumer has the uv source pin. Updated installations without that
+pin fail with exit 2 and a migration link. Older gitlinks retain their own
+historical behavior; the CLI in Quard's dev group supports the benchmark.
 #115 adds the renamed pass to `SourceSession`: it loads the same original source
 manifest and uses the same strict native `FilePreparer` pipeline with
 `ignore_identifiers` and `ignore_literals` enabled. Before #117 the jobs ran in
@@ -164,10 +166,9 @@ are never suppressed to obtain a passing result.
 The native API is pinned deliberately: updating the CLI or any engine crate
 requires rebuilding the wheel, rerunning unprepared CLI/library parity tests
 and verifying the prepared-view fixtures with the real component.
-The ordinary CLI still uses original-source physical lines. The opt-in Rust
-path applies the shared minimum to eligible prepared lines. The CLI remains
-the default until #125's published-wheel and target-installation gates pass;
-the opt-in switch and the historical CLI benchmark remain available for
-parity and performance checks. The CLI dependency/version probe can be
-removed only after real reporter parity, packaged probes and linked-library
-checks hold for all three jobs on the released integration.
+The historical CLI uses original-source physical lines; the source-built Rust
+path applies the shared minimum to eligible prepared lines. The CLI benchmark
+remains available in Quard's dev environment. Consumer installation no longer
+adds or version-probes the CLI. Check fails closed with a migration link for an
+updated consumer with no source pin; all three jobs are explicit errors rather
+than skipped. The tool checkout retains its pinned dev CLI for its full check.

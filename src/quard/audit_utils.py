@@ -128,60 +128,6 @@ class Probe:
         normalized = normalize("pydoclint", result, fixture)
         if normalized["status"] != "violations":
             raise QuardError("PYDOCLINT_SMOKE_FAILED", "pydoclint did not report the intentional docstring/signature mismatch, or rejected its config. See install-probes.")
-        clone_text = ("def repeat(value):\n    first = value + 17\n    second = first * 3\n"
-                      "    third = second - 4\n    fourth = third / 2\n    return fourth + 10\n")
-        clone_paths = ["src/quardprobe/clone_one.py", "src/quardprobe/clone_two.py"]
-        for path in clone_paths:
-            (fixture / path).write_text(clone_text, encoding="utf-8")
-        write_json(fixture / "jscpd-config.json", {})
-        version = probe([tool_binary("jscpd"), "--version"], fixture, "jscpd-version", log_root)
-        required = read_json(tool_dir() / "tools.json")["dependencies"]["jscpd"]
-        if version["exit_code"] != 0 or version["stdout"].strip() != f"jscpd {required}":
-            raise QuardError("JSCPD_VERSION_MISMATCH", "jscpd executable version does not match its installed package.")
-        clone_json = fixture / "jscpd-report.json"
-        command = [tool_binary("jscpd"), "--config", str(fixture / "jscpd-config.json"),
-                   "--no-gitignore", "--absolute", "--kind", "exact", "--mode", "strict",
-                   "--min-lines", "5", "--min-tokens", "1", "--fail-on-empty",
-                   "--reporters", "json", "--output", str(fixture), "--exit-code", "1",
-                   *clone_paths]
-        result = probe(command, fixture, "jscpd-smoke", log_root)
-        normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
-        if (normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2
-                or {d["rule"] for d in normalized["diagnostics"]} != {"EXACT_CLONE"}):
-            raise QuardError("JSCPD_SMOKE_FAILED", "jscpd did not detect both exact-clone fragments. See install-probes.")
-        (fixture / clone_paths[1]).write_text(clone_text.replace("value", "number")
-                                              .replace("first", "initial")
-                                              .replace("second", "next_value")
-                                              .replace("third", "intermediate")
-                                              .replace("fourth", "final_value"), encoding="utf-8")
-        command[command.index("--kind") + 1] = "renamed"
-        command[command.index("--mode"):command.index("--mode")] = [
-            "--ignore-identifiers", "--ignore-literals"]
-        result = probe(command, fixture, "jscpd-renamed-smoke", log_root)
-        normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
-        if (normalized["status"] != "violations" or len(normalized["diagnostics"]) != 2
-                or {d["rule"] for d in normalized["diagnostics"]} != {"RENAMED_CLONE"}):
-            raise QuardError("JSCPD_SMOKE_FAILED", "jscpd did not detect both renamed-clone fragments. See install-probes.")
-        first_part = ("def calculate(value):\n    alpha = value + 17\n"
-                      "    beta = alpha * 3\n    gamma = beta - 4\n    delta = gamma / 2\n")
-        last_part = ("    left = value + 71\n    right = left * 8\n"
-                     "    total = right - 6\n    adjusted = total / 9\n    return adjusted\n")
-        (fixture / clone_paths[0]).write_text(first_part + "    extra = 1\n" + last_part,
-                                              encoding="utf-8")
-        (fixture / clone_paths[1]).write_text(first_part + "    extra = 2\n" + last_part,
-                                              encoding="utf-8")
-        command[command.index("--kind") + 1] = "similar"
-        command[command.index("--min-lines") + 1] = "3"
-        command[command.index("--ignore-identifiers"):command.index("--mode")] = [
-            "--max-gap-lines", "2"]
-        result = probe(command, fixture, "jscpd-similar-smoke", log_root)
-        normalized = normalize("jscpd", result, fixture, clone_json, clone_paths)
-        if (normalized["status"] != "violations" or not normalized["diagnostics"]
-                or {d["rule"] for d in normalized["diagnostics"]} != {"SIMILAR_CLONE"}
-                or any(d["native_details"].get("method") != "gap" or not
-                       0 < d["native_details"].get("similarity", 0) < 1
-                       for d in normalized["diagnostics"])):
-            raise QuardError("JSCPD_SMOKE_FAILED", "jscpd did not detect a native gap clone. See install-probes.")
         modules = [{"path": path, "depends_on": []} for path in ("quardprobe", "quardprobe.first", "quardprobe.second")]
         tach = {"source_roots": ["src"], "root_module": "forbid", "exact": True,
                 "respect_gitignore": False, "ignore_type_checking_imports": False, "modules": modules}
@@ -197,9 +143,7 @@ class Probe:
     results = {("pylint_extension_load" if generated(root) else "pylint_plugin_load"): "passed",
             "pylint_config_and_fixture": "passed",
             "pyright_type_error": "detected", "pydoclint_signature_error": "detected",
-            "tach_undeclared_dependency": "detected", "tach_external_command": "passed",
-            "jscpd_exact_clone": "detected", "jscpd_renamed_clone": "detected",
-            "jscpd_similar_clone": "detected"}
+             "tach_undeclared_dependency": "detected", "tach_external_command": "passed"}
     if any(read_json(tool_dir() / "tools.json").get(key) for key in
            ("native_source", "native_wheel")):
         native = probe([sys.executable, str(tool_dir() / "rust/quard-clones/smoke.py")],

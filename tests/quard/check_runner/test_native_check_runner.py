@@ -43,12 +43,40 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.runner: CheckRunner = NativeCheckRunner()
 
     def run_report(self, fake: Callable[[list[str], Path, int], dict[str, Any]],
-                   selection: str | None = None, serial: bool = False) -> dict[str, Any]:
+                    selection: str | None = None, serial: bool = False) -> dict[str, Any]:
         def versions(_root: Path) -> tuple[dict[str, str], list[str]]:
             return {}, []
 
-        return self.runner.run(self.root, lcom_files=selection, serial=serial, timeout=30,
-                               capture_fn=fake, versions_fn=versions)
+        with patch("quard.check_runner.native_check_runner.require_source_pin"), patch(
+                "quard.check_runner.runner_utils.clone_engine_enabled", return_value=False):
+            return self.runner.run(self.root, lcom_files=selection, serial=serial, timeout=30,
+                                   capture_fn=fake, versions_fn=versions)
+
+    def test_unpinned_consumer_fails_with_migration_and_three_explicit_errors(self):
+        fake, seen = fake_tools()
+        report = self.runner.run(self.root, capture_fn=fake)
+        self.assertEqual(report["exit_code"], 2)
+        self.assertIn("CLONE_SOURCE_PIN_REQUIRED", {d["rule"] for d in report["diagnostics"]})
+        self.assertTrue(any("docs/clone-cli-migration.md" in d["message"]
+                            for d in report["diagnostics"]))
+        self.assertEqual({job["name"]: (job["status"], job["exit_code"])
+                          for job in report["tools"] if job["name"] in
+                          {"jscpd", "jscpd-renamed", "jscpd-similar"}},
+                         {name: ("error", None) for name in
+                          ("jscpd", "jscpd-renamed", "jscpd-similar")})
+        self.assertFalse(any("jscpd" in name for name in seen))
+
+    def test_incomplete_source_pin_does_not_enable_clone_jobs(self):
+        project = self.root / "pyproject.toml"
+        project.write_text(project.read_text(encoding="utf-8") +
+                           '\n[tool.uv.sources]\nquard-clones = {}\n', encoding="utf-8")
+        fake, _ = fake_tools()
+        report = self.runner.run(self.root, capture_fn=fake)
+        self.assertEqual(report["exit_code"], 2)
+        self.assertIn("CLONE_SOURCE_PIN_REQUIRED", {d["rule"] for d in report["diagnostics"]})
+        self.assertEqual({job["name"] for job in report["tools"] if
+                          job["error"] == "CLONE_SOURCE_PIN_REQUIRED"},
+                         {"jscpd", "jscpd-renamed", "jscpd-similar"})
 
     def test_full_run_archives_reports_and_each_job(self):
         fake, seen = fake_tools()
@@ -721,7 +749,9 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertEqual((failed["status"], failed["error"]), ("error", "JSCPD_EXECUTION_ERROR"))
 
     def test_jscpd_version_audit_requires_pin(self) -> None:
-        versions, errors = installed_versions(self.root)
+        with patch("quard.check_runner.runner_utils.clone_engine_enabled", return_value=False), patch(
+                "quard.check_runner.runner_utils.require_source_pin"):
+            versions, errors = installed_versions(self.root)
         self.assertEqual(versions["jscpd"], "5.4.0")
         self.assertFalse(errors)
         actual_version = metadata.version
@@ -730,7 +760,9 @@ class TestNativeCheckRunner(unittest.TestCase):
             return "0.0.0" if name == "jscpd" else actual_version(name)
 
         with patch("quard.check_runner.runner_utils.metadata.version",
-                   side_effect=wrong_version):
+                   side_effect=wrong_version), patch(
+                       "quard.check_runner.runner_utils.clone_engine_enabled", return_value=False), patch(
+                       "quard.check_runner.runner_utils.require_source_pin"):
             _, errors = installed_versions(self.root)
         self.assertEqual([(item["rule"], item["is_infrastructure_error"]) for item in errors],
                          [("TOOL_VERSION_MISMATCH", True)])

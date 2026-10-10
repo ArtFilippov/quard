@@ -38,7 +38,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         root = self.configured_project()
         before = managed_bytes(root)
         commands: list[list[str]] = []
-        specs = entry.dependency_specs(QUARD) + ["quard-clones==0.1.0"]
+        specs = entry.dependency_specs(QUARD)
 
         def fail_sync(argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
             commands.append(argv)
@@ -58,7 +58,7 @@ class TestTransactionalInstallation(unittest.TestCase):
                         ["managed_files_rolled_back"])
         self.assertIn("cargo is required", (root / ".quard/logs/install.log").read_text())
 
-    def test_real_native_installer_smoke_probes(self):
+    def test_real_non_clone_installer_smoke_probes(self):
         root = self.configured_project()
         self.disable_native_checks(root)
         (root / "pyproject.toml").write_bytes((QUARD / "pyproject.toml").read_bytes())
@@ -73,9 +73,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(result["pylint_config_and_fixture"], "passed")
         self.assertEqual(result["pyright_type_error"], "detected")
         self.assertEqual(result["pydoclint_signature_error"], "detected")
-        self.assertEqual(result["jscpd_exact_clone"], "detected")
-        self.assertEqual(result["jscpd_renamed_clone"], "detected")
-        self.assertEqual(result["jscpd_similar_clone"], "detected")
+        self.assertNotIn("jscpd_exact_clone", result)
         self.assertEqual(result["tach_undeclared_dependency"], "detected")
         self.assertEqual(tool_binary("pydoclint"),
                          str(Path(sys.executable).parent / "pydoclint"))
@@ -153,7 +151,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         result = self.installation().install(root, QUARD, dry_run=True, progress=False)
         self.assertEqual(result["status"], "planned")
         self.assertIn("pyright[nodejs]==1.1.414", result["dependencies"])
-        self.assertIn("jscpd==5.4.0", result["dependencies"])
+        self.assertNotIn("jscpd==5.4.0", result["dependencies"])
         self.assertTrue(result["clone_source"]["git"].startswith(("ssh://", "https://")))
         self.assertEqual(managed_bytes(root), before)
 
@@ -342,7 +340,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(len(commands), 3)
         self.assertIn("pyright[nodejs]==1.1.414", commands[0])
         self.assertIn("pydoclint==0.9.1", commands[0])
-        self.assertIn("jscpd==5.4.0", commands[0])
+        self.assertNotIn("jscpd==5.4.0", commands[0])
         self.assertIn(str(QUARD / "_audit.py"), commands[2])
 
     def test_migrate_legacy_policy_and_multi_package_architecture(self):

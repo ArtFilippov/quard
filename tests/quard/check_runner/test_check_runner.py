@@ -533,6 +533,11 @@ import collections
         self.addCleanup(shutil.rmtree, self.root)
         create_repo(self.root)
 
+    def setUp(self) -> None:
+        pin_guard = patch("quard.check_runner.native_check_runner.require_source_pin")
+        pin_guard.start()
+        self.addCleanup(pin_guard.stop)
+
     def set_switch(self, key: str, enabled: bool) -> None:
         path = self.root / ".quard/config.toml"
         text = path.read_text(encoding="utf-8")
@@ -545,8 +550,10 @@ import collections
         def versions(_root: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
             return {}, []
 
-        return NativeCheckRunner().run(self.root, lcom_files=selection, capture_fn=fake,
-                                       versions_fn=versions)
+        with patch("quard.check_runner.native_check_runner.require_source_pin"), patch(
+                "quard.check_runner.runner_utils.clone_engine_enabled", return_value=False):
+            return NativeCheckRunner().run(self.root, lcom_files=selection, capture_fn=fake,
+                                           versions_fn=versions)
 
     def test_each_independent_switch_skips_only_its_job_without_manifest(self):
         for key, name in OPTIONAL_JOBS.items():

@@ -26,9 +26,12 @@ optional check selection or per-change LCOM4 selection.
 An **in-memory source session** owns Quard's discovered original Python source
 text and the pinned native engine's prepared token sources for a check run.
 The session does not execute or import consumer code or create prepared files.
-The opt-in Rust session parses each file once for all three clone jobs, then
-tokenizes eligible units for exact, renamed and gap-similar detection. The
-ordinary CLI continues to scan original files.
+The pinned source-built Rust session parses each file once for all three clone
+jobs, then tokenizes eligible units for exact, renamed and gap-similar detection.
+Older gitlinks retain their own historical CLI behavior. The updated Quard
+requires a source pin in consumers; without it, check fails with exit 2 and
+points to the migration guide. The Quard checkout keeps the CLI in dev for
+benchmarking and its own full check.
 
 ## Prepared view and eligible material
 

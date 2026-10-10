@@ -13,7 +13,8 @@ from typing import Any
 from quard._common import QuardError, atomic_write, capture, read_json, tool_dir, write_json
 from quard._reports import diagnostic
 from quard.check_job.captured_check_job import CapturedCheckJob
-from quard.clone_engine_utils import EXPECTED, enabled as clone_engine_enabled, installed_engine
+from quard.clone_engine_utils import (EXPECTED, enabled as clone_engine_enabled,
+                                      installed_engine, require_source_pin)
 from quard.check_selection_utils import architecture_defaults
 from quard.duplication_utils import read_duplication_min_lines
 
@@ -37,6 +38,10 @@ def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str
     expected = read_json(tool_dir() / "tools.json")["dependencies"]
     versions: dict[str, str | None] = {}
     problems: list[dict[str, Any]] = []
+    try:
+        require_source_pin(root)
+    except QuardError as exc:
+        problems.append(diagnostic("system", exc.code, str(exc), is_infrastructure_error=True))
     for name, required in expected.items():
         try:
             actual = metadata.version(name)
@@ -47,6 +52,16 @@ def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str
             message = (f"{name}: expected {required}, found {actual or 'not installed'}. "
                        "Run the installer or uv sync --locked --group dev.")
             problems.append(diagnostic("system", "TOOL_VERSION_MISMATCH", message,
+                                       is_infrastructure_error=True))
+    if not clone_engine_enabled(root):
+        try:
+            actual = metadata.version("jscpd")
+        except metadata.PackageNotFoundError:
+            actual = None
+        versions["jscpd"] = actual
+        if actual != "5.4.0":
+            problems.append(diagnostic("system", "TOOL_VERSION_MISMATCH",
+                                       f"jscpd: expected 5.4.0, found {actual or 'not installed'}.",
                                        is_infrastructure_error=True))
     if clone_engine_enabled(root):
         try:

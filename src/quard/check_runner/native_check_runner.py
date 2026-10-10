@@ -24,8 +24,9 @@ from quard.check_runner.check_runner import CheckRunner
 from quard.check_selection_utils import (CHECK_DEFAULTS, DUPLICATE_JOBS, OPTIONAL_JOBS,
                                         TACH_JOBS, validate_architecture_checks)
 from quard.check_runner.runner_utils import (binary, execute_job, installed_versions,
-                                              inactive_job, make_jobs, select_lcom_files,
-                                              capture_clone_batch)
+                                               inactive_job, make_jobs, select_lcom_files,
+                                               capture_clone_batch)
+from quard.clone_engine_utils import require_source_pin
 
 __all__ = ["NativeCheckRunner", "binary", "execute_job", "installed_versions",
            "make_jobs", "select_lcom_files"]
@@ -112,8 +113,20 @@ class NativeCheckRunner(CheckRunner):
             if not checks["duplicate_detection"]:
                 for name in DUPLICATE_JOBS:
                     results.append({"name": name, "tool": "jscpd", "status": "skipped",
-                                    "exit_code": None, "duration_seconds": 0,
-                                    "error": None, "raw_output": {}})
+                                     "exit_code": None, "duration_seconds": 0,
+                                     "error": None, "raw_output": {}})
+            try:
+                require_source_pin(root)
+            except QuardError as exc:
+                if not any(item["rule"] == exc.code for item in diagnostics):
+                    diagnostics.append(diagnostic("system", exc.code, str(exc),
+                                                  is_infrastructure_error=True))
+                if checks["duplicate_detection"]:
+                    for name in DUPLICATE_JOBS:
+                        results.append({"name": name, "tool": "jscpd", "status": "error",
+                                        "exit_code": None, "duration_seconds": 0,
+                                        "error": exc.code, "raw_output": {}})
+                    checks["duplicate_detection"] = False
             if not checks["tach"]:
                 for name in TACH_JOBS:
                     results.append(inactive_job(name, "skipped"))

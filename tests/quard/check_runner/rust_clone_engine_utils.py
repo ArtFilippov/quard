@@ -697,6 +697,12 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     consumer = root / "isolated-consumer"
     consumer.mkdir()
     adoption_consumer(consumer)
+    # This manually installed wheel fixture records source selection without uv
+    # resolution; the separate source-installation fixture verifies the real pin.
+    project = consumer / "pyproject.toml"
+    project.write_text(project.read_text(encoding="utf-8") +
+                       '\n[tool.uv.sources]\nquard-clones = { git = "https://example.org/quard.git", rev = "' +
+                       '1' * 40 + '", subdirectory = "rust/quard-clones" }\n', encoding="utf-8")
     python = consumer / ".venv/bin/python"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(consumer / ".venv")],
                    check=True, capture_output=True, text=True)

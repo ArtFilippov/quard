@@ -17,6 +17,7 @@ sys.path.insert(0, str(QUARD / "tests"))
 
 from adoption_fixture_utils import temporary_consumer
 from offline_fixtures import create_repo
+from legacy_clone_fixture_utils import historical_cli
 from quard._common import capture, load_toml, read_json, write_json
 
 discover_plugins = import_module("quard.audit_utils").discover_plugins
@@ -26,6 +27,9 @@ NativeCheckRunner = native_check_runner.NativeCheckRunner
 
 
 class TestAdoptionConsumer(unittest.TestCase):
+    def setUp(self) -> None:
+        historical_cli(self)
+
     def consumer(self) -> AbstractContextManager[Path]:
         return temporary_consumer()
 

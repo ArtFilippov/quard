@@ -22,15 +22,17 @@ violations baseline.
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
-* **jscpd 5.4.0 + quard-clones 0.1.0**: independent native Type 1 (`exact`), Type 2 (`renamed`) and
-  gap-merged Type 3 (`similar`) Python clone jobs in strict mode, blocking each
+* **quard-clones 0.1.0** (jscpd 5.4.0 CLI in Quard's dev group): independent
+  native Type 1 (`exact`), Type 2 (`renamed`) and gap-merged Type 3 (`similar`)
+  Python clone jobs in strict mode, blocking each
   fragment. Keeping the exact pass separate preserves Type 1 findings that
   native normalization can miss on a combined scan. Type 2 normalizes identifiers
   and string/numeric literals.
   `[duplication] min_lines` in `.quard/config.toml` sets a shared positive integer
   minimum (default 3, also for older configs without the section or key). It is
     passed to every job and used in each job's expected-source count. The historical
-    CLI scans physical `.py` lines; the installed Rust path counts eligible lines
+     dev-only CLI scans physical `.py` lines; the installed Rust path counts
+    eligible lines
    within a prepared module/class/function unit. Ordinary definition headers,
    decorators, annotation-only fields and recognized type aliases are excluded;
    actual assignments, control flow and executable bodies remain eligible.

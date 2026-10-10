@@ -37,9 +37,11 @@ smoke tests. It does not copy or modify Quard sources. Inspect a plan with:
 bash quard/install.sh --project . --dry-run --json
 ```
 
-Reinstall with the same command after updating the gitlink. Project limits, scope,
-optional checks, existing reviewed architecture, and native settings (including
-`ignored-parents` and `stubPath`), uv indexes, sources and metadata are retained. Missing native
+Reinstall with the same command after updating the gitlink. For an existing CLI
+installation, follow the [CLI → pinned Git source migration guide](docs/clone-cli-migration.md).
+Project limits, scope, optional checks, existing reviewed architecture, and
+native settings (including `ignored-parents` and `stubPath`), uv indexes,
+sources and metadata are retained. Missing native
 sections are initialized; shared scope, numeric limits, plugin discovery and test
 profiles are regenerated.
 `pyrightconfig.json` takes precedence over `[tool.pyright]` on installation.
@@ -203,8 +205,9 @@ manifest or worker execution. Set `constructor_purity = true` to opt in to that 
 Disabling duplicate detection skips all three clone jobs, their manifests and their
 native JSON, without changing Pylint's required duplicate-code rule. Pyright and
 pydoclint likewise skip only their own jobs; their native configuration remains
-consumer-owned. All pinned tools are still installed and version-checked on every
-check, and installation runs all native smoke probes regardless of these switches.
+consumer-owned. All consumer-pinned tools are still installed and version-checked
+on every check; installation runs source-built clone and other native smoke
+probes regardless of these switches. The CLI remains dev-only in this checkout.
 If `lcom4 = false`, passing `--lcom_files` (even `""`) is a configuration error
 (exit 2); when enabled, full, selected and empty-string coverage work as below.
 Installation migrates existing `.quard/readability.toml`, `.quard/scope.toml` and
@@ -309,10 +312,12 @@ dependencies, including linked jscpd 5.4.0 crates `cpd-core 0.1.20`,
 `cpd-finder 0.1.20`, `cpd-tokenizer 0.1.19` and `cpd-reporter 0.1.21`.
 Install and check validate the distribution, wheel ABI and linked crate versions;
 install also runs packaged exact/renamed/gap-similar and clean probes with logs
-under `.quard/logs/install-probes/`. The jscpd CLI remains pinned and version
-probed independently, as does Pylint's required duplication analysis.
-Projects installed before this source rollout retain their CLI jobs until they
-reinstall to acquire the source pin.
+under `.quard/logs/install-probes/`. Pylint's required duplication analysis
+remains independent. The jscpd CLI is retained in Quard's dev group for the
+historical benchmark and this checkout's full check, not installed or probed
+in consumers. Older Quard gitlinks retain their own CLI behavior; after
+upgrading Quard, reinstall to acquire the pinned Git source or check exits 2
+with a migration link and three explicit job errors.
 The reproducible same-scope CLI/Rust performance comparison and seven-run
 measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
 The isolated source fixture runs uv install, reinstall, locked sync and full

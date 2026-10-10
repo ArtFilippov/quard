@@ -159,6 +159,11 @@ def prepare_project(root: Path, source: dict[str, str] | None = None) -> None:
     if "requires-python" not in project:
         project["requires-python"] = ">=3.12"
     doc.setdefault("dependency-groups", {}).setdefault("dev", [])
+    # Retire the historical CLI pin when migrating an existing Quard install.
+    dev = doc["dependency-groups"]["dev"]
+    for spec in list(dev):
+        if str(spec).lower() == "jscpd==5.4.0":
+            dev.remove(spec)
     groups = doc.setdefault("tool", {}).setdefault("uv", {}).setdefault("dependency-groups", {})
     group = groups.setdefault("dev", {})
     current = group.get("requires-python", "")

@@ -18,6 +18,7 @@ from quard._common import capture
 from quard._policy import discover_files, read_scope
 from quard.check import execute_job, make_jobs, run_checks
 from offline_fixtures import create_repo, fake_tools, native_result
+from legacy_clone_fixture_utils import historical_cli
 
 
 class TestConstructorChecker(unittest.TestCase):
@@ -31,6 +32,7 @@ class TestConstructorChecker(unittest.TestCase):
 
     @override
     def setUp(self):
+        historical_cli(self)
         (self.root / "src").mkdir()
         (self.root / "tests").mkdir()
         (self.root / ".quard").mkdir()

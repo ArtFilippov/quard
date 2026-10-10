@@ -20,6 +20,7 @@ from quard._policy import discover_files, read_scope
 from quard.check import execute_job, make_jobs, run_checks
 from quard.outer_classes.parsed_outer_classes import ParsedOuterClasses
 from offline_fixtures import create_repo, fake_tools, native_result
+from legacy_clone_fixture_utils import historical_cli
 
 
 class TestParsedOuterClasses(unittest.TestCase):
@@ -33,6 +34,7 @@ class TestParsedOuterClasses(unittest.TestCase):
 
     @override
     def setUp(self):
+        historical_cli(self)
         create_repo(self.root)
         self.run_dir.mkdir(parents=True)
 

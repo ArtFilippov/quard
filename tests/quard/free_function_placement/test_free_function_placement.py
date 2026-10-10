@@ -26,6 +26,7 @@ from quard.free_function_placement_utils import analyze as placement
 from quard.marker_analysis import marker_index
 from quard.method_analysis import declarations
 from offline_fixtures import create_repo, fake_tools, native_result
+from legacy_clone_fixture_utils import historical_cli
 
 
 class TestFreeFunctionPlacement(unittest.TestCase):
@@ -164,6 +165,7 @@ class TestFreeFunctionPlacement(unittest.TestCase):
 
     @override
     def setUp(self) -> None:
+        historical_cli(self)
         self.temp: TemporaryDirectory[str] = TemporaryDirectory(prefix="quard-free-functions-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

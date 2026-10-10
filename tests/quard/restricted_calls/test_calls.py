@@ -17,6 +17,7 @@ sys.path.insert(0, str(QUARD / "tests"))
 from quard._encapsulated_only_worker import analyze
 from quard._policy import discover_files, read_scope
 from quard.check import execute_job, make_jobs
+from legacy_clone_fixture_utils import historical_cli
 
 
 class TestCalls(unittest.TestCase):
@@ -30,6 +31,7 @@ class TestCalls(unittest.TestCase):
 
     @override
     def setUp(self):
+        historical_cli(self)
         (self.root / "src").mkdir()
         (self.root / ".quard").mkdir()
         (self.root / ".quard/config.toml").write_text(

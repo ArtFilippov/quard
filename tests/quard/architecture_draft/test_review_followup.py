@@ -13,6 +13,7 @@ from quard._common import capture
 
 
 class TestReviewFollowup(unittest.TestCase):
+    setUp = adoption.TestAdoptionConsumer.setUp
     consumer = adoption.TestAdoptionConsumer.consumer
     check = adoption.TestAdoptionConsumer.check
     finding = adoption.TestAdoptionConsumer.finding

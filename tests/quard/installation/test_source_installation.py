@@ -49,6 +49,7 @@ class TestSourceInstallation(unittest.TestCase):
             doc = tomlkit.parse(project.read_text(encoding="utf-8"))
             doc["project"]["requires-python"] = ">=3.12,<3.13"
             doc["project"]["optional-dependencies"] = {"keep": ["six==1.17.0"]}
+            doc.setdefault("dependency-groups", {}).setdefault("dev", []).append("jscpd==5.4.0")
             uv = doc.setdefault("tool", {}).setdefault("uv", {})
             uv["index"] = [{"name": "private", "url": "https://example.org/simple",
                             "explicit": True}]
@@ -79,6 +80,8 @@ class TestSourceInstallation(unittest.TestCase):
             self.assertEqual(first["smoke_tests"]["clone_wheel_similar"], "detected")
             self.assertEqual(first["versions"]["cpd-core"], "0.1.20")
             lock = (consumer / "uv.lock").read_text(encoding="utf-8")
+            self.assertNotIn("jscpd==5.4.0", project.read_text(encoding="utf-8"))
+            self.assertNotIn('name = "jscpd"', lock)
             self.assertIn(revision, lock)
             package = next(package for package in tomllib.loads(lock)["package"]
                            if package["name"] == "quard-clones")
@@ -94,7 +97,17 @@ class TestSourceInstallation(unittest.TestCase):
                                     cwd=consumer, env=env, capture_output=True, text=True,
                                     timeout=1200, check=False)
             self.assertEqual(synced.returncode, 0, synced.stderr)
+            self.assertEqual(invoke(tool / "apply.py")["exit_code"], 0)
             self.assertEqual(invoke(tool / "check.py")["exit_code"], 0)
+            full = json.loads((consumer / ".quard/reports/latest.json").read_text(encoding="utf-8"))
+            self.assertEqual(full["summary"]["infrastructure_errors"], 0)
+            self.assertEqual({job["name"]: job["status"] for job in full["tools"]
+                              if job["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}},
+                             {name: "skipped" for name in
+                              ("jscpd", "jscpd-renamed", "jscpd-similar")})
+            for job in full["tools"]:
+                if job["name"] in {"jscpd", "jscpd-renamed", "jscpd-similar"}:
+                    self.assertIn("native_json", job["raw_output"])
             self.assertEqual(managed_bytes(tool), original)
             self.assertEqual(run_command(["git", "status", "--porcelain", "--ignored"], tool), "")
             run_command(["git", "init", "-b", "main"], consumer)

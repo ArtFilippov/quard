@@ -28,6 +28,8 @@ QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
+from legacy_clone_fixture_utils import historical_cli
+
 if not TYPE_CHECKING:
     common = import_module("quard._common")
     QuardError = common.QuardError
@@ -48,6 +50,9 @@ if not TYPE_CHECKING:
 
 
 class TestArchitectureDraft(unittest.TestCase):
+    def setUp(self) -> None:
+        historical_cli(self)
+
     def test_generated_value_contracts_and_independent_forbidden_exposures(self):
         with TemporaryDirectory(prefix="quard-factory-values-") as directory:
             root = Path(directory)

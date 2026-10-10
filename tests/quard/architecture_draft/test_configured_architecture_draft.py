@@ -20,6 +20,7 @@ sys.path.insert(0, str(QUARD / "tests"))
 from quard._common import QuardError, capture, load_toml, read_json, write_json
 from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
+from legacy_clone_fixture_utils import historical_cli
 
 if TYPE_CHECKING:
     from quard.architecture_draft.generated_architecture_utils import (
@@ -48,6 +49,9 @@ else:
 
 
 class TestConfiguredArchitectureDraft(unittest.TestCase):
+    def setUp(self) -> None:
+        historical_cli(self)
+
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
