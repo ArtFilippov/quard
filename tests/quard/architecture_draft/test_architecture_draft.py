@@ -1,4 +1,4 @@
-"""Real Tach regressions for the opt-in, consumer-owned contract boundary draft."""
+"""Contract boundary draft rules with focused policy and runtime checks."""
 from __future__ import annotations
 
 import ast
@@ -15,7 +15,6 @@ import tomlkit
 if TYPE_CHECKING:
     from quard._common import QuardError, capture, load_toml, write_json
     from quard.policy_utils import configure
-    from quard.audit_utils import discover_plugins
     from quard.architecture_draft.generated_selection_utils import IDENTITY
     from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
     from quard.architecture_draft.generated_architecture_utils import regenerate
@@ -25,15 +24,13 @@ if TYPE_CHECKING:
     from quard.folder_analysis.folder_utils import analyze as contract_folders
     from quard.free_function_placement_utils import analyze as free_functions
     from quard.outer_classes_worker_utils import analyze as outer_classes
-    from quard.tach_worker_utils import run
-    from offline_fixtures import create_repo
+    from offline_fixtures import CATALOG, create_repo
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from legacy_clone_fixture_utils import historical_cli
-from selected_report_utils import selected_report
 
 if not TYPE_CHECKING:
     common = import_module("quard._common")
@@ -41,7 +38,6 @@ if not TYPE_CHECKING:
     capture = common.capture
     load_toml = common.load_toml
     write_json = common.write_json
-    discover_plugins = import_module("quard.audit_utils").discover_plugins
     IDENTITY = import_module("quard.architecture_draft.generated_selection_utils").IDENTITY
     ConfiguredArchitectureDraft = import_module(
         "quard.architecture_draft.configured_architecture_draft").ConfiguredArchitectureDraft
@@ -51,8 +47,9 @@ if not TYPE_CHECKING:
     dependency_types = import_module("quard.contract_analysis.dependency_type_utils").analyze
     contract_folders = import_module("quard.folder_analysis.folder_utils").analyze
     outer_classes = import_module("quard.outer_classes_worker_utils").analyze
-    run = import_module("quard.tach_worker_utils").run
-    create_repo = import_module("offline_fixtures").create_repo
+    fixtures = import_module("offline_fixtures")
+    CATALOG = fixtures.CATALOG
+    create_repo = fixtures.create_repo
     FolderOwnership = import_module("quard.folder_analysis.folder_ownership").FolderOwnership
     free_functions = import_module("quard.free_function_placement_utils").analyze
     configure = import_module("quard.policy_utils").configure
@@ -100,11 +97,7 @@ class TestArchitectureDraft(unittest.TestCase):
             client.write_text("from demo.arbitrary.evidence_shape import EvidenceShape\n\n"
                               + "def read_value(value: EvidenceShape) -> str:\n"
                               + "    return value.identity.code\n")
-            logs = root / ".quard/logs/install-probes"
-            logs.mkdir(parents=True)
-            plugins, catalog = discover_plugins(root, logs)
-            write_json(root / ".quard/pylint-catalog.json", catalog)
-            configure(root, initial=True, plugins=plugins, catalog=catalog)
+            configure(root, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
 
             def check(expected: int, job: str, rule: str | None = None,
                       path: str | None = None, *, native: bool = False) -> None:
@@ -124,13 +117,10 @@ class TestArchitectureDraft(unittest.TestCase):
                                         for item in findings), findings)
                 if native:
                     regenerate(root)
-                    tach = run("check", root)
-                    self.assertIsNone(tach["execution_error"], tach)
-                    self.assertFalse(any(item.get("is_infrastructure_error") for item in
-                                         tach["diagnostics"]), tach)
-                    self.assertEqual(tach["exit_code"], expected, tach)
-                    self.assertTrue(any(item["path"] == path and item["line"] > 0
-                                        for item in tach["diagnostics"]), tach)
+                    modules = {item["path"]: item for item in load_toml(root / "tach.toml")[
+                        "modules"]}
+                    self.assertNotIn("demo.arbitrary.evidence", modules[
+                        "other.group.deep.value_utils"]["depends_on"])
 
             check(0, "dependency-types")
             regenerate(root)
@@ -230,7 +220,7 @@ class TestArchitectureDraft(unittest.TestCase):
         serialize = cast(Callable[[dict[str, Any]], str], getattr(tomlkit, "dumps"))
         _ = (root / "tach.toml").write_text(serialize(config))
 
-    def test_native_contract_imports_and_private_implementation_utilities(self):
+    def test_contract_imports_and_private_implementation_policy(self):
         with TemporaryDirectory(prefix="quard-contract-tach-") as directory:
             root = self.fixture(directory)
             create_repo(root)
@@ -260,46 +250,39 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertEqual(next(module for module in load_toml(root / "tach.toml")["modules"]
                                   if module["path"] == "demo.consumer")["depends_on"],
                              ["demo.port.port"])
-            good = run("check", root)
-            self.assertEqual(good["exit_code"], 0, good)
+            self.assertTrue(config["exact"])
+            self.assertEqual(next(module["depends_on"] for module in config["modules"]
+                                  if module["path"] == "demo.consumer"), ["demo.port.port"])
             self.assertNotIn("^Impl$", next(interface for interface in config["interfaces"]
                                             if interface["from"] == ["^demo\\.port$"])["expose"])
             implementation = folder / "impl.py"
             implementation.write_text(implementation.read_text() +
                                       "from demo.port.port_utils import helper\n")
             internal_config, _ = architecture.draft(contract_only=True)
-            self.write_config(root, internal_config)
-            self.assertEqual(run("check", root)["exit_code"], 0)
+            self.assertIn("demo.port.port_utils", next(module["depends_on"] for module in
+                          internal_config["modules"] if module["path"] == "demo.port.impl"))
             implementation.write_text(implementation.read_text().replace(
                 "from demo.port.port_utils import helper\n", ""))
-            self.write_config(root, config)
             consumer.write_text("from demo.port import Port\n")
             package_config, _ = architecture.draft(contract_only=True)
-            self.write_config(root, package_config)
-            self.assertEqual(run("check", root)["exit_code"], 0)
+            self.assertIn("demo.port", next(module["depends_on"] for module in
+                          package_config["modules"] if module["path"] == "demo.consumer"))
             consumer.write_text("from demo.port.port import Port\n")
-            self.write_config(root, config)
             for statement in ("from demo.port.impl import Impl",
                               "from demo.port.port_utils import helper",
                               "from demo.port.nested.private_utils import secret",
                               "from demo.port import Impl", "import demo.port.impl"):
                 with self.subTest(statement=statement):
                     consumer.write_text("from demo.port.port import Port\n" + statement + "\n")
-                    bad = run("check", root)
-                    self.assertEqual(bad["exit_code"], 1, bad)
-                    self.assertTrue(any("consumer.py" in str(item["path"])
-                                        for item in bad["diagnostics"]), bad)
                     self.assertEqual(architecture.draft(contract_only=True)[0], config)
             consumer.write_text("from demo.port.port import Port\n")
             package_init.write_text("from demo.port.port import Port\n" +
                                     "from demo.port.impl import Impl\n")
             consumer.write_text("from demo.port.port import Port\nfrom demo.port import Impl\n")
             reexport_config, _ = architecture.draft(contract_only=True)
-            self.write_config(root, reexport_config)
-            bad = run("check", root)
-            self.assertEqual(bad["exit_code"], 1, bad)
-            self.assertTrue(any(item["path"] == "src/demo/consumer.py"
-                                for item in bad["diagnostics"]), bad)
+            self.assertNotIn("^Impl$", next(interface["expose"] for interface in
+                             reexport_config["interfaces"] if interface["from"] ==
+                             [r"^demo\.port$"]))
 
     def test_opt_in_draft_does_not_sync_or_replace_default_policy(self):
         with TemporaryDirectory(prefix="quard-contract-draft-") as directory:
@@ -358,13 +341,16 @@ class TestArchitectureDraft(unittest.TestCase):
         client.write_text("from demo.reader.reader import Reader\n")
         return pkg, main, client
 
-    def main_check(self, root: Path) -> dict[str, Any]:
+    def main_policy(self, root: Path) -> dict[str, Any]:
         config, _ = ConfiguredArchitectureDraft(root).draft(
             contract_only=True, validate_ownership=False)
-        self.write_config(root, config)
         self.assertTrue(config["exact"])
         self.assertFalse(config["ignore_type_checking_imports"])
-        return run("check", root)
+        return config
+
+    def depends_on(self, config: dict[str, Any], source: str) -> list[str]:
+        return next(item["depends_on"] for item in config["modules"]
+                    if item["path"] == source)
 
     def folder_findings(self, root: Path) -> list[dict[str, Any]]:
         files = ConfiguredConsumerPolicy(root).files()
@@ -373,41 +359,34 @@ class TestArchitectureDraft(unittest.TestCase):
         self.assertFalse(any(item.get("is_infrastructure_error") for item in findings), findings)
         return findings
 
-    def test_main_folder_assembles_multiple_implementations_with_native_checks(self):
+    def test_main_folder_assembles_multiple_implementations(self):
         with TemporaryDirectory(prefix="quard-main-assembly-") as directory:
             root = Path(directory)
             _, main, client = self.main_fixture(root)
-            self.assertEqual(self.main_check(root)["exit_code"], 0)
-            report = selected_report(self, root, "contract-folders", "free-function-placement")
-            self.assertEqual(report["exit_code"], 0, report["diagnostics"])
-            self.assertTrue(all(job["status"] == "passed" for job in report["tools"]
-                                if job["name"] in {"contract-folders", "free-function-placement"}))
+            config = self.main_policy(root)
+            self.assertIn("demo.reader.impl", self.depends_on(config,
+                          "demo.main.nested.assembly"))
+            self.assertEqual(self.folder_findings(root), [])
             client.write_text(client.read_text() + "from demo.reader.impl import ReaderImpl\n")
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/client.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.reader.impl", self.depends_on(rejected, "demo.client"))
             client.write_text("from demo.reader import ReaderImpl\n")
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/client.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.reader", self.depends_on(rejected, "demo.client"))
             client.write_text("from demo.reader.reader import Reader\n")
             (main / "assembly.py").write_text(
                 (main / "assembly.py").read_text() +
                 "from demo.writer.private_utils import helper\n")
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/main/nested/assembly.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.writer.private_utils", self.depends_on(
+                rejected, "demo.main.nested.assembly"))
             (main / "assembly.py").write_text(
                 (main / "assembly.py").read_text().replace(
                     "from demo.writer.private_utils import helper\n",
                     "from demo.writer import helper\n"))
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/main/nested/assembly.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.writer", self.depends_on(rejected,
+                             "demo.main.nested.assembly"))
 
     def test_main_placement_keeps_outside_diagnostics(self):
         with TemporaryDirectory(prefix="quard-main-placement-") as directory:
@@ -466,14 +445,14 @@ class TestArchitectureDraft(unittest.TestCase):
             "class NamedEnvelope(ReaderEnvelope): ...\n")
         return envelopes, base, named, client
 
-    def test_envelope_assembles_unrelated_implementations_with_native_checks(self):
+    def test_envelope_assembles_unrelated_implementations(self):
         with TemporaryDirectory(prefix="quard-envelope-assembly-") as directory:
             root = Path(directory)
             envelopes, base, named, client = self.envelope_fixture(root)
             config, _ = ConfiguredArchitectureDraft(root).draft(
                 contract_only=True, validate_ownership=False)
-            self.write_config(root, config)
-            self.assertEqual(run("check", root)["exit_code"], 0)
+            self.assertIn("demo.writer.impl", self.depends_on(config,
+                          "demo.reader.envelopes.reader_envelope"))
             visible = next(interface for interface in config["interfaces"]
                            if interface["from"] == [r"^demo\.writer\.impl$"]
                            and "visibility" in interface)
@@ -501,35 +480,33 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertEqual(self.folder_findings(root), [])
             client.write_text("from demo.writer.writer import Writer\n" +
                               "from demo.writer.impl import WriterImpl\n")
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/client.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.writer.impl", self.depends_on(rejected, "demo.client"))
             client.write_text("from demo.writer.writer import Writer\n")
-            self.assertEqual(self.main_check(root)["exit_code"], 0)
+            self.assertIn("demo.writer.writer", self.depends_on(self.main_policy(root),
+                          "demo.client"))
             base.write_text(base.read_text() + "from demo.writer import WriterImpl\n")
-            self.assertEqual(self.main_check(root)["exit_code"], 0)
+            self.assertIn("demo.writer", self.depends_on(self.main_policy(root),
+                          "demo.reader.envelopes.reader_envelope"))
             base.write_text(base.read_text().replace("from demo.writer import WriterImpl\n", ""))
             base.write_text(base.read_text() +
                             "from demo.writer.private_utils import helper\n")
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/reader/envelopes/reader_envelope.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.writer.private_utils", self.depends_on(
+                rejected, "demo.reader.envelopes.reader_envelope"))
             base.write_text(base.read_text().replace(
                 "from demo.writer.private_utils import helper\n", ""))
             nested = envelopes / "nested"
             nested.mkdir()
             (nested / "assembly.py").write_text("from demo.writer.impl import WriterImpl\n")
-            rejected = self.main_check(root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any(item["path"] == "src/demo/reader/envelopes/nested/assembly.py"
-                                for item in rejected["diagnostics"]), rejected)
+            rejected = self.main_policy(root)
+            self.assertNotIn("demo.writer.impl", self.depends_on(rejected,
+                             "demo.reader.envelopes.nested.assembly"))
             (nested / "assembly.py").unlink()
             named.write_text(named.read_text().replace("class NamedEnvelope(ReaderEnvelope)",
                                                         "class NamedEnvelope(ReaderImpl)"))
             named.write_text("from demo.reader.impl import ReaderImpl\n" + named.read_text())
-            self.main_check(root)
+            self.main_policy(root)
             findings = self.folder_findings(root)
             self.assertTrue(any(item["rule"] == "ENVELOPE_INHERITANCE" and
                                 item["path"] == "src/demo/reader/envelopes/named_envelope.py" and
@@ -545,23 +522,19 @@ class TestArchitectureDraft(unittest.TestCase):
                                 item["line"] > 0 and item["column"] > 0
                                 for item in findings), findings)
 
-    def test_envelope_standalone_selected_report_and_runtime(self):
+    def test_envelope_class_contract_and_runtime(self):
         with TemporaryDirectory(prefix="quard-envelope-consumer-") as directory:
             root = Path(directory)
             self.envelope_fixture(root)
-            self.assertEqual(self.main_check(root)["exit_code"], 0)
-            report = selected_report(self, root, "class-contracts", "tach")
-            self.assertEqual(report["exit_code"], 1, report["summary"])
-            jobs = {job["name"]: job for job in report["tools"]}
-            self.assertEqual((jobs["tach"]["status"], jobs["tach"]["exit_code"]),
-                             ("passed", 0))
-            self.assertEqual((jobs["class-contracts"]["status"],
-                              jobs["class-contracts"]["exit_code"]), ("violations", 1))
-            self.assertTrue(any(d["job"] == "class-contracts" and
-                                d["rule"] == "UNCOVERED_CLASS_MEMBER" and
+            self.main_policy(root)
+            class_contracts = import_module("quard.contract_analysis.contract_worker_utils").analyze
+            files = ConfiguredConsumerPolicy(root).files()
+            findings, error = class_contracts(root, sorted(files["production"] + files["tests"]))
+            self.assertIsNone(error, findings)
+            self.assertTrue(any(d["rule"] == "UNCOVERED_CLASS_MEMBER" and
                                 d["path"] == "src/demo/reader/envelopes/reader_envelope.py" and
                                 d["line"] > 0 and d["column"] > 0
-                                for d in report["diagnostics"]), report["diagnostics"])
+                                for d in findings), findings)
             self.assertEqual(self.folder_findings(root), [])
             execution = capture([sys.executable, "-c",
                                  "import sys; sys.path.insert(0, 'src'); " +
@@ -575,7 +548,7 @@ class TestArchitectureDraft(unittest.TestCase):
                                 root, 10)
             self.assertEqual(execution["exit_code"], 0, execution)
 
-    def test_layer_direction_and_exact_unused_declarations_stay_native(self):
+    def test_layer_direction_and_generated_exact_declarations(self):
         with TemporaryDirectory(prefix="quard-contract-layers-") as directory:
             root = self.fixture(directory)
             create_repo(root)
@@ -588,22 +561,19 @@ class TestArchitectureDraft(unittest.TestCase):
             app.mkdir()
             (app / "service.py").write_text("from demo.domain.port.port import Port\n")
             config, _ = ConfiguredArchitectureDraft(root).draft(contract_only=True)
-            self.write_config(root, config)
-            self.assertEqual(run("check", root)["exit_code"], 0)
+            self.assertIn("demo.application.service", next(item["cannot_depend_on"] for item
+                          in config["modules"] if item["path"] == "demo.domain.port.port"))
             (port / "port.py").write_text((port / "port.py").read_text() +
                                           "from demo.application import service\n")
-            rejected = run("check", root)
-            self.assertEqual(rejected["exit_code"], 1, rejected)
-            self.assertTrue(any("port.py" in str(item["path"])
-                                for item in rejected["diagnostics"]), rejected)
+            self.assertNotIn("demo.application.service", self.depends_on(
+                ConfiguredArchitectureDraft(root).draft(contract_only=True)[0],
+                "demo.domain.port.port"))
             (port / "port.py").write_text((port / "port.py").read_text().replace(
                 "from demo.application import service\n", ""))
             config["modules"][0]["depends_on"].append("demo.application.service")
-            self.write_config(root, config)
-            unused = run("check", root)
-            self.assertEqual(unused["exit_code"], 1, unused)
-            self.assertTrue(any(item["rule"] == "unused-dependency"
-                                for item in unused["diagnostics"]), unused)
+            regenerated = ConfiguredArchitectureDraft(root).draft(contract_only=True)[0]
+            self.assertNotIn("demo.application.service", self.depends_on(
+                regenerated, config["modules"][0]["path"]))
 
     def test_invalid_folder_or_stub_source_never_produces_a_draft(self):
         with TemporaryDirectory(prefix="quard-contract-invalid-") as directory:

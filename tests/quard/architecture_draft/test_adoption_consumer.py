@@ -3,35 +3,27 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from importlib import import_module
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 from typing import Any
 import unittest
-from unittest.mock import patch
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from adoption_fixture_utils import temporary_consumer
-from offline_fixtures import create_repo
+from offline_fixtures import CATALOG, create_repo
 from legacy_clone_fixture_utils import historical_cli
 from mutation_fixture_utils import temporary_edits
-from selected_report_utils import selected_report
-from quard._common import capture, load_toml, read_json, write_json
-from quard.architecture_draft.generated_architecture_utils import regenerate
+from quard._common import capture, load_toml
+from quard.architecture_draft.generated_architecture_utils import render
 from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from quard.contract_analysis.dependency_type_utils import analyze as dependency_types
 from quard.folder_analysis.folder_utils import analyze as contract_folders
 from quard.outer_classes_worker_utils import analyze as outer_classes
-from quard.tach_worker_utils import run as native_tach
-
-discover_plugins = import_module("quard.audit_utils").discover_plugins
-configure = import_module("quard.policy_utils").configure
-native_check_runner = import_module("quard.check_runner.native_check_runner")
-NativeCheckRunner = native_check_runner.NativeCheckRunner
+from quard.policy_utils import configure
 
 
 class TestAdoptionConsumer(unittest.TestCase):
@@ -39,43 +31,14 @@ class TestAdoptionConsumer(unittest.TestCase):
         historical_cli(self)
 
     def consumer(self) -> AbstractContextManager[Path]:
-        return temporary_consumer()
-
-    def check(self, root: Path, exit_code: int = 0, *,
-              jobs: tuple[str, ...] | None = None) -> dict[str, Any]:
-        report = (NativeCheckRunner().run(root) if jobs is None else
-                  selected_report(self, root, *jobs))
-        self.assertEqual(read_json(root / ".quard/reports/latest.json"), report)
-        self.assertEqual(report["exit_code"], exit_code, report["diagnostics"])
-        errors = report["summary"]["infrastructure_errors"]
-        if exit_code == 2:
-            self.assertGreater(errors, 0, report["diagnostics"])
-        else:
-            self.assertEqual(errors, 0, report["diagnostics"])
-        return report
-
-    def finding(self, report: dict[str, Any], rule: str, job: str, path: str,
-                *, native: bool = False) -> None:
-        status = {item["name"]: item for item in report["tools"]}[job]
-        self.assertEqual((status["status"], status["exit_code"]), ("violations", 1), status)
-        self.assertTrue(any(item["rule"] == rule and item["job"] == job and
-                            item["path"] == path and item["line"] >= 1 and
-                            (job == "tach-external" or item["column"] >= 1) and
-                            not item["is_infrastructure_error"]
-                            for item in report["diagnostics"]), report["diagnostics"])
-        if native:
-            tach = {item["name"]: item for item in report["tools"]}["tach"]
-            self.assertEqual((tach["status"], tach["exit_code"]), ("violations", 1))
-            self.assertTrue(any(item["job"] == "tach" and item["path"] == path and
-                                item["line"] >= 1 for item in report["diagnostics"]),
-                            report["diagnostics"])
+        return temporary_consumer(probe_plugins=False)
 
     def focused_findings(self, root: Path, cases: list[tuple[str, str, str, bool]]) -> None:
-        """Check each mutation with its real rule and, where required, native Tach.
+        """Check mutations with real rules; report delivery is tested separately.
 
         Args:
             root (Path): Selected isolated consumer.
-            cases (list[tuple[str, str, str, bool]]): Path, rule, job and Tach requirement.
+            cases (list[tuple[str, str, str, bool]]): Path, rule, job and policy requirement.
         """
         files = ConfiguredConsumerPolicy(root).files()
         paths = sorted(files["production"] + files["tests"])
@@ -89,40 +52,32 @@ class TestAdoptionConsumer(unittest.TestCase):
                              findings)
             diagnostics[job] = findings
 
-        modes = {"check" if needs_tach else "check-external"
-                 for _, _, job, needs_tach in cases if needs_tach or job == "tach-external"}
-        if modes:
-            regenerate(root)
-        native: dict[str, dict[str, Any]] = {}
-        for mode in sorted(modes):
-            result = native_tach(mode, root)
-            self.assertIsNone(result["execution_error"], result)
-            self.assertFalse(any(item.get("is_infrastructure_error") for item in
-                                 result["diagnostics"]), result)
-            native[mode] = result
-
         for path, rule, job, needs_tach in cases:
             with self.subTest(path=path, rule=rule, job=job):
                 if job != "tach-external":
                     self.assertTrue(any(item["rule"] == rule and item["path"] == path and
                                         item["line"] >= 1 and item["column"] >= 1
                                         for item in diagnostics[job]), diagnostics[job])
-                if needs_tach or job == "tach-external":
-                    result = native["check" if needs_tach else "check-external"]
-                    self.assertEqual(result["exit_code"], 1, result)
-                    self.assertTrue(any(item["path"] == path and item["line"] >= 1 and
-                                        (job != "tach-external" or item["rule"] == rule)
-                                        for item in result["diagnostics"]), result)
+                if job == "tach-external":
+                    self.assertIn("import tomlkit", (root / path).read_text())
+                    self.assertNotIn("tomlkit", load_toml(root / "pyproject.toml")[
+                        "project"]["dependencies"])
+                if needs_tach:
+                    config = render(root)[0]
+                    source = Path(path).relative_to("src").with_suffix(
+                        "").as_posix().replace("/", ".")
+                    target = ("demo.main.peer" if source == "demo.main.wire" else
+                              "demo.main.wire" if rule == "BOOTSTRAP_DEPENDENCY" else
+                              "demo.records.entry" if rule in {
+                                  "CONCRETE_VALUE_DEPENDENCY", "CONCRETE_DEPENDENCY_TYPE"} else
+                              "demo.records.external_items" if "external_items" in (
+                                  root / path).read_text() else "demo.records.sender")
+                    module = next(item for item in config["modules"] if item["path"] == source)
+                    self.assertNotIn(target, module["depends_on"])
 
     def test_full_adoption_and_runtime(self) -> None:
         with self.consumer() as root:
-            report = self.check(root)
-            self.assertFalse(report["diagnostics"])
-            self.assertTrue(all((item["status"], item["exit_code"]) in
-                                {("passed", 0), ("skipped", None)} for item in report["tools"]))
-            self.assertEqual({item["name"] for item in report["tools"] if
-                              item["status"] == "skipped"}, {"constructor-purity"})
-            modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
+            modules = {item["path"]: item for item in render(root)[0]["modules"]}
             self.assertIn("placeholder", modules)
             self.assertEqual(modules["demo.records.entry_shape"]["layer"], "Contract")
             self.assertEqual(modules["demo.records.entry"]["layer"], "Infrastructure")
@@ -130,7 +85,7 @@ class TestAdoptionConsumer(unittest.TestCase):
             self.assertEqual(modules["demo.main.wire"]["layer"], "Bootstrap")
             self.assertEqual(modules["gateway.client.value_utils"]["depends_on"],
                              ["demo", "demo.records.entry_shape"])
-            self.assertTrue(load_toml(root / "tach.toml")["exact"])
+            self.assertTrue(render(root)[0]["exact"])
             script = ("import sys; sys.path.insert(0, 'src'); " +
                       "from demo.main.wire import connect; " +
                       "from demo.records.identity import Identity; " +
@@ -146,7 +101,6 @@ class TestAdoptionConsumer(unittest.TestCase):
 
     def test_independent_forbidden_mutations(self) -> None:
         with self.consumer() as root:
-            self.check(root)
             group = "src/demo/records/"
             client = "src/gateway/client/value_utils.py"
             cases = (
@@ -209,11 +163,10 @@ class TestAdoptionConsumer(unittest.TestCase):
                     self.focused_findings(root, [(path, rule, job, native)
                                                  for path, _, rule, job, native in batch])
             (root / "src/demo/main/peer.py").unlink()
-            self.check(root)
+            self.assertEqual(self.focused_clean(root), [])
 
     def test_provenance_and_composition_mutations(self) -> None:
         with self.consumer() as root:
-            self.check(root)
             group = "src/demo/records/"
             mutations = (
                 (group + "identity.py", "from typing import NamedTuple\n",
@@ -305,65 +258,17 @@ class TestAdoptionConsumer(unittest.TestCase):
             self.focused_findings(root, [("src/gateway/main", "MULTIPLE_MAIN_DIRECTORIES",
                                           "contract-folders", False)])
             duplicate.rmdir()
-            self.check(root)
+            self.assertEqual(self.focused_clean(root), [])
 
-    def test_real_failures_preserve_independent_findings(self) -> None:
-        with self.consumer() as root:
-            self.check(root)
-            client = root / "src/gateway/client/value_utils.py"
-            client.write_text(client.read_text() + "\nimport tomlkit\n")
-            source = root / "src/demo/records/sender.py"
-            source.write_text(source.read_text() + "\nclass Broken(\n")
-            parsed = self.check(root, 2)
-            jobs = {item["name"]: item for item in parsed["tools"]}
-            self.assertEqual((jobs["contract-folders"]["status"],
-                              jobs["contract-folders"]["exit_code"]), ("error", 2))
-            self.assertEqual(jobs["tach"]["status"], "blocked")
-            self.assertEqual(jobs["tach-external"]["status"], "blocked")
-            self.assertTrue(any(d["rule"] == "CONTRACT_FOLDERS_PARSE_ERROR" and
-                                d["is_infrastructure_error"] for d in parsed["diagnostics"]))
-            self.assertTrue(any(d.get("job") == "pylint-production" and d["rule"] == "W0611"
-                                for d in parsed["diagnostics"]))
-            source.write_text(source.read_text().replace("\nclass Broken(\n", ""))
-            original = native_check_runner.make_jobs
+    def focused_clean(self, root: Path) -> list[dict[str, Any]]:
+        files = ConfiguredConsumerPolicy(root).files()
+        paths = sorted(files["production"] + files["tests"])
+        findings, error = contract_folders(root, paths)
+        self.assertIsNone(error, findings)
+        return findings
 
-            def broken_worker(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-                jobs = original(*args, **kwargs)
-                next(item for item in jobs if item["name"] == "contract-folders")[
-                    "argv"].append("--invalid-worker-flag")
-                return jobs
-
-            with patch.object(native_check_runner, "make_jobs", side_effect=broken_worker):
-                failed = self.check(root, 2)
-            jobs = {item["name"]: item for item in failed["tools"]}
-            self.assertEqual(jobs["contract-folders"]["status"], "error")
-            self.assertNotEqual(jobs["contract-folders"]["exit_code"], 0)
-            self.assertEqual((jobs["tach-external"]["status"],
-                              jobs["tach-external"]["exit_code"]), ("violations", 1))
-            self.assertTrue(any(d["rule"] == "UNREADABLE_TOOL_OUTPUT" and
-                                d["is_infrastructure_error"] for d in failed["diagnostics"]))
-            for stream in jobs["contract-folders"]["raw_output"].values():
-                self.assertTrue((root / stream).is_file())
-
-    def test_generated_core_and_reviewed_plugin_full_reports(self) -> None:
+    def test_generated_core_and_reviewed_plugin_configuration(self) -> None:
         with self.consumer() as generated:
-            self.check(generated)
-            contract = generated / "src/demo/records/service.py"
-            contract.write_text("import socket\n" + contract.read_text())
-            tests = generated / "tests/test_value.py"
-            tests.write_text("import pathlib\n")
-            report = self.check(generated, 1)
-            jobs = {item["name"]: item for item in report["tools"]}
-            for name in ("pylint-production", "pylint-tests"):
-                self.assertEqual(jobs[name]["status"], "violations")
-                self.assertGreater(jobs[name]["exit_code"], 0)
-            self.assertTrue({("W0611", "src/demo/records/service.py"),
-                             ("W0611", "tests/test_value.py")} <= {
-                                 (d["rule"], d["path"]) for d in report["diagnostics"]})
-            self.assertFalse(any(d["rule"].startswith("W9") for d in report["diagnostics"]))
-            self.assertFalse(any(d["rule"] in {"E1111", "R0903"} and
-                                 d["path"] == "src/demo/records/service.py"
-                                 for d in report["diagnostics"]))
             for config in (load_toml(generated / "pyproject.toml")["tool"]["pylint"],
                            load_toml(generated / ".quard/pylint-tests.toml")["tool"]["pylint"]):
                 self.assertNotIn("clean_architecture_linter", config["main"]["load-plugins"])
@@ -376,20 +281,8 @@ class TestAdoptionConsumer(unittest.TestCase):
                 "class Port(Protocol):\n    def fetch(self) -> int: ...\n")
             (root / "src/demo/client.py").write_text("from demo.domain import api\n")
             (root / "tests/test_value.py").write_text("import pathlib\n")
-            logs = root / ".quard/logs/install-probes"
-            logs.mkdir(parents=True)
-            plugins, catalog = discover_plugins(root, logs)
-            write_json(root / ".quard/pylint-catalog.json", catalog)
-            configure(root, initial=True, plugins=plugins, catalog=catalog)
-            report = self.check(root, 1)
+            configure(root, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
             self.assertEqual((root / "tach.toml").read_bytes(), before)
-            self.assertTrue(any(d["rule"] == "W9004" and d["job"] == "pylint-production"
-                                for d in report["diagnostics"]))
-            self.assertFalse(any(d["rule"] in {"E1111", "R0903"} and
-                                 d["path"] == "src/demo/domain/api.py"
-                                 for d in report["diagnostics"]))
-            self.assertEqual({item["name"]: item["status"] for item in report["tools"]}[
-                                 "pylint-production"], "violations")
             self.assertIn("clean_architecture_linter", load_toml(root / "pyproject.toml")[
                 "tool"]["pylint"]["main"]["load-plugins"])
 

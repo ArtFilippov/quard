@@ -9,22 +9,26 @@ from importlib import metadata
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
-from typing import Any, override
+from typing import Any, override, cast
 import unittest
 from unittest.mock import patch
 
 from jsonschema import validate
+import tomlkit
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
-from quard._common import capture, project_dir, read_json
+from quard._common import capture, project_dir, read_json, write_json
+from quard.architecture_draft.generated_architecture_utils import IDENTITY
+from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from quard.check import display
 from quard.check_runner.check_runner import CheckRunner
 from quard.check_runner.native_check_runner import NativeCheckRunner
 from quard.check_runner.runner_utils import binary, installed_versions
 from quard.report_utils import normalize
+from quard.tach_worker_utils import run as native_tach
 from offline_fixtures import create_repo, fake_tools
 from offline_fixture_utils import native_result
 
@@ -157,6 +161,53 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "pyright")
                          ["status"], "error")
         self.assertTrue((self.root / report["report_path"]).is_file())
+
+    def test_generated_tach_error_preserves_peer_findings_and_raw_logs(self):
+        write_json(self.root / ".quard/architecture.generated.json", IDENTITY)
+        fake, seen = fake_tools({
+            "tach": {"stdout": "native Tach failed", "code": 2},
+            "pydoclint": {"stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1},
+        })
+        report = self.run_report(fake)
+        jobs = {job["name"]: job for job in report["tools"]}
+        self.assertEqual((report["exit_code"], jobs["tach"]["status"]), (2, "error"))
+        self.assertIn("tach", seen)
+        self.assertIn("pydoclint", seen)
+        self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
+        self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]))
+        self.assertEqual(read_json(self.root / report["latest_report_path"]), report)
+        for stream in jobs["tach"]["raw_output"].values():
+            self.assertTrue((self.root / stream).is_file())
+
+    def test_native_tach_preserves_cyclic_and_exact_unused_findings(self):
+        port = self.root / "src/demo/domain/port"
+        port.mkdir()
+        (port / "port.py").write_text("from typing import Protocol\n"
+                                       "from demo.domain import peer\n"
+                                       "class Port(Protocol):\n    def send(self) -> None: ...\n")
+        (self.root / "src/demo/domain/peer.py").write_text(
+            "from demo.domain.port.port import Port\n")
+        config, _ = ConfiguredArchitectureDraft(self.root).draft(contract_only=True)
+        next(module for module in config["modules"] if module["path"] ==
+             "demo.domain.port.port")["depends_on"].append("demo.domain.peer")
+        config["modules"][0]["depends_on"].append("demo.domain.peer")
+        serialize = cast(Callable[[dict[str, Any]], str], getattr(tomlkit, "dumps"))
+        (self.root / "tach.toml").write_text(serialize(config))
+
+        result = native_tach("check", self.root)
+        self.assertIsNone(result["execution_error"], result)
+        self.assertEqual(result["exit_code"], 1, result)
+        self.assertIn("cyclic-dependency", {item["rule"] for item in
+                       result["diagnostics"]}, result)
+
+        next(module for module in config["modules"] if module["path"] ==
+             "demo.domain.port.port")["depends_on"].remove("demo.domain.peer")
+        (self.root / "tach.toml").write_text(serialize(config))
+        result = native_tach("check", self.root)
+        self.assertIsNone(result["execution_error"], result)
+        self.assertEqual(result["exit_code"], 1, result)
+        self.assertIn("unused-dependency", {item["rule"] for item in
+                       result["diagnostics"]}, result)
 
     def test_unexpected_job_failure_does_not_cancel_or_hide_native_results(self):
         fake, seen = fake_tools({"pydoclint": {

@@ -1,5 +1,9 @@
 # Handoff: test-suite profiling
 
+The current migration practices and the one-to-two integration-scenarios-per-
+directory requirement are in `TEST_MIGRATION_RUNBOOK.md`. Sections below record
+the measurement and decision history; the final architecture state is at the end.
+
 ## Goal and current state
 
 The user wants to speed up tests and keep them from slowing future development. The
@@ -260,6 +264,29 @@ direct rules; genuine full-report, Pylint and failure-propagation cases remain.
   0 infrastructure errors; unresolved details and job statuses are in
   `.quard/reports/latest.json` with archived raw logs. No analyzer policy or
   production runner changes.
+
+## Architecture checks split into focused rules and two native reports (10 October 2026)
+
+The architecture-draft directory now keeps two selected real runner invocations:
+`test_invalid_companion_facade_blocks_import` runs `tach`, `tach-external`
+and `contract-folders`; `test_generated_pylint_report_and_reviewed_profile`
+runs `pylint-production` and `pylint-tests` for the generated profile.
+Behavioral mutations call the real folder/dependency/placement/class rules or
+inspect generated `modules`/`interfaces` directly. Native-report error and
+independence assertions live with the fake-output runner tests. Pinned native
+Tach cyclic/unused findings have a focused check in the runner tests too.
+Other Pylint plugin diagnostics remain covered by the pinned architecture
+compatibility tests. Installation probes are stubbed in non-Pylint scenarios.
+Production check selection and analyzer policy were not changed.
+
+- Previous architecture-directory profile: 46 tests and 93 subtests in 84.22 s.
+  New profile: 43 tests and 93 subtests passing in 14.14 s, with 13.11 s of
+  test-call time. Both are single runs, not stable benchmarks. New JSON:
+  `/tmp/opencode/quard-architecture-unit-verified.json` (local).
+- `uv sync --locked --group dev`: exit 0. Final full unittest: 387 tests,
+  1 skipped, exit 0 in 277.737 s. Checkout `check.py`: exit 1, 5188 native
+  findings, 0 infrastructure errors; `.quard/reports/latest.json` and raw logs
+  retain unresolved findings. Do not interpret this as a passing checkout check.
 
 ## Open work
 

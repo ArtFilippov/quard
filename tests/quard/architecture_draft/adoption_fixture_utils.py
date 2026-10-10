@@ -1,4 +1,4 @@
-"""Create a public, executable generated-policy consumer for full-check tests."""
+"""Create a public, executable generated-policy consumer for architecture tests."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from offline_fixtures import create_repo
+from offline_fixtures import CATALOG, create_repo
 from quard._common import write_json
 
 discover_plugins = import_module("quard.audit_utils").discover_plugins
@@ -16,11 +16,12 @@ configure = import_module("quard.policy_utils").configure
 IDENTITY = import_module("quard.architecture_draft.generated_selection_utils").IDENTITY
 
 
-def adoption_consumer(root: Path) -> None:
+def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
     """Create a small, executable, multi-package consumer.
 
     Args:
         root (Path): Temporary consumer root.
+        probe_plugins (bool, default=True): Probe plugins for native installation tests.
     """
     create_repo(root, ready=False)
     (root / "src/demo/domain/api.py").write_text("")
@@ -109,19 +110,23 @@ def adoption_consumer(root: Path) -> None:
         "        self.assertEqual(Sender().first('ok'), 'ready:ok')\n")
     logs = root / ".quard/logs/install-probes"
     logs.mkdir(parents=True)
-    plugins, catalog = discover_plugins(root, logs)
+    plugins, catalog = (discover_plugins(root, logs) if probe_plugins else
+                        (CATALOG["plugins"], CATALOG))
     write_json(root / ".quard/pylint-catalog.json", catalog)
     configure(root, initial=True, plugins=plugins, catalog=catalog)
 
 
 @contextmanager
-def temporary_consumer() -> Generator[Path]:
+def temporary_consumer(*, probe_plugins: bool = True) -> Generator[Path]:
     """Provide a public adoption consumer in an isolated temporary directory.
+
+    Args:
+        probe_plugins (bool, default=True): Probe plugins when testing native installation.
 
     Yields:
         Path: Temporary consumer root.
     """
     with TemporaryDirectory(prefix="quard-public-adoption-") as directory:
         root = Path(directory)
-        adoption_consumer(root)
+        adoption_consumer(root, probe_plugins=probe_plugins)
         yield root

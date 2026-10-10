@@ -9,19 +9,16 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests/quard/architecture_draft"))
 import test_adoption_consumer as adoption
 
-from quard._common import load_toml
 from quard._common import capture
-from quard.architecture_draft.generated_architecture_utils import regenerate
+from quard.architecture_draft.generated_architecture_utils import render
 from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from quard.folder_analysis.folder_utils import analyze as contract_folders
-from quard.tach_worker_utils import run as native_tach
+from selected_report_utils import selected_report
 
 
 class TestReviewFollowup(unittest.TestCase):
     setUp = adoption.TestAdoptionConsumer.setUp
     consumer = adoption.TestAdoptionConsumer.consumer
-    check = adoption.TestAdoptionConsumer.check
-    finding = adoption.TestAdoptionConsumer.finding
 
     def folders(self, root: Path) -> list[dict[str, Any]]:
         files = ConfiguredConsumerPolicy(root).files()
@@ -30,13 +27,12 @@ class TestReviewFollowup(unittest.TestCase):
         self.assertFalse(any(item.get("is_infrastructure_error") for item in findings), findings)
         return findings
 
-    def tach(self, root: Path) -> dict[str, Any]:
-        regenerate(root)
-        result = native_tach("check", root)
-        self.assertIsNone(result["execution_error"], result)
-        self.assertFalse(any(item.get("is_infrastructure_error") for item in
-                             result["diagnostics"]), result)
-        return result
+    def policy(self, root: Path) -> dict[str, Any]:
+        return render(root)[0]
+
+    def denied(self, root: Path, source: str, target: str) -> None:
+        modules = {item["path"]: item for item in self.policy(root)["modules"]}
+        self.assertNotIn(target, modules[source]["depends_on"])
 
     def rule(self, findings: list[dict[str, Any]], rule: str, path: str) -> None:
         self.assertTrue(any(item["rule"] == rule and item["path"] == path and
@@ -46,22 +42,32 @@ class TestReviewFollowup(unittest.TestCase):
     def test_invalid_companion_facade_blocks_import(self) -> None:
         with self.consumer() as root:
             self.assertEqual(self.folders(root), [])
-            self.assertEqual(self.tach(root)["exit_code"], 0)
             stub = root / "src/demo/records/__init__.pyi"
             stub.write_text(stub.read_text() + "from .sender import Sender as Bad\n")
             client = root / "src/gateway/client/value_utils.py"
-            client.write_text(client.read_text() + "from demo.records import Port\n")
-            report = self.check(root, 1, jobs=("tach", "contract-folders"))
-            roles = {m["path"]: m["layer"] for m in load_toml(root / "tach.toml")["modules"]}
+            client.write_text(client.read_text() + "from demo.records import Port\n"
+                              "import tomlkit\n")
+            report = selected_report(self, root, "tach", "tach-external", "contract-folders")
+            self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+            roles = {m["path"]: m["layer"] for m in self.policy(root)["modules"]}
             self.assertEqual(roles["demo.records"], "Infrastructure")
-            modules = {m["path"]: m for m in load_toml(root / "tach.toml")["modules"]}
+            modules = {m["path"]: m for m in self.policy(root)["modules"]}
             self.assertNotIn("demo.records", modules["gateway.client.value_utils"]["depends_on"])
-            self.finding(report, "CONFLICTING_FACADE_EXPORT", "contract-folders",
-                         "src/demo/records/__init__.pyi")
+            self.assertTrue(any(d["rule"] == "CONFLICTING_FACADE_EXPORT" and
+                                d["job"] == "contract-folders" and
+                                d["path"] == "src/demo/records/__init__.pyi" and
+                                d["line"] > 0 and d["column"] > 0
+                                for d in report["diagnostics"]), report["diagnostics"])
             self.assertEqual(next(item for item in report["tools"] if item["name"] == "tach")[
                 "status"], "violations")
             self.assertTrue(any(d["job"] == "tach" and d["path"] ==
                                 "src/gateway/client/value_utils.py" for d in report["diagnostics"]))
+            self.assertEqual(next(item for item in report["tools"] if item["name"] ==
+                                  "tach-external")["status"], "violations")
+            self.assertTrue(any(d["job"] == "tach-external" and
+                                d["rule"] == "UndeclaredExternalDependency" and
+                                d["path"] == "src/gateway/client/value_utils.py"
+                                for d in report["diagnostics"]), report["diagnostics"])
 
     def test_non_facade_alias_contract_and_conflict(self) -> None:
         with self.consumer() as root:
@@ -75,9 +81,10 @@ class TestReviewFollowup(unittest.TestCase):
             client.with_suffix(".pyi").write_text(client.with_suffix(".pyi").read_text().replace(
                 "from demo import PublicPort", "from demo.records.alias_api import Port as PublicPort"))
             self.assertEqual(self.folders(root), [])
-            self.assertEqual(self.tach(root)["exit_code"], 0)
-            roles = {m["path"]: m["layer"] for m in load_toml(root / "tach.toml")["modules"]}
+            roles = {m["path"]: m["layer"] for m in self.policy(root)["modules"]}
             self.assertEqual(roles["demo.records.alias_api"], "Contract")
+            self.assertIn("demo.records.alias_api", {m["path"]: m for m in self.policy(root)[
+                "modules"]}["gateway.client.value_utils"]["depends_on"])
             self.assertEqual(capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
                                       "from demo.records.alias_api import Port; "
                                       "from demo.records.service import Service; "
@@ -85,7 +92,7 @@ class TestReviewFollowup(unittest.TestCase):
             module.with_suffix(".pyi").write_text(text.replace("Port = Service", "Port = object"))
             self.rule(self.folders(root), "CONFLICTING_CONTRACT_ALIAS",
                       "src/demo/records/alias_api.pyi")
-            self.assertEqual(self.tach(root)["exit_code"], 1)
+            self.denied(root, "gateway.client.value_utils", "demo.records.alias_api")
             module.with_suffix(".pyi").write_text(text)
             module.write_text(text.replace("__all__ = ['Port']", "__all__ = ['Missing']"))
             self.rule(self.folders(root), "UNRESOLVED_CONTRACT_ALIAS",
@@ -99,9 +106,10 @@ class TestReviewFollowup(unittest.TestCase):
             client = root / "src/gateway/client/value_utils.py"
             client.write_text("from demo.records.generic_api import Special\n" + client.read_text() +
                               "\ndef first(items: Special) -> str:\n    return items[0]\n")
-            self.assertEqual(self.tach(root)["exit_code"], 0)
-            roles = {m["path"]: m["layer"] for m in load_toml(root / "tach.toml")["modules"]}
+            roles = {m["path"]: m["layer"] for m in self.policy(root)["modules"]}
             self.assertEqual(roles["demo.records.generic_api"], "Contract")
+            self.assertIn("^Special$", next(i["expose"] for i in self.policy(root)[
+                "interfaces"] if i["from"] == [r"^demo\.records\.generic_api$"]))
             original = client.read_text()
             for assignment, annotation in (("Bare = UserList", "Bare[str]"),
                                            ("Other = UserList[int]", "Other")):
@@ -111,10 +119,9 @@ class TestReviewFollowup(unittest.TestCase):
                     client.write_text(f"from demo.records.generic_api import {name}\n" +
                                       original + f"\ndef extra(items: {annotation}) -> str:\n"
                                       "    return items[0]\n")
-                    result = self.tach(root)
-                    self.assertEqual(result["exit_code"], 1, result)
-                    self.assertTrue(any(d["path"] == "src/gateway/client/value_utils.py" and
-                                        d["line"] > 0 for d in result["diagnostics"]), result)
+                    exposed = next(i["expose"] for i in self.policy(root)["interfaces"]
+                                   if i["from"] == [r"^demo\.records\.generic_api$"])
+                    self.assertNotIn(f"^{name}$", exposed)
                     module.write_text(module.read_text().replace(assignment + "\n", ""))
 
     def test_assembly_defining_function_only(self) -> None:
@@ -127,11 +134,14 @@ class TestReviewFollowup(unittest.TestCase):
             infrastructure.write_text("def suffix() -> str:\n    return ''\n")
             assembly = root / "src/demo/main/wire.py"
             assembly.write_text("from demo.records.envelopes.wire_utils import wire\n"
-                                "from demo.records.helpers_utils import suffix\n" +
-                                assembly.read_text().replace("second('ok')",
-                                                             "second(wire() + suffix())"))
+                                 "from demo.records.helpers_utils import suffix\n" +
+                                 assembly.read_text().replace("second('ok')",
+                                                              "second(wire() + suffix())"))
             self.assertEqual(self.folders(root), [])
-            self.assertEqual(self.tach(root)["exit_code"], 0)
+            modules = {m["path"]: m for m in self.policy(root)["modules"]}
+            self.assertIn("demo.records.envelopes.wire_utils",
+                          modules["demo.main.wire"]["depends_on"])
+            self.assertIn("demo.records.helpers_utils", modules["demo.main.wire"]["depends_on"])
             self.assertEqual(capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); "
                                       "from demo.main.wire import connect; "
                                       "assert connect() == 'ready:ready:ok'"], root, 10)["exit_code"], 0)
@@ -141,18 +151,12 @@ class TestReviewFollowup(unittest.TestCase):
                                                              "port.first(value.identity.code + wire())"))
             self.rule(self.folders(root), "CONCRETE_IMPLEMENTATION_IMPORT",
                       "src/gateway/client/value_utils.py")
-            result = self.tach(root)
-            self.assertEqual(result["exit_code"], 1, result)
-            self.assertTrue(any(d["path"] == "src/gateway/client/value_utils.py" and
-                                d["line"] > 0 for d in result["diagnostics"]), result)
+            self.denied(root, "gateway.client.value_utils", "demo.records.envelopes.wire_utils")
             peer = root / "src/demo/main/peer.py"
             peer.write_text("from demo.main.wire import connect\n\n"
                             "def result() -> str:\n    return connect()\n")
             self.rule(self.folders(root), "BOOTSTRAP_DEPENDENCY", "src/demo/main/peer.py")
-            result = self.tach(root)
-            self.assertEqual(result["exit_code"], 1, result)
-            self.assertTrue(any(d["path"] == "src/demo/main/peer.py" and d["line"] > 0
-                                for d in result["diagnostics"]), result)
+            self.denied(root, "demo.main.peer", "demo.main.wire")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@
 Read `README.md`, `PROFILE.md` and `COMPATIBILITY.md` before changing analyzer policy
 or version-specific patches. Preserve native diagnostics: do not filter failures,
 loosen limits, add baselines, or run `tach sync` routinely to obtain a green result.
+Before migrating slow integration tests to focused/unit tests, read
+`TEST_MIGRATION_RUNBOOK.md`.
 
 Consumer commands (from its root; add `--extra qwen` when that environment uses it):
 
