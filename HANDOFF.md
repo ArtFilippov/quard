@@ -128,6 +128,28 @@ runtime assertions and real full-check failure-propagation coverage remain.
   5140 native diagnostics, 0 infrastructure errors; see
   `.quard/reports/latest.json`. These native findings remain unresolved.
 
+## Adoption-consumer optimization (10 October 2026)
+
+Optimized `tests/quard/architecture_draft/test_adoption_consumer.py` using the
+same focused-rule approach. Mutation batches discover the actual consumer scope,
+including stubs, and run real folder, dependency-type and outer-class analyzers.
+Cases requiring native Tach findings regenerate the policy and run the real Tach
+adapter; external dependencies use native `check-external`. Each case retains
+its rule, path, position and relevant native finding. The clean adoption checks,
+runtime checks, Pylint profiles and real failure-propagation scenarios remain
+full consumer checks.
+
+- Pytest-durations profiling ran **only this file** with `-p no:tach -p
+  no:cacheprovider`: 5 passing tests in 50.06 s before and 29.99 s after
+  (another after run took 32.61 s). The two mutation calls changed from
+  12.17/22.09 s to 5.61/5.75 s in the first after run. Timing JSON stays
+  local at `/tmp/opencode/quard-adoption-before.json` and
+  `/tmp/opencode/quard-adoption-after.json` (the latter is the final run).
+- `uv sync --locked --group dev`: exit 0. Full unittest verification (not a
+  profiling run): 388 tests, 1 skipped, exit 0 in 408.291 s. Checkout
+  `check.py`: exit 1, 5148 native diagnostics, 0 infrastructure errors;
+  see `.quard/reports/latest.json` for unresolved findings.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's

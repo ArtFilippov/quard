@@ -20,6 +20,12 @@ from offline_fixtures import create_repo
 from legacy_clone_fixture_utils import historical_cli
 from mutation_fixture_utils import temporary_edits
 from quard._common import capture, load_toml, read_json, write_json
+from quard.architecture_draft.generated_architecture_utils import regenerate
+from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
+from quard.contract_analysis.dependency_type_utils import analyze as dependency_types
+from quard.folder_analysis.folder_utils import analyze as contract_folders
+from quard.outer_classes_worker_utils import analyze as outer_classes
+from quard.tach_worker_utils import run as native_tach
 
 discover_plugins = import_module("quard.audit_utils").discover_plugins
 configure = import_module("quard.policy_utils").configure
@@ -60,6 +66,50 @@ class TestAdoptionConsumer(unittest.TestCase):
             self.assertTrue(any(item["job"] == "tach" and item["path"] == path and
                                 item["line"] >= 1 for item in report["diagnostics"]),
                             report["diagnostics"])
+
+    def focused_findings(self, root: Path, cases: list[tuple[str, str, str, bool]]) -> None:
+        """Check each mutation with its real rule and, where required, native Tach.
+
+        Args:
+            root (Path): Selected isolated consumer.
+            cases (list[tuple[str, str, str, bool]]): Path, rule, job and Tach requirement.
+        """
+        files = ConfiguredConsumerPolicy(root).files()
+        paths = sorted(files["production"] + files["tests"])
+        analyzers = {"contract-folders": contract_folders,
+                     "dependency-types": dependency_types, "outer-classes": outer_classes}
+        diagnostics: dict[str, list[dict[str, Any]]] = {}
+        for job in {case[2] for case in cases} - {"tach-external"}:
+            findings, error = analyzers[job](root, paths)
+            self.assertIsNone(error, findings)
+            self.assertFalse(any(item.get("is_infrastructure_error") for item in findings),
+                             findings)
+            diagnostics[job] = findings
+
+        modes = {"check" if needs_tach else "check-external"
+                 for _, _, job, needs_tach in cases if needs_tach or job == "tach-external"}
+        if modes:
+            regenerate(root)
+        native: dict[str, dict[str, Any]] = {}
+        for mode in sorted(modes):
+            result = native_tach(mode, root)
+            self.assertIsNone(result["execution_error"], result)
+            self.assertFalse(any(item.get("is_infrastructure_error") for item in
+                                 result["diagnostics"]), result)
+            native[mode] = result
+
+        for path, rule, job, needs_tach in cases:
+            with self.subTest(path=path, rule=rule, job=job):
+                if job != "tach-external":
+                    self.assertTrue(any(item["rule"] == rule and item["path"] == path and
+                                        item["line"] >= 1 and item["column"] >= 1
+                                        for item in diagnostics[job]), diagnostics[job])
+                if needs_tach or job == "tach-external":
+                    result = native["check" if needs_tach else "check-external"]
+                    self.assertEqual(result["exit_code"], 1, result)
+                    self.assertTrue(any(item["path"] == path and item["line"] >= 1 and
+                                        (job != "tach-external" or item["rule"] == rule)
+                                        for item in result["diagnostics"]), result)
 
     def test_full_adoption_and_runtime(self) -> None:
         with self.consumer() as root:
@@ -151,11 +201,10 @@ class TestAdoptionConsumer(unittest.TestCase):
                 changes = {root / path: ((root / path).read_text()
                                          if (root / path).exists() else "") + addition
                            for path, addition, *_ in batch}
-                with temporary_edits(changes):
-                    report = self.check(root, 1)
-                    for path, addition, rule, job, native in batch:
-                        with self.subTest(path=path, rule=rule, addition=addition):
-                            self.finding(report, rule, job, path, native=native)
+                mutations = tuple((path, addition) for path, addition, *_ in batch)
+                with self.subTest(mutations=mutations), temporary_edits(changes):
+                    self.focused_findings(root, [(path, rule, job, native)
+                                                 for path, _, rule, job, native in batch])
             (root / "src/demo/main/peer.py").unlink()
             self.check(root)
 
@@ -189,10 +238,8 @@ class TestAdoptionConsumer(unittest.TestCase):
                 self.assertIn(old, originals[path])
             with temporary_edits({root / path: originals[path].replace(old, new)
                                   for path, old, new, *_ in mutations}):
-                report = self.check(root, 1)
-                for path, _, _, rule, job, native in mutations:
-                    with self.subTest(path=path, rule=rule):
-                        self.finding(report, rule, job, path, native=native)
+                self.focused_findings(root, [(path, rule, job, native)
+                                             for path, _, _, rule, job, native in mutations])
             additions = (
                 ("src/gateway/client/value_utils.py",
                   "from demo.records.entry import Entry\n", "CONCRETE_VALUE_DEPENDENCY",
@@ -209,54 +256,51 @@ class TestAdoptionConsumer(unittest.TestCase):
             for batch in (additions[::2], additions[1::2]):
                 with temporary_edits({root / path: (root / path).read_text() + addition
                                       for path, addition, *_ in batch}):
-                    report = self.check(root, 1)
-                    for path, _, rule, job, native in batch:
-                        with self.subTest(path=path, rule=rule):
-                            self.finding(report, rule, job, path, native=native)
+                    self.focused_findings(root, [(path, rule, job, native)
+                                                 for path, _, rule, job, native in batch])
             client = root / "src/gateway/client/value_utils.py"
             before = client.read_text()
             client.write_text(before.replace("demo.records.entry_shape as shape",
                                              "demo.records.entry as shape").replace(
                                                  "value: shape.EntryShape", "value: shape.Entry"))
-            self.finding(self.check(root, 1), "CONCRETE_DEPENDENCY_TYPE",
-                         "dependency-types", "src/gateway/client/value_utils.py", native=True)
+            self.focused_findings(root, [("src/gateway/client/value_utils.py",
+                                          "CONCRETE_DEPENDENCY_TYPE", "dependency-types", True)])
             client.write_text(before)
             service_stub = root / group / "service.pyi"
             service_stub.write_text("class Service(object):\n" +
                                     "    def first(self, value: str) -> str: ...\n" +
                                     "    def second(self, value: str) -> str: ...\n")
-            self.finding(self.check(root, 1), "CONFLICTING_MODULE_ROLE",
-                         "contract-folders", group + "service.pyi")
+            self.focused_findings(root, [(group + "service.pyi", "CONFLICTING_MODULE_ROLE",
+                                          "contract-folders", False)])
             service_stub.unlink()
             bridge = root / "src/gateway/client/bridge.py"
             bridge.write_text("from demo.records.service import Service\n" +
                               "class Bridge(Service):\n" +
                               "    def first(self, value: str) -> str: return value\n" +
                               "    def second(self, value: str) -> str: return value\n")
-            self.finding(self.check(root, 1), "CROSS_GROUP_CONTRACT",
-                         "contract-folders", "src/gateway/client/bridge.py")
+            self.focused_findings(root, [("src/gateway/client/bridge.py", "CROSS_GROUP_CONTRACT",
+                                          "contract-folders", False)])
             bridge.unlink()
             sender = root / group / "sender.py"
             before = sender.read_text()
             sender.write_text(before.replace("class Sender(Service):",
                                             "class Sender(Service):\n    peer: Peer") +
                               "\nclass Peer(Service):\n    pass\n")
-            self.finding(self.check(root, 1), "CONCRETE_DEPENDENCY_TYPE",
-                         "dependency-types", group + "sender.py")
+            self.focused_findings(root, [(group + "sender.py", "CONCRETE_DEPENDENCY_TYPE",
+                                          "dependency-types", False)])
             sender.write_text(before)
             nested = root / "src/demo/records/envelopes/nested"
             nested.mkdir()
             (nested / "wire.py").write_text("from demo.records.sender import Sender\n")
-            self.finding(self.check(root, 1), "CONCRETE_IMPLEMENTATION_IMPORT",
-                         "contract-folders", "src/demo/records/envelopes/nested/wire.py",
-                         native=True)
+            self.focused_findings(root, [("src/demo/records/envelopes/nested/wire.py",
+                                          "CONCRETE_IMPLEMENTATION_IMPORT", "contract-folders",
+                                          True)])
             (nested / "wire.py").unlink()
             nested.rmdir()
             duplicate = root / "src/gateway/main"
             duplicate.mkdir()
-            report = self.check(root, 1)
-            self.finding(report, "MULTIPLE_MAIN_DIRECTORIES", "contract-folders",
-                         "src/gateway/main")
+            self.focused_findings(root, [("src/gateway/main", "MULTIPLE_MAIN_DIRECTORIES",
+                                          "contract-folders", False)])
             duplicate.rmdir()
             self.check(root)
 
