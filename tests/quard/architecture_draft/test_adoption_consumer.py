@@ -18,6 +18,7 @@ sys.path.insert(0, str(QUARD / "tests"))
 from adoption_fixture_utils import temporary_consumer
 from offline_fixtures import create_repo
 from legacy_clone_fixture_utils import historical_cli
+from mutation_fixture_utils import temporary_edits
 from quard._common import capture, load_toml, read_json, write_json
 
 discover_plugins = import_module("quard.audit_utils").discover_plugins
@@ -138,19 +139,23 @@ class TestAdoptionConsumer(unittest.TestCase):
                  "SOURCE_ROOT_LAYOUT", "contract-folders", False),
             )
             (root / "src/demo/main/peer.py").write_text("result = 1\n")
-            for path, addition, rule, job, native in cases:
-                with self.subTest(path=path, rule=rule, addition=addition):
-                    file = root / path
-                    original = file.read_text() if file.exists() else None
-                    file.write_text((original or "") + addition)
-                    try:
-                        report = self.check(root, 1)
-                        self.finding(report, rule, job, path, native=native)
-                    finally:
-                        if original is None:
-                            file.unlink()
-                        else:
-                            file.write_text(original)
+            batches: list[list[tuple[str, str, str, str, bool]]] = []
+            for case in cases:
+                for batch in batches:
+                    if all(other[0] != case[0] for other in batch):
+                        batch.append(case)
+                        break
+                else:
+                    batches.append([case])
+            for batch in batches:
+                changes = {root / path: ((root / path).read_text()
+                                         if (root / path).exists() else "") + addition
+                           for path, addition, *_ in batch}
+                with temporary_edits(changes):
+                    report = self.check(root, 1)
+                    for path, addition, rule, job, native in batch:
+                        with self.subTest(path=path, rule=rule, addition=addition):
+                            self.finding(report, rule, job, path, native=native)
             (root / "src/demo/main/peer.py").unlink()
             self.check(root)
 
@@ -179,20 +184,19 @@ class TestAdoptionConsumer(unittest.TestCase):
                  "from .records.sender import Sender as PublicPort",
                  "CONCRETE_FACADE_EXPORT", "contract-folders", False),
             )
-            for path, old, new, rule, job, native in mutations:
-                with self.subTest(path=path, rule=rule):
-                    file = root / path
-                    before = file.read_text()
-                    self.assertIn(old, before)
-                    file.write_text(before.replace(old, new))
-                    try:
-                        self.finding(self.check(root, 1), rule, job, path, native=native)
-                    finally:
-                        file.write_text(before)
-            for path, addition, rule, job, native in (
+            originals = {path: (root / path).read_text() for path, *_ in mutations}
+            for path, old, *_ in mutations:
+                self.assertIn(old, originals[path])
+            with temporary_edits({root / path: originals[path].replace(old, new)
+                                  for path, old, new, *_ in mutations}):
+                report = self.check(root, 1)
+                for path, _, _, rule, job, native in mutations:
+                    with self.subTest(path=path, rule=rule):
+                        self.finding(report, rule, job, path, native=native)
+            additions = (
                 ("src/gateway/client/value_utils.py",
-                 "from demo.records.entry import Entry\n", "CONCRETE_VALUE_DEPENDENCY",
-                 "contract-folders", True),
+                  "from demo.records.entry import Entry\n", "CONCRETE_VALUE_DEPENDENCY",
+                  "contract-folders", True),
                  ("src/gateway/client/value_utils.py",
                   "from collections import UserDict as Unrelated\n" +
                   "from demo.records.external_items import ExternalItems\n",
@@ -200,16 +204,15 @@ class TestAdoptionConsumer(unittest.TestCase):
                 (group + "sender.py", "class Peer(Service):\n    pass\n",
                  "MULTIPLE_OUTER_CLASSES", "outer-classes", False),
                 (group + "service.py", "class Accidental(Service):\n    pass\n",
-                 "MIXED_MODULE_ROLES", "contract-folders", False),
-            ):
-                with self.subTest(path=path, rule=rule):
-                    file = root / path
-                    before = file.read_text()
-                    file.write_text(before + addition)
-                    try:
-                        self.finding(self.check(root, 1), rule, job, path, native=native)
-                    finally:
-                        file.write_text(before)
+                  "MIXED_MODULE_ROLES", "contract-folders", False),
+            )
+            for batch in (additions[::2], additions[1::2]):
+                with temporary_edits({root / path: (root / path).read_text() + addition
+                                      for path, addition, *_ in batch}):
+                    report = self.check(root, 1)
+                    for path, _, rule, job, native in batch:
+                        with self.subTest(path=path, rule=rule):
+                            self.finding(report, rule, job, path, native=native)
             client = root / "src/gateway/client/value_utils.py"
             before = client.read_text()
             client.write_text(before.replace("demo.records.entry_shape as shape",

@@ -6,8 +6,8 @@ The user wants to speed up tests and keep them from slowing future development. 
 first step was to profile the suite with the **pytest-durations package** (not
 pytest's built-in `--durations` flag). `pytest-durations==1.9.0` is now pinned in
 the dev group; see `pyproject.toml`, `uv.lock`, and the profiling command in
-`README.md` under Development and integration. No test optimizations have been
-made yet.
+`README.md` under Development and integration. Independent fixture mutations
+now share full-check runs while retaining individual diagnostic assertions.
 
 ## Measurements (10 October 2026)
 
@@ -38,6 +38,27 @@ made yet.
   `.quard/reports/latest.json` and archived raw logs for tool statuses and
   details; do not call this check passing or suppress diagnostics to green it.
 
+## Follow-up profiling and optimization (10 October 2026)
+
+- One adoption mutation test made 21 full consumer checks in 43.08 s; their
+  Pylint production/test jobs took about 1.8/1.9 s each, versus 0.18 s for
+  contract-folders. A 17-check facade test showed the same Pylint/Pyright
+  startup bottleneck (29.44 s). Repeating the entire job set per mutation,
+  rather than fixture setup, dominates these tests.
+- The source-install fixture took 59.43 s on a separate run: its first real
+  uv source installation (including the Rust build) took 37.02 s, while the
+  two reinstalls took 6.41 and 6.12 s, and full checks 3.82 and 3.40 s.
+- Batched independent mutations in `test_adoption_consumer.py` and two full
+  consumer tests in `test_configured_architecture_draft.py`. Every case still
+  checks its rule, path, job and applicable native Tach finding; temporary
+  edits restore fixture files. The adoption mutation tests changed from about
+  45.7 to 14.1 s and 45.6 to 26.3 s in targeted runs; semantic boundaries
+  changed from 44.1 to 24.6 s and the role matrix from 31.3 to 24.7 s.
+- Final full unittest: 388 tests, 1 skipped, exit 0 in 576.29 s (previously
+  617.50 s; another post-batching run took 569.21 s). Final native checkout
+  check: exit 1, 5088 diagnostics, 0 infrastructure errors; inspect
+  `.quard/reports/latest.json` for the unresolved native findings.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's
@@ -50,8 +71,9 @@ made yet.
    assertion expects `INVALID_CHECKS` for duplicate TOML, which produces
    `INVALID_CONFIG`. Investigate and fix the test and discovery mismatch before
    treating pytest as the canonical green suite.
-3. Use the recorded slow calls to investigate subprocess/install costs. Keep
-   real integration coverage; measure before and after each targeted change.
+3. Remaining slow calls include source builds, fresh-process Pylint compatibility
+   regressions, real wheel runs and other full-check mutation loops. Keep real
+   integration coverage; use per-job report durations before changing a loop.
 
 ## Suggested skills
 

@@ -21,6 +21,7 @@ from quard._common import QuardError, capture, load_toml, read_json, write_json
 from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
 from legacy_clone_fixture_utils import historical_cli
+from mutation_fixture_utils import temporary_edits
 
 if TYPE_CHECKING:
     from quard.architecture_draft.generated_architecture_utils import (
@@ -1016,7 +1017,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             utility_stub.write_text(original_utility_stub)
             self.assertEqual(check()["exit_code"], 0)
 
-            for file, addition in (
+            forbidden_imports = (
                 (utility, "\nfrom demo.arbitrary.sender import Sender\n"),
                 (utility, "\nimport demo.arbitrary.sender\n"),
                 (implementation, "\nfrom demo.arbitrary.sender_peer import Peer\n"),
@@ -1024,38 +1025,46 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 (utility, "\nfrom typing import TYPE_CHECKING\n"
                  "if TYPE_CHECKING:\n    from demo.arbitrary.sender import Sender\n"),
                 (bootstrap, "\nfrom other.group.deep.main.other import Other\n"),
-            ):
-                with self.subTest(file=file, addition=addition):
-                    if file == implementation:
-                        peer = file.with_name("sender_peer.py")
-                        peer.write_text("class Peer(object):\n    pass\n")
-                    elif file == bootstrap:
-                        peer = file.with_name("other.py")
-                        peer.write_text("class Other(object):\n    pass\n")
-                    else:
-                        peer = None
-                    before = file.read_text()
-                    file.write_text(before + addition)
-                    try:
-                        failed = check()
-                        self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-                        tach = next(job for job in failed["tools"] if job["name"] == "tach")
-                        self.assertEqual((tach["status"], tach["exit_code"]),
-                                         ("violations", 1), failed["diagnostics"])
-                        self.assertTrue(any(item["job"] == "tach" and item["path"] ==
-                                            str(file.relative_to(root)) and item["line"] > 0
-                                            for item in failed["diagnostics"]),
-                                        failed["diagnostics"])
-                        changed = {item["path"]: item for item in
-                                   load_toml(root / "tach.toml")["modules"]}
-                        self.assertEqual(changed[file.relative_to(root / "src").with_suffix(
-                            "").as_posix().replace("/", ".")]["depends_on"],
-                                         modules[file.relative_to(root / "src").with_suffix(
-                                             "").as_posix().replace("/", ".")]["depends_on"])
-                    finally:
-                        file.write_text(before)
-                        if peer is not None:
-                            peer.unlink()
+            )
+            batches: list[list[tuple[Path, str]]] = []
+            for case in forbidden_imports:
+                for batch in batches:
+                    # Importing Sender from its contract changes Sender's generated
+                    # dependencies; keep that case separate from Sender's own import.
+                    if (all(other[0] != case[0] for other in batch) and
+                            not (case[0] == contract and any(other[0] == implementation
+                                                             for other in batch)) and
+                            not (case[0] == implementation and any(other[0] == contract
+                                                                   for other in batch))):
+                        batch.append(case)
+                        break
+                else:
+                    batches.append([case])
+            for batch in batches:
+                changes = {file: file.read_text() + addition for file, addition in batch}
+                if implementation in changes:
+                    changes[implementation.with_name("sender_peer.py")] = (
+                        "class Peer(object):\n    pass\n")
+                if bootstrap in changes:
+                    changes[bootstrap.with_name("other.py")] = "class Other(object):\n    pass\n"
+                with temporary_edits(changes):
+                    failed = check()
+                    for file, addition in batch:
+                        with self.subTest(file=file, addition=addition):
+                            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                            tach = next(job for job in failed["tools"] if job["name"] == "tach")
+                            self.assertEqual((tach["status"], tach["exit_code"]),
+                                             ("violations", 1), failed["diagnostics"])
+                            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                                str(file.relative_to(root)) and item["line"] > 0
+                                                for item in failed["diagnostics"]),
+                                            failed["diagnostics"])
+                            changed = {item["path"]: item for item in
+                                       load_toml(root / "tach.toml")["modules"]}
+                            self.assertEqual(changed[file.relative_to(root / "src").with_suffix(
+                                "").as_posix().replace("/", ".")]["depends_on"],
+                                             modules[file.relative_to(root / "src").with_suffix(
+                                                 "").as_posix().replace("/", ".")]["depends_on"])
 
             self.assertEqual(check()["exit_code"], 0)
             original_contract = contract.read_text()
@@ -1169,7 +1178,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                  "tests/demo/arbitrary", "-p", "test_sender.py"], root, 10)
             self.assertEqual(execution["exit_code"], 0, execution)
 
-            for file, addition, job, rule, native in (
+            cases = (
                 (sender, "\nclass Child(Sender):\n    pass\n", "contract-folders",
                  "CONCRETE_IMPLEMENTATION_BASE", False),
                 (stub, "\nclass Child(Sender): ...\n", "contract-folders",
@@ -1191,29 +1200,40 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                  "CONCRETE_IMPLEMENTATION_IMPORT", True),
                 (peer, "import demo.arbitrary.sender\n", "contract-folders",
                  "CONCRETE_IMPLEMENTATION_IMPORT", True),
-            ):
-                with self.subTest(file=file, rule=rule):
-                    original = file.read_text()
-                    file.write_text(original + addition)
-                    try:
-                        failed = check()
-                        self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-                        responsible = next(item for item in failed["tools"] if item["name"] == job)
-                        self.assertEqual((responsible["status"], responsible["exit_code"]),
-                                         ("violations", 1))
-                        self.assertTrue(any(item["rule"] == rule and item["path"] ==
-                                            str(file.relative_to(root)) and item["line"] > 0 and
-                                            item["column"] > 0 and not item["is_infrastructure_error"]
-                                            for item in failed["diagnostics"]), failed["diagnostics"])
-                        if native:
-                            tach = next(item for item in failed["tools"] if item["name"] == "tach")
-                            self.assertEqual((tach["status"], tach["exit_code"]),
+            )
+            batches: list[list[tuple[Path, str, str, str, bool]]] = []
+            for case in cases:
+                for batch in batches:
+                    if all(other[0] != case[0] for other in batch):
+                        batch.append(case)
+                        break
+                else:
+                    batches.append([case])
+            for batch in batches:
+                with temporary_edits({file: file.read_text() + addition
+                                      for file, addition, *_ in batch}):
+                    failed = check()
+                    self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                    for file, _, job, rule, native in batch:
+                        with self.subTest(file=file, rule=rule):
+                            responsible = next(item for item in failed["tools"]
+                                               if item["name"] == job)
+                            self.assertEqual((responsible["status"], responsible["exit_code"]),
                                              ("violations", 1))
-                            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
-                                                str(file.relative_to(root)) for item in
-                                                failed["diagnostics"]))
-                    finally:
-                        file.write_text(original)
+                            self.assertTrue(any(item["rule"] == rule and item["path"] ==
+                                                str(file.relative_to(root)) and item["line"] > 0 and
+                                                item["column"] > 0 and
+                                                not item["is_infrastructure_error"]
+                                                for item in failed["diagnostics"]),
+                                            failed["diagnostics"])
+                            if native:
+                                tach = next(item for item in failed["tools"]
+                                            if item["name"] == "tach")
+                                self.assertEqual((tach["status"], tach["exit_code"]),
+                                                 ("violations", 1))
+                                self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                                                    str(file.relative_to(root)) for item in
+                                                    failed["diagnostics"]))
 
             for file, addition in (
                 (sender, "\nclass Peer(Service):\n    pass\n"),
