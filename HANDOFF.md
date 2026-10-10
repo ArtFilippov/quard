@@ -22,6 +22,15 @@ made yet.
   `test_generated_semantic_boundaries_full_consumer` 44.07 s;
   `test_generated_package_facades_full_consumer_check` 33.55 s. These are
   integration/consumer checks, not fixture setup.
+- The JSON records 408 test calls totaling 645.55 s (excluding setup and
+  teardown); 296 calls exceed 100 ms, and 74 exceed 1 s. The slowest 30
+  account for 79% of total test-call time. This is one run, not a baseline;
+  the 649.65 s above is elapsed suite time, not the sum of test calls.
+- `test_durations.png` at the repository root plots the slowest 30 by name
+  and all 408 by duration rank. Rebuild from the local timing report with
+  `uv run --no-project --with matplotlib python scripts/plot_test_durations.py /tmp/opencode/quard-test-durations.json test_durations.png`.
+  Matplotlib is used ephemerally; it is not a project dependency. The timing
+  JSON remains local and is not committed.
 - `uv run --locked --group dev python -B -m unittest discover -s tests -v`:
   exit 0; 388 tests in 617.50 s, 1 skipped.
 - `uv run --locked --group dev python check.py`: exit 1, 5087 diagnostics,
