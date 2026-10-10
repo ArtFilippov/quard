@@ -150,6 +150,62 @@ full consumer checks.
   `check.py`: exit 1, 5148 native diagnostics, 0 infrastructure errors;
   see `.quard/reports/latest.json` for unresolved findings.
 
+## Architecture-suite rerun and clarified next step (10 October 2026)
+
+Reran all four `tests/quard/architecture_draft/test_*.py` files with:
+
+```bash
+uv run --locked --group dev python -B -m pytest tests/quard/architecture_draft \
+  -q -p no:tach -p no:cacheprovider --pytest-durations=60 \
+  --pytest-durations-min=0.005 \
+  --pytest-durations-json=/tmp/opencode/quard-architecture-rerun.json
+```
+
+- Exit 0: 46 tests and 93 subtests passed in 133.27 s elapsed. Test calls sum
+  to 132.34 s; fixtures/setup/teardown were negligible. Per-file test-call
+  totals: configured architecture (28) 46.21 s, review follow-up (4) 33.22 s,
+  architecture draft (9) 27.57 s, adoption consumer (5) 25.35 s. Timing JSON
+  is local, not committed; these figures are one run, not a stable baseline.
+- Slowest call: `test_generated_value_contracts_and_independent_forbidden_exposures`
+  22.91 s, with 13 full `NativeCheckRunner` invocations. Separately instrumented,
+  those checks took 29.03 s of cumulative report wall time; cumulative job
+  durations were 27.93 s `pylint-production`, 15.79 s `pylint-tests`, and
+  17.89 s `pyright`. Jobs run concurrently, so do not add their durations to
+  estimate elapsed time. Four `test_review_followup.py` calls took 6.28–9.04 s
+  each and contain 11 full checks in total. The already-focused mutation loops
+  generally take about 3–5 s per test. No code or analyzer policy changed in
+  this rerun; the checkout-wide `check.py` was not rerun.
+
+**Latest user decision (supersedes the proposed next-step implementation in the
+earlier sections):** Preserve the `NativeCheckRunner` report path in these tests,
+but execute only the jobs whose diagnostics each test actually verifies. For
+architecture scenarios that verify native imports/boundaries, the selected real
+job is `tach` (`tach-external` only for external-dependency cases). Other tests
+select their actual jobs, such as `contract-folders`, `dependency-types`,
+`outer-classes`, `pylint-production`, or `pylint-tests`. Tests of job independence
+select exactly the interacting jobs. Do not replace the runner with direct
+`analyze()` calls as the main approach, nor execute unrelated jobs and fake their
+success. Preserve real native output, statuses, exit codes, paths, raw logs and
+positioned findings of every selected job. A selectively executed test report is
+not proof that the entire consumer check passed. Ordinary production `check.py`
+must continue to run its complete configured profile, without new filters,
+baselines or relaxed limits.
+
+Implementation investigation: `NativeCheckRunner.run()` in
+`src/quard/check_runner/native_check_runner.py` calls `make_jobs()` then
+`capture_clone_batch()` **before** `run_jobs()`. Selecting inside `run_jobs()` or
+faking unrelated outputs is too late: clone work may already have executed.
+Prefer test-only selection of job definitions before `capture_clone_batch()`;
+check how this interacts with automatic report entries for skipped optional jobs,
+mandatory Pylint in normal runs, and existing tests that patch `make_jobs()` to
+simulate worker errors. Assert the selected tool names as well as their real
+results so missing or accidental jobs cannot silently pass. Start with the
+13-check draft test and the 11-check review follow-ups, then apply the same
+selection to other architecture tests where a full job set is unnecessary.
+Compare the same-file and whole-directory pytest-durations profiles before and
+after; verify the full unittest suite and the real checkout `check.py` per
+`AGENTS.md`, recording any unresolved native diagnostics faithfully.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's
