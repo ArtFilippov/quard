@@ -510,7 +510,7 @@ uv run --locked --group dev python check.py
 To profile the test suite with the pinned `pytest-durations` plugin:
 
 ```bash
-uv run --locked --group dev python -B -m pytest tests -q -p no:tach \
+uv run --locked --group dev python -B -m pytest tests -q -p no:tach -p no:cacheprovider \
   --pytest-durations=30
 ```
 
@@ -518,7 +518,8 @@ uv run --locked --group dev python -B -m pytest tests -q -p no:tach \
 against this checkout's generated architecture; the normal `check.py` command
 still runs the native Tach job. Pytest collects test files that the `unittest`
 discovery hook does not include, so compare their test counts when interpreting
-the profile.
+the profile. `-p no:cacheprovider` keeps pytest from writing a cache into the
+checkout, which the source-install cleanliness test rejects.
 
 Quard's implementation lives in `src/quard/`. Root Python commands are consumer
 entry points. The checkout has generated

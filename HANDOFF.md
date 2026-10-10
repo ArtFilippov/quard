@@ -103,10 +103,30 @@ post-batching estimate is 180–200 s for this file; a 20–50 s target is a
   targeted test and per-job report durations, then move assertions to the
   narrowest real interface and compare timings with the original coverage.
 
-No implementation of this split has been made yet. After changes follow
-`AGENTS.md`: run locked dev sync, the full unittest suite, and the checkout's
-full `check.py`; report the real exit code and native diagnostics. Run relevant
-consumer checks if a consumer is changed. Do not use `tach sync` or relax checks.
+## Configured-architecture optimization (10 October 2026)
+
+Implemented the split in `test_configured_architecture_draft.py`. Mutation cases
+now use the actual discovered production/test scope with the real folder,
+dependency-type, placement and outer-class analyzers. Native Tach mutations use
+the actual Tach adapter on regenerated configuration. Generated roles and public
+exports use `render(root)`. Initial full consumer checks, the real Pylint profiles,
+runtime assertions and real full-check failure-propagation coverage remain.
+
+- Same-file pytest profile (`-p no:tach`): 28 passing calls and 46 passing
+  subtests; 181.42 s before, 47.63 s after (elapsed). Sum of test calls:
+  180.37 s before, 46.53 s after. Timing reports are local at
+  `/tmp/opencode/quard-architecture-before.json` and
+  `/tmp/opencode/quard-architecture-after.json`. Facades: 32.89 → 3.33 s;
+  semantic boundaries: 24.93 → 3.38 s; role matrix: 23.82 → 3.47 s;
+  envelopes/main: 23.48 → 3.71 s; external contracts: 19.70 → 3.31 s.
+- Pytest should use `-p no:cacheprovider` (now in README), or
+  `-o cache_dir=/tmp/opencode/quard-pytest-cache`: its default `.pytest_cache/`
+  inside the checkout breaks the source-install test's clean-tree assertion.
+  The default cache created during profiling was removed.
+- `uv sync --locked --group dev`: exit 0. Final full unittest: 388 tests,
+  1 skipped, exit 0, 420.755 s. Checkout `check.py`: exit 1,
+  5140 native diagnostics, 0 infrastructure errors; see
+  `.quard/reports/latest.json`. These native findings remain unresolved.
 
 ## Open work
 
@@ -120,9 +140,9 @@ consumer checks if a consumer is changed. Do not use `tach sync` or relax checks
    assertion expects `INVALID_CHECKS` for duplicate TOML, which produces
    `INVALID_CONFIG`. Investigate and fix the test and discovery mismatch before
    treating pytest as the canonical green suite.
-3. Carry out the agreed configured-architecture split above, then re-profile
-   tests taking more than one second. Other slow calls include source builds,
-   fresh-process Pylint compatibility regressions and real wheel runs. Keep
+3. Re-profile remaining tests taking more than one second. Other slow calls
+   include source builds, fresh-process Pylint compatibility regressions and
+   real wheel runs. Keep
    real integration coverage; use per-job report durations before changing a loop.
 
 ## Suggested skills

@@ -19,6 +19,12 @@ sys.path.insert(0, str(QUARD / "tests"))
 
 from quard._common import QuardError, capture, load_toml, read_json, write_json
 from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
+from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
+from quard.contract_analysis.dependency_type_utils import analyze as dependency_types
+from quard.folder_analysis.folder_utils import analyze as contract_folders
+from quard.outer_classes_worker_utils import analyze as outer_classes
+from quard.test_placement_analysis.placement_utils import analyze as placement_analysis
+from quard.tach_worker_utils import run as native_tach
 from offline_fixtures import CATALOG, create_repo, fake_tools, native_result
 from legacy_clone_fixture_utils import historical_cli
 from mutation_fixture_utils import temporary_edits
@@ -440,6 +446,35 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         configure(root, initial=True, plugins=plugins, catalog=catalog)
         return utility
 
+    def focused_diagnostics(self, root: Path, job: str) -> list[dict[str, Any]]:
+        """Exercise a real rule against the same discovered scope as a full check."""
+        policy = ConfiguredConsumerPolicy(root)
+        files = policy.files()
+        paths = sorted(files["production"] + files["tests"])
+        if job == "contract-folders":
+            diagnostics, error = contract_folders(root, paths)
+        elif job == "dependency-types":
+            diagnostics, error = dependency_types(root, paths)
+        elif job == "test-placement":
+            diagnostics, error = placement_analysis(root, files["production"], files["tests"],
+                                                    policy.scope()["test_directory_names"])
+        elif job == "outer-classes":
+            diagnostics, error = outer_classes(root, paths)
+        else:
+            raise AssertionError(f"Unknown focused job: {job}")
+        self.assertIsNone(error, diagnostics)
+        self.assertFalse(any(item.get("is_infrastructure_error") for item in diagnostics),
+                         diagnostics)
+        return diagnostics
+
+    def focused_tach(self, root: Path, mode: str = "check") -> dict[str, Any]:
+        regenerate(root)
+        result = native_tach(mode, root)
+        self.assertIsNone(result["execution_error"], result)
+        self.assertFalse(any(item.get("is_infrastructure_error") for item in
+                             result["diagnostics"]), result)
+        return result
+
     def test_generated_directory_groups_full_consumer_check(self):
         with TemporaryDirectory(prefix="quard-multi-package-") as directory:
             root = Path(directory)
@@ -467,7 +502,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 self.assertEqual(apply_utils.main(), 0)
             self.assertEqual((root / "tach.toml").read_bytes(), expected)
             (root / "tach.toml").unlink()
-            self.assertEqual(NativeCheckRunner().run(root)["exit_code"], 0)
+            self.assertTrue(regenerate(root))
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             self.assertEqual((root / "tach.toml").read_bytes(), expected)
             execution = capture([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); " +
                                  "from other.group.deep.operations_utils import inspect; " +
@@ -478,33 +514,23 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             for suffix in (".py", ".pyi"):
                 direct = root / f"src/root{suffix}"
                 direct.write_text("from typing import Protocol\nclass Root(Protocol): ...\n")
-                rejected = NativeCheckRunner().run(root)
-                self.assertEqual((rejected["exit_code"],
-                                  rejected["summary"]["infrastructure_errors"]), (1, 0),
-                                 rejected["diagnostics"])
+                diagnostics = self.focused_diagnostics(root, "contract-folders")
                 self.assertTrue(any(d["rule"] == "SOURCE_ROOT_LAYOUT" and
                                     d["path"] == f"src/root{suffix}" and
                                     d["line"] == d["column"] == 1
-                                    for d in rejected["diagnostics"]))
-                self.assertEqual(next(job for job in rejected["tools"] if job["name"] ==
-                                      "contract-folders")["status"], "violations")
+                                    for d in diagnostics), diagnostics)
                 direct.unlink()
 
             (root / "src/root.txt").write_text("unrelated")
-            self.assertEqual(NativeCheckRunner().run(root)["exit_code"], 0)
+            self.assertEqual(self.focused_diagnostics(root, "contract-folders"), [])
             (root / "src/root.txt").unlink()
             utility.write_text(utility.read_text() +
                                "from demo.domain import api\n")
-            rejected = NativeCheckRunner().run(root)
-            self.assertEqual((rejected["exit_code"],
-                              rejected["summary"]["infrastructure_errors"]), (1, 0),
-                             rejected["diagnostics"])
-            self.assertEqual((next(job for job in rejected["tools"] if job["name"] == "tach")
-                              ["status"], next(job for job in rejected["tools"] if job["name"] ==
-                              "tach")["exit_code"]), ("violations", 1))
-            self.assertTrue(any(d["tool"] == "tach" and d["path"] ==
+            rejected = self.focused_tach(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(d["path"] ==
                                 "src/other/group/deep/operations_utils.py"
-                                for d in rejected["diagnostics"]))
+                                for d in rejected["diagnostics"]), rejected)
             self.assertNotIn("demo.domain.api", next(item for item in
                              load_toml(root / "tach.toml")["modules"] if item["path"] ==
                              "other.group.deep.operations_utils")["depends_on"])
@@ -537,21 +563,17 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                             "result = Sender().first('ok')\n")
 
             def check(expected: int, rule: str | None = None, path: str | None = None):
-                report = NativeCheckRunner().run(root)
-                self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
-                                 (expected, 0), report["diagnostics"])
-                job = next(item for item in report["tools"] if item["name"] ==
-                           "contract-folders")
-                self.assertEqual((job["status"], job["exit_code"]),
-                                 ("passed", 0) if rule is None else ("violations", 1),
-                                 report["diagnostics"])
+                diagnostics = self.focused_diagnostics(root, "contract-folders")
+                self.assertEqual(int(bool(diagnostics)), expected, diagnostics)
                 if rule is not None:
                     self.assertTrue(any(item["rule"] == rule and item["path"] == path and
-                                        item["line"] > 0 and item["column"] > 0 for item in
-                                        report["diagnostics"]), report["diagnostics"])
-                return report
+                                         item["line"] > 0 and item["column"] > 0 for item in
+                                         diagnostics), diagnostics)
 
-            clean = check(0)
+            clean = NativeCheckRunner().run(root)
+            self.assertEqual((clean["exit_code"], clean["summary"]["infrastructure_errors"]),
+                             (0, 0), clean["diagnostics"])
+            check(0)
             self.assertTrue(all(item["status"] in {"passed", "skipped"} for item in
                                 clean["tools"]))
             config = load_toml(root / "tach.toml")
@@ -598,7 +620,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                         check(1, rule, str(file.relative_to(root)))
                         if file == group:
                             exposed = next(item["expose"] for item in
-                                           load_toml(root / "tach.toml")["interfaces"] if
+                                           generated_policy.render(root)[0]["interfaces"] if
                                            item["from"] == [r"^demo\.arbitrary$"])
                             self.assertEqual(exposed, [])
                     finally:
@@ -621,13 +643,10 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             stub.write_text(original_stub)
             ancestor.write_text(original_ancestor)
             wire.write_text("from demo.arbitrary import Sender\nresult = Sender().first('ok')\n")
-            rejected = NativeCheckRunner().run(root)
-            self.assertEqual((rejected["exit_code"], rejected["summary"]["infrastructure_errors"]),
-                             (1, 0), rejected["diagnostics"])
-            self.assertEqual(next(item for item in rejected["tools"] if item["name"] == "tach")
-                             ["status"], "violations")
-            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
-                                str(wire.relative_to(root)) for item in rejected["diagnostics"]))
+            rejected = self.focused_tach(root)
+            self.assertEqual(rejected["exit_code"], 1, rejected)
+            self.assertTrue(any(item["path"] == str(wire.relative_to(root))
+                                for item in rejected["diagnostics"]), rejected)
 
     def test_generated_multiple_contracts_combined_groups_and_mixed_roles(self):
         with TemporaryDirectory(prefix="quard-group-roles-") as directory:
@@ -698,12 +717,11 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             bridge.write_text(before.replace("class Bridge(Combined):", "class Bridge(Service):")
                               .replace("from other.group.deep.combined import Combined",
                                        "from demo.arbitrary.service import Service"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
+            failed = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "CROSS_GROUP_CONTRACT" and
                                 item["path"] == "src/other/group/deep/bridge.py" and
                                 item["line"] == 3 and item["column"] == 1
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in failed), failed)
             bridge.write_text(before)
 
             # Source and stubs are checked separately, even when the source passes.
@@ -712,23 +730,21 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             stub.write_text(before_stub.replace("class Bridge(Combined):", "class Bridge(Service):")
                             .replace("from other.group.deep.combined import Combined",
                                      "from demo.arbitrary.service import Service"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
+            failed = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "CROSS_GROUP_CONTRACT" and
                                 item["path"] == "src/other/group/deep/bridge.pyi"
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in failed), failed)
             stub.write_text(before_stub)
 
             # A concrete class in the same module must not acquire a Contract role.
             extra.write_text(extra.read_text() + "\nclass Accidental(Extra):\n"
                              "    def third(self) -> str: return 'ok'\n")
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
+            failed = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "MIXED_MODULE_ROLES" and
                                 item["path"] == "src/demo/arbitrary/extra.py" and
                                 item["line"] > 0 and item["column"] > 0
-                                for item in failed["diagnostics"]), failed["diagnostics"])
-            self.assertEqual(next(item for item in load_toml(root / "tach.toml")["modules"]
+                                for item in failed), failed)
+            self.assertEqual(next(item for item in generated_policy.render(root)[0]["modules"]
                                   if item["path"] == "demo.arbitrary.extra")["layer"],
                              "Infrastructure")
             extra.write_text(extra.read_text().split("\nclass Accidental")[0] + "\n")
@@ -737,12 +753,11 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             extra_stub = extra.with_suffix(".pyi")
             original_stub = extra_stub.read_text()
             extra_stub.write_text("class Extra(object):\n    def third(self) -> str: ...\n")
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
+            failed = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "CONFLICTING_MODULE_ROLE" and
                                 item["path"] == "src/demo/arbitrary/extra.pyi" and
                                 item["line"] == item["column"] == 1
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in failed), failed)
             extra_stub.write_text(original_stub)
 
             # An unresolved customer base must not select a group by guesswork.
@@ -750,11 +765,10 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                               .replace("from other.group.deep.combined import Combined",
                                        "from other.group.deep.combined import Combined\n"
                                        "from demo.absent import Ghost"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
+            failed = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "UNRESOLVED_GROUP_OWNER" and
                                 item["path"] == "src/other/group/deep/bridge.py"
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in failed), failed)
 
     def test_generated_exact_external_inherited_contracts_full_check(self):
         with TemporaryDirectory(prefix="quard-external-contracts-") as directory:
@@ -824,15 +838,13 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 facade.write_text(original + export + "__all__ = ['Unrelated']\n")
                 use.write_text("from other.group.deep.external_api import Unrelated\n"
                                + original_use)
-                failed = check()
-                self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-                self.assertEqual(next(job for job in failed["tools"] if job["name"] ==
-                                      "tach")["status"], "violations")
-                self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                failed = self.focused_tach(root)
+                self.assertEqual(failed["exit_code"], 1, failed)
+                self.assertTrue(any(item["path"] ==
                                     "src/other/group/deep/external_utils.py" and
                                     "Unrelated" in item["message"] for item in
-                                    failed["diagnostics"]), failed["diagnostics"])
-                interfaces = [item for item in load_toml(root / "tach.toml")["interfaces"]
+                                    failed["diagnostics"]), failed)
+                interfaces = [item for item in generated_policy.render(root)[0]["interfaces"]
                               if item["from"] == [r"^other\.group\.deep\.external_api$"]]
                 self.assertFalse(any(r"^Unrelated$" in item["expose"] for item in interfaces))
             facade.write_text(original)
@@ -842,31 +854,28 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             implementation.with_suffix(".pyi").write_text(original_stub.replace(
                 "UserList[str]", "UserDict[str, str]").replace(
                     "from collections import UserList", "from collections import UserDict"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            diagnostics = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "UNRESOLVED_EXTERNAL_CONTRACT" and
                                 item["path"] == "src/demo/arbitrary/external_items.pyi" and
                                 item["line"] > 0 and item["column"] > 0
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in diagnostics), diagnostics)
             implementation.with_suffix(".pyi").write_text(original_stub)
 
             implementation.with_suffix(".pyi").write_text(original_stub.replace(
                 "UserList[str]", "UserList[int]"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            diagnostics = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "UNRESOLVED_EXTERNAL_CONTRACT" and
                                 item["path"] == "src/demo/arbitrary/external_items.pyi"
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in diagnostics), diagnostics)
             implementation.with_suffix(".pyi").write_text(original_stub)
 
             implementation.write_text(implementation.read_text().replace(
                 "class ExternalItems", "UserList = object\n\nclass ExternalItems"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            diagnostics = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] in {"UNRESOLVED_GROUP_OWNER",
                                                  "UNRESOLVED_EXTERNAL_CONTRACT"} and
                                 item["path"] == "src/demo/arbitrary/external_items.py"
-                                for item in failed["diagnostics"]), failed["diagnostics"])
+                                for item in diagnostics), diagnostics)
             implementation.write_text(implementation.read_text().replace("UserList = object\n\n", ""))
 
             original_source = implementation.read_text()
@@ -874,34 +883,27 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                 "UserList = object\n"):
                 implementation.write_text(original_source.replace(
                     "class ExternalItems", replacement + "\nclass ExternalItems"))
-                failed = check()
-                self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                diagnostics = self.focused_diagnostics(root, "contract-folders")
                 self.assertTrue(any(item["rule"] == "UNRESOLVED_EXTERNAL_CONTRACT" and
                                     item["path"] == "src/demo/arbitrary/external_items.py" and
                                     item["line"] > 0 and item["column"] > 0
-                                    for item in failed["diagnostics"]), failed["diagnostics"])
-                self.assertEqual(next(job for job in failed["tools"] if job["name"] ==
-                                      "contract-folders")["status"], "violations")
+                                    for item in diagnostics), diagnostics)
             implementation.write_text(original_source)
 
             unproved = group / "unproved.py"
             unproved.write_text("class Unproved(UnknownBase):\n    pass\n")
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+            diagnostics = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "UNRESOLVED_GROUP_OWNER" and
                                 item["path"] == "src/demo/arbitrary/unproved.py" and
                                 item["line"] == item["column"] == 1 for item in
-                                failed["diagnostics"]), failed["diagnostics"])
+                                diagnostics), diagnostics)
             unproved.unlink()
 
             use.write_text(use.read_text() + "import tomlkit\n")
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-            self.assertEqual(next(job for job in failed["tools"] if job["name"] ==
-                                  "tach-external")["status"], "violations")
-            self.assertTrue(any(item["job"] == "tach-external" and
-                                item["rule"] == "UndeclaredExternalDependency" for item in
-                                failed["diagnostics"]), failed["diagnostics"])
+            failed = self.focused_tach(root, "check-external")
+            self.assertEqual(failed["exit_code"], 1, failed)
+            self.assertTrue(any(item["rule"] == "UndeclaredExternalDependency" for item in
+                                failed["diagnostics"]), failed)
 
     def test_reviewed_folder_rules_survive_generated_role_changes(self):
         with TemporaryDirectory(prefix="quard-reviewed-roles-") as directory:
@@ -1008,14 +1010,14 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                     "from other.group.deep.aliases import PublicService",
                     "from demo.arbitrary import service as service_module").replace(
                         "PublicService", "service_module.Service"))
-            module_import = check()
-            self.assertEqual(module_import["exit_code"], 0, module_import["diagnostics"])
-            self.assertEqual(next(item["depends_on"] for item in load_toml(
-                root / "tach.toml")["modules"] if item["path"] ==
+            module_import = self.focused_tach(root)
+            self.assertEqual(module_import["exit_code"], 0, module_import)
+            self.assertEqual(next(item["depends_on"] for item in generated_policy.render(
+                root)[0]["modules"] if item["path"] ==
                 "other.group.deep.operations_utils"), ["demo.arbitrary.service"])
             utility.write_text(original_utility)
             utility_stub.write_text(original_utility_stub)
-            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
 
             forbidden_imports = (
                 (utility, "\nfrom demo.arbitrary.sender import Sender\n"),
@@ -1048,56 +1050,48 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 if bootstrap in changes:
                     changes[bootstrap.with_name("other.py")] = "class Other(object):\n    pass\n"
                 with temporary_edits(changes):
-                    failed = check()
+                    failed = self.focused_tach(root)
                     for file, addition in batch:
                         with self.subTest(file=file, addition=addition):
-                            self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-                            tach = next(job for job in failed["tools"] if job["name"] == "tach")
-                            self.assertEqual((tach["status"], tach["exit_code"]),
-                                             ("violations", 1), failed["diagnostics"])
-                            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
+                            self.assertEqual(failed["exit_code"], 1, failed)
+                            self.assertTrue(any(item["path"] ==
                                                 str(file.relative_to(root)) and item["line"] > 0
                                                 for item in failed["diagnostics"]),
-                                            failed["diagnostics"])
+                                            failed)
                             changed = {item["path"]: item for item in
-                                       load_toml(root / "tach.toml")["modules"]}
+                                       generated_policy.render(root)[0]["modules"]}
                             self.assertEqual(changed[file.relative_to(root / "src").with_suffix(
                                 "").as_posix().replace("/", ".")]["depends_on"],
                                              modules[file.relative_to(root / "src").with_suffix(
                                                  "").as_posix().replace("/", ".")]["depends_on"])
 
-            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             original_contract = contract.read_text()
             contract.write_text(original_contract +
                                 "\nfrom other.group.deep.aliases import PublicService\n")
-            cyclic = check()
-            self.assertEqual(cyclic["exit_code"], 1, cyclic["diagnostics"])
-            self.assertEqual(next(job for job in cyclic["tools"] if job["name"] == "tach")[
-                "status"], "violations")
-            self.assertTrue(any(item["job"] == "tach" and item["rule"] ==
+            cyclic = self.focused_tach(root)
+            self.assertEqual(cyclic["exit_code"], 1, cyclic)
+            self.assertTrue(any(item["rule"] ==
                                 "cyclic-dependency" for item in cyclic["diagnostics"]),
-                            cyclic["diagnostics"])
+                            cyclic)
             contract.write_text(original_contract)
-            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             root_file = root / "src/direct.py"
             root_file.write_text("from demo.arbitrary.service import Service\n")
-            root_failure = check()
-            self.assertEqual(root_failure["exit_code"], 1, root_failure["diagnostics"])
+            root_failure = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "SOURCE_ROOT_LAYOUT" and item["path"] ==
-                                "src/direct.py" for item in root_failure["diagnostics"]),
-                            root_failure["diagnostics"])
+                                "src/direct.py" and item["line"] == item["column"] == 1
+                                for item in root_failure), root_failure)
             root_file.unlink()
             original_utility = utility.read_text()
             utility.write_text(original_utility + "\nimport tomlkit\n")
-            external = check()
-            self.assertEqual(external["exit_code"], 1, external["diagnostics"])
-            self.assertEqual(next(job for job in external["tools"] if job["name"] ==
-                                  "tach-external")["status"], "violations")
-            self.assertTrue(any(item["job"] == "tach-external" and item["path"] ==
+            external = self.focused_tach(root, "check-external")
+            self.assertEqual(external["exit_code"], 1, external)
+            self.assertTrue(any(item["path"] ==
                                 str(utility.relative_to(root)) for item in
-                                external["diagnostics"]), external["diagnostics"])
+                                external["diagnostics"]), external)
             utility.write_text(original_utility)
-            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             # Exact/unused is checked by the pinned native adapter; regeneration
             # deliberately removes this manually inserted unused declaration.
             config = load_toml(root / "tach.toml")
@@ -1110,7 +1104,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             self.assertEqual(native["exit_code"], 1, native)
             self.assertIn("unused-dependency", {item["rule"] for item in
                           json.loads(native["stdout"])["diagnostics"]})
-            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             self.assertEqual((root / "tach.toml").read_bytes(), expected)
 
     def test_generated_full_static_and_runtime_dependency_types(self):
@@ -1211,29 +1205,25 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                     batches.append([case])
             for batch in batches:
                 with temporary_edits({file: file.read_text() + addition
-                                      for file, addition, *_ in batch}):
-                    failed = check()
-                    self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
+                                       for file, addition, *_ in batch}):
+                    diagnostics = self.focused_diagnostics(root, "contract-folders")
+                    native_result_tach = (self.focused_tach(root) if any(case[-1] for case in batch)
+                                          else None)
                     for file, _, job, rule, native in batch:
                         with self.subTest(file=file, rule=rule):
-                            responsible = next(item for item in failed["tools"]
-                                               if item["name"] == job)
-                            self.assertEqual((responsible["status"], responsible["exit_code"]),
-                                             ("violations", 1))
+                            self.assertEqual(job, "contract-folders")
                             self.assertTrue(any(item["rule"] == rule and item["path"] ==
                                                 str(file.relative_to(root)) and item["line"] > 0 and
                                                 item["column"] > 0 and
-                                                not item["is_infrastructure_error"]
-                                                for item in failed["diagnostics"]),
-                                            failed["diagnostics"])
+                                                not item.get("is_infrastructure_error")
+                                                for item in diagnostics), diagnostics)
                             if native:
-                                tach = next(item for item in failed["tools"]
-                                            if item["name"] == "tach")
-                                self.assertEqual((tach["status"], tach["exit_code"]),
-                                                 ("violations", 1))
-                                self.assertTrue(any(item["job"] == "tach" and item["path"] ==
-                                                    str(file.relative_to(root)) for item in
-                                                    failed["diagnostics"]))
+                                self.assertIsNotNone(native_result_tach)
+                                self.assertEqual(native_result_tach["exit_code"], 1,
+                                                 native_result_tach)
+                                self.assertTrue(any(item["path"] == str(file.relative_to(root))
+                                                    for item in native_result_tach["diagnostics"]),
+                                                native_result_tach)
 
             for file, addition in (
                 (sender, "\nclass Peer(Service):\n    pass\n"),
@@ -1245,15 +1235,10 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                                      "class Sender(Service):\n    peer: Peer\n")
                 file.write_text(annotated)
                 try:
-                    failed = check()
-                    self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-                    dependency = next(item for item in failed["tools"] if item["name"] ==
-                                      "dependency-types")
-                    self.assertEqual((dependency["status"], dependency["exit_code"]),
-                                     ("violations", 1))
+                    diagnostics = self.focused_diagnostics(root, "dependency-types")
                     self.assertTrue(any(item["rule"] == "CONCRETE_DEPENDENCY_TYPE" and
                                         item["path"] == str(file.relative_to(root)) and
-                                        item["line"] > 0 for item in failed["diagnostics"]))
+                                        item["line"] > 0 for item in diagnostics), diagnostics)
                 finally:
                     file.write_text(original)
 
@@ -1263,39 +1248,36 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                 "value: 'demo.arbitrary.sender.Sender') -> "
                                 "'demo.arbitrary.sender.Sender': ...\n")
                 try:
-                    failed = check()
-                    self.assertEqual(failed["exit_code"], 1, failed["diagnostics"])
-                    dependency = next(item for item in failed["tools"] if item["name"] ==
-                                      "dependency-types")
-                    self.assertEqual((dependency["status"], dependency["exit_code"]),
-                                     ("violations", 1))
-                    matches = [item for item in failed["diagnostics"] if item["job"] ==
-                               "dependency-types" and item["path"] == str(file.relative_to(root))]
+                    diagnostics = self.focused_diagnostics(root, "dependency-types")
+                    matches = [item for item in diagnostics if item["path"] ==
+                               str(file.relative_to(root))]
                     self.assertEqual({item["symbol"] for item in matches},
                                      {"inspect_concrete.inspect_concrete.value",
                                       "inspect_concrete.inspect_concrete"})
                     self.assertTrue(all(item["line"] > 0 and item["column"] > 0 and
-                                        not item["is_infrastructure_error"] for item in matches))
+                                         not item.get("is_infrastructure_error") for item in matches))
                 finally:
                     file.write_text(original)
 
             misplaced = tests.with_name("test_wrong.py")
             misplaced.write_text(tests.read_text().replace("TestSender", "TestWrong"))
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
-            self.assertEqual(next(item for item in failed["tools"] if item["name"] ==
-                                  "test-placement")["status"], "violations")
+            diagnostics = self.focused_diagnostics(root, "test-placement")
+            self.assertTrue(any(item["path"] == str(misplaced.relative_to(root)) and
+                                item["line"] > 0 and item["column"] > 0 for item in diagnostics),
+                            diagnostics)
             misplaced.unlink()
             original_tests = tests.read_text()
             tests.write_text(original_tests + "\nclass TestExtra(unittest.TestCase):\n"
                              "    def test_first(self) -> None: pass\n")
-            failed = check()
-            self.assertEqual(failed["exit_code"], 1)
-            self.assertEqual(next(item for item in failed["tools"] if item["name"] ==
-                                  "outer-classes")["status"], "violations")
+            diagnostics = self.focused_diagnostics(root, "outer-classes")
+            self.assertTrue(any(item["rule"] == "MULTIPLE_OUTER_CLASSES" and
+                                item["path"] == str(tests.relative_to(root)) and item["line"] > 0
+                                for item in diagnostics), diagnostics)
             tests.write_text(original_tests)
-            restored = check()
-            self.assertEqual(restored["exit_code"], 0, restored["diagnostics"])
+            self.assertEqual(self.focused_diagnostics(root, "contract-folders"), [])
+            self.assertEqual(self.focused_diagnostics(root, "dependency-types"), [])
+            self.assertEqual(self.focused_diagnostics(root, "test-placement"), [])
+            self.assertEqual(self.focused_diagnostics(root, "outer-classes"), [])
 
     def test_generated_envelopes_and_unique_main_full_consumer(self):
         with TemporaryDirectory(prefix="quard-assembly-areas-") as directory:
@@ -1416,43 +1398,33 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             (main / "extra.py").write_text("")
             for file, addition, rule, native in violations:
                 with self.subTest(file=file, rule=rule):
-                    original = file.read_text() if file.exists() else None
-                    file.write_text((original or "") + addition)
-                    try:
-                        report = check()
-                        self.assertEqual(report["exit_code"], 1, report["diagnostics"])
-                        job = next(item for item in report["tools"] if item["name"] ==
-                                   "contract-folders")
-                        self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
+                    with temporary_edits({file: (file.read_text() if file.exists() else "") +
+                                          addition}):
+                        diagnostics = self.focused_diagnostics(root, "contract-folders")
                         self.assertTrue(any(item["rule"] == rule and item["path"] ==
                                             str(file.relative_to(root)) and item["line"] > 0 and
-                                            item["column"] > 0 and not item["is_infrastructure_error"]
-                                            for item in report["diagnostics"]), report["diagnostics"])
-                        tach = next(item for item in report["tools"] if item["name"] == "tach")
-                        self.assertEqual((tach["status"], tach["exit_code"]),
-                                         ("violations", 1) if native else ("passed", 0),
-                                         report["diagnostics"])
+                                            item["column"] > 0 and
+                                            not item.get("is_infrastructure_error")
+                                            for item in diagnostics), diagnostics)
                         if native:
-                            self.assertTrue(any(item["job"] == "tach" and item["path"] ==
-                                                str(file.relative_to(root)) for item in
-                                                report["diagnostics"]), report["diagnostics"])
-                    finally:
-                        if original is None:
-                            file.unlink()
+                            tach = self.focused_tach(root)
+                            self.assertEqual(tach["exit_code"], 1, tach)
+                            self.assertTrue(any(item["path"] == str(file.relative_to(root))
+                                                for item in tach["diagnostics"]), tach)
                         else:
-                            file.write_text(original)
+                            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
             (main / "extra.py").unlink()
             for duplicate in (root / "src/demo/main", root / "src/demo/arbitrary/envelopes/main"):
                 with self.subTest(duplicate=duplicate):
                     duplicate.mkdir()
-                    report = check()
-                    self.assertEqual(report["exit_code"], 1, report["diagnostics"])
+                    diagnostics = self.focused_diagnostics(root, "contract-folders")
                     self.assertTrue(any(item["rule"] == "MULTIPLE_MAIN_DIRECTORIES" and
                                         item["path"] == str(duplicate.relative_to(root)) and
                                         item["line"] == item["column"] == 1 for item in
-                                        report["diagnostics"]), report["diagnostics"])
+                                        diagnostics), diagnostics)
                     duplicate.rmdir()
-            self.assertEqual(check()["exit_code"], 0)
+            self.assertEqual(self.focused_diagnostics(root, "contract-folders"), [])
+            self.assertEqual(self.focused_tach(root)["exit_code"], 0)
 
     def test_generated_native_error_is_not_mistaken_for_success(self):
         root = self.generated_fixture()
@@ -1487,22 +1459,20 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             stub.write_text(source)
 
             def check(rule: str, file: Path):
-                report = NativeCheckRunner().run(root)
-                self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
-                                 (1, 0), report["diagnostics"])
-                jobs = {item["name"]: item for item in report["tools"]}
-                self.assertEqual((jobs["contract-folders"]["status"],
-                                  jobs["contract-folders"]["exit_code"]), ("violations", 1))
+                diagnostics = self.focused_diagnostics(root, "contract-folders")
                 self.assertTrue(any(item["rule"] == rule and item["path"] == str(
                     file.relative_to(root)) and item["line"] > 0 and item["column"] > 0
-                    and not item["is_infrastructure_error"] for item in report["diagnostics"]),
-                    report["diagnostics"])
-                exposed = next(item["expose"] for item in load_toml(root / "tach.toml")[
+                    and not item.get("is_infrastructure_error") for item in diagnostics),
+                    diagnostics)
+                config = generated_policy.render(root)[0]
+                exposed = next(item["expose"] for item in config[
                     "interfaces"] if item["from"] == [r"^demo\.arbitrary\.contract_alias$"])
                 self.assertNotIn("^Port$", exposed)
-                self.assertEqual((jobs["tach"]["status"], jobs["tach"]["exit_code"]),
-                                 ("violations", 1), report["diagnostics"])
-                modules = {item["path"]: item for item in load_toml(root / "tach.toml")["modules"]}
+                tach = self.focused_tach(root)
+                self.assertEqual(tach["exit_code"], 1, tach)
+                self.assertTrue(any(item["path"] == str(consumer.relative_to(root)) for item in
+                                    tach["diagnostics"]), tach)
+                modules = {item["path"]: item for item in config["modules"]}
                 self.assertNotIn("demo.arbitrary.contract_alias", modules[
                     "other.group.deep.operations_utils"]["depends_on"])
                 self.assertFalse((root / ".quard/architecture.ready.json").exists())
@@ -1522,15 +1492,14 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
 
             contract_stub = group / "service.pyi"
             contract_stub.write_text("class Service(object):\n    def first(self, value: str) -> str: ...\n")
-            report = NativeCheckRunner().run(root)
-            self.assertEqual((report["exit_code"], report["summary"]["infrastructure_errors"]),
-                             (1, 0), report["diagnostics"])
+            diagnostics = self.focused_diagnostics(root, "contract-folders")
             self.assertTrue(any(item["rule"] == "CONFLICTING_MODULE_ROLE" and item["path"] ==
-                                str(contract_stub.relative_to(root)) for item in report["diagnostics"]))
+                                str(contract_stub.relative_to(root)) for item in diagnostics),
+                            diagnostics)
             self.assertNotIn("^Service$", next(item["expose"] for item in
-                load_toml(root / "tach.toml")["interfaces"] if item["from"] ==
+                generated_policy.render(root)[0]["interfaces"] if item["from"] ==
                 [r"^demo\.arbitrary\.service$"]))
-            self.assertEqual(next(item["layer"] for item in load_toml(root / "tach.toml")[
+            self.assertEqual(next(item["layer"] for item in generated_policy.render(root)[0][
                 "modules"] if item["path"] == "demo.arbitrary.service"), "Infrastructure")
 
     def test_generated_real_failures_keep_independent_full_check_findings(self):
