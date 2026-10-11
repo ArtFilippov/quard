@@ -204,6 +204,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         "test_directory_names": test_directory_names or ["tests"]})
     for key, name in (("outer_classes", "outer-classes"),
                       ("free_function_placement", "free-function-placement"),
+                      ("leading_underscores", "leading-underscores"),
                       ("encapsulated_only", "encapsulated-only")):
         add_worker(key, name, full_scope)
     if constructor_purity:

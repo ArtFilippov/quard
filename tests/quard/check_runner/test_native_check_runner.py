@@ -86,8 +86,8 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools()
         report = self.run_report(fake)
         self.assertEqual((report["status"], report["exit_code"]), ("passed", 0))
-        self.assertEqual(len(seen), 18)
-        self.assertEqual(len({job["name"] for job in report["tools"]}), 20)
+        self.assertEqual(len(seen), 19)
+        self.assertEqual(len({job["name"] for job in report["tools"]}), 21)
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "constructor-purity")
                          ["status"], "skipped")
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "full")
@@ -106,7 +106,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         report = self.run_report(
             fake, "tests/test_value.py src/demo/domain/api.py tests/test_value.py")
         coverage = report["coverage"]["lcom4"]
-        self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 18))
+        self.assertEqual((report["exit_code"], coverage["mode"], len(seen)), (0, "selected", 19))
         self.assertEqual(coverage["selected_files"],
                          ["tests/test_value.py", "src/demo/domain/api.py"])
         self.assertEqual(coverage["analyzed_files"], coverage["selected_files"])
@@ -115,7 +115,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         full_scope = sorted(report["coverage"]["production"] + report["coverage"]["tests"])
         for name in ("method-decorators", "instance-fields", "class-contracts",
                      "contract-folders", "outer-classes", "free-function-placement",
-                     "encapsulated-only"):
+                     "leading-underscores", "encapsulated-only"):
             self.assertEqual(read_json(run_dir / f"{name}-files.json"), full_scope)
         self.assertEqual(read_json(run_dir / "test-placement-files.json")["production"],
                          report["coverage"]["production"])
@@ -128,7 +128,7 @@ class TestNativeCheckRunner(unittest.TestCase):
     def test_skipped_lcom4_still_runs_every_other_job(self):
         fake, seen = fake_tools()
         report = self.run_report(fake, "")
-        self.assertEqual((report["exit_code"], len(seen)), (0, 17))
+        self.assertEqual((report["exit_code"], len(seen)), (0, 18))
         self.assertNotIn("lcom4", seen)
         self.assertEqual(report["coverage"]["lcom4"], {"mode": "skipped", "requested": "",
                          "selected_files": [], "analyzed_files": []})
@@ -136,12 +136,13 @@ class TestNativeCheckRunner(unittest.TestCase):
         self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
         self.assertIn("encapsulated-only", seen)
         self.assertIn("free-function-placement", seen)
+        self.assertIn("leading-underscores", seen)
         validate(report, read_json(QUARD / "report.schema.json"))
 
     def test_malformed_lcom4_never_claims_analyzed_files(self):
         fake, seen = fake_tools({"lcom4": {"stdout": "not JSON", "code": 1}})
         report = self.run_report(fake, "src/demo/domain/api.py")
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 18))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 19))
         self.assertEqual(report["coverage"]["lcom4"]["selected_files"],
                          ["src/demo/domain/api.py"])
         self.assertEqual(report["coverage"]["lcom4"]["analyzed_files"], [])
@@ -153,7 +154,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools({"pyright": {"stdout": "broken", "code": 2},
                                  "pydoclint": {"stderr": message, "code": 1}})
         report = self.run_report(fake, serial=True)
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 18))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("error", 2, 19))
         self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
         self.assertTrue(any(item["is_infrastructure_error"] for item in report["diagnostics"]))
         self.assertEqual(next(job for job in report["tools"] if job["name"] == "pydoclint")
@@ -220,7 +221,7 @@ class TestNativeCheckRunner(unittest.TestCase):
 
         report = self.run_report(failing_capture, serial=True)
         self.assertEqual((report["status"], report["exit_code"], len(seen)),
-                         ("error", 2, 17))
+                         ("error", 2, 18))
         self.assertEqual({item["rule"] for item in report["diagnostics"]},
                          {"RUNNER_SUBPROCESS_ERROR", "DOC101"})
         jobs = {job["name"]: job for job in report["tools"]}
@@ -238,7 +239,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "stderr": "src/demo/domain/api.py:1: DOC101: Missing argument\n",
                                  "code": 1}})
         report = self.run_report(fake)
-        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 18))
+        self.assertEqual((report["status"], report["exit_code"], len(seen)), ("violations", 1, 19))
         self.assertEqual([(item["rule"], item["path"], item["line"])
                           for item in report["diagnostics"]],
                          [("DOC101", "src/demo/domain/api.py", 1)])
@@ -252,7 +253,7 @@ class TestNativeCheckRunner(unittest.TestCase):
                                          "pydoclint": {"stderr": message, "code": 1}})
                 report = self.run_report(fake, "")
                 self.assertEqual((report["status"], report["exit_code"], len(seen)),
-                                 ("error", 2, 17))
+                                 ("error", 2, 18))
                 self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
                 self.assertTrue(any(
                     item["is_infrastructure_error"] for item in report["diagnostics"]
@@ -269,12 +270,12 @@ class TestNativeCheckRunner(unittest.TestCase):
             with self.subTest(selection=selection):
                 fake, seen = fake_tools()
                 report = self.run_report(fake, selection)
-                self.assertEqual((report["exit_code"], len(seen)), (2, 17))
+                self.assertEqual((report["exit_code"], len(seen)), (2, 18))
                 self.assertIn("INVALID_LCOM_FILES", {d["rule"] for d in report["diagnostics"]})
         (self.root / ".quard/architecture.ready.json").unlink()
         fake, seen = fake_tools()
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 16))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 17))
         self.assertEqual(sum(job["status"] == "blocked" for job in report["tools"]), 2)
 
     def test_native_worker_violation_and_pyright_survive_skipped_lcom4(self):
@@ -402,7 +403,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             "max_module_lines = 400", "max_module_lines = 410"))
         fake, seen = fake_tools()
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 18))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 19))
         self.assertIn("READABILITY_NOT_APPLIED", {item["rule"] for item in report["diagnostics"]})
 
     def test_unapplied_scope_is_error_and_native_diagnostics_survive(self):
@@ -412,7 +413,7 @@ class TestNativeCheckRunner(unittest.TestCase):
         fake, seen = fake_tools({"pydoclint": {
             "stderr": "src/demo/domain/api.py:1: DOC101: Native issue\n", "code": 1}})
         report = self.run_report(fake)
-        self.assertEqual((report["exit_code"], len(seen)), (2, 18))
+        self.assertEqual((report["exit_code"], len(seen)), (2, 19))
         self.assertIn("SCOPE_NOT_APPLIED", {item["rule"] for item in report["diagnostics"]})
         self.assertIn("DOC101", {item["rule"] for item in report["diagnostics"]})
         self.assertTrue(any(d["is_infrastructure_error"] for d in report["diagnostics"]

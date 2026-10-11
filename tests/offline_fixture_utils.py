@@ -29,6 +29,7 @@ WORKERS = {
     "_test_placement_worker.py": "test-placement",
     "_outer_classes_worker.py": "outer-classes",
     "_free_function_placement_worker.py": "free-function-placement",
+    "_leading_underscores_worker.py": "leading-underscores",
     "_encapsulated_only_worker.py": "encapsulated-only",
     "_constructor_purity_worker.py": "constructor-purity",
 }

@@ -43,11 +43,11 @@ def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
     sender = ("from typing import override\nfrom demo.records.service import Service\n\n"
               + "class Sender(Service):\n"
               + "    def __init__(self) -> None:\n        super().__init__()\n"
-              + "        self._prefix: str = 'ready:'\n\n"
+              + "        self.prefix: str = 'ready:'\n\n"
               + "    @override\n    def first(self, value: str) -> str:\n"
               + "        return self.second(value)\n\n"
               + "    @override\n    def second(self, value: str) -> str:\n"
-              + "        return self._prefix + value\n")
+              + "        return self.prefix + value\n")
     (group / "sender.py").write_text(sender)
     (group / "sender.pyi").write_text(
         "from typing import override\nfrom demo.records.service import Service\n\n" +

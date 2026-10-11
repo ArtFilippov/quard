@@ -11,6 +11,7 @@ OPTIONAL_JOBS = {
     "instance_fields": "instance-fields", "class_contracts": "class-contracts",
     "contract_folders": "contract-folders", "test_placement": "test-placement",
     "outer_classes": "outer-classes", "free_function_placement": "free-function-placement",
+    "leading_underscores": "leading-underscores",
     "encapsulated_only": "encapsulated-only",
     "pyright": "pyright", "pydoclint": "pydoclint",
 }

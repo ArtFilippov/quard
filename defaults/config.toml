@@ -10,6 +10,7 @@ contract_folders = true
 test_placement = true
 outer_classes = true
 free_function_placement = true
+leading_underscores = true
 encapsulated_only = true
 pyright = true
 pydoclint = true

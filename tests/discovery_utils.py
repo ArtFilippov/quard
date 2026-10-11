@@ -26,8 +26,8 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
                   "restricted_targets", "consumer_policy", "dispatch_site_model",
                   "check_job", "check_runner", "clean_architecture_layers",
                   "installation", "outer_classes", "architecture_compatibility",
-                  "architecture_draft", "report_parsing",
-                  "free_function_placement"):
+                   "architecture_draft", "report_parsing",
+                   "free_function_placement", "leading_underscores"):
         directory = root / group
         suite.addTests(loader.discover(str(directory), pattern="test*.py",
                                        top_level_dir=str(directory)))

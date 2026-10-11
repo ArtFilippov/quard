@@ -182,6 +182,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `test_placement = true` | `test-placement` |
 | `outer_classes = true` | `outer-classes` |
 | `free_function_placement = true` | `free-function-placement` |
+| `leading_underscores = true` | `leading-underscores` (first-party names and paths) |
 | `encapsulated_only = true` | `encapsulated-only` |
 | `constructor_purity = false` | `constructor-purity` (opt in explicitly) |
 | `pyright = true` | `pyright` |
@@ -389,6 +390,21 @@ checked separately. Module-scope conditional declarations count, but methods and
 functions inside functions do not. Every class in a utilities module is reported.
 Read, parse, malformed-report and worker failures are infrastructure errors (exit 2);
 raw stdout and stderr remain archived alongside the standard positioned diagnostics.
+
+The independent `leading-underscores` job checks discovered production, test and
+companion-stub paths and Python bindings (including nested declarations, parameters,
+assignments, import aliases and stored receiver fields). It reports leading `_`
+in module and directory names once per discovered path component. The standalone `_`,
+Python-defined special names such as `__init__`, `__slots__` and `__all__`, and
+required `__init__.py`/`__main__.py` modules are allowed; invented `__custom__`
+names are not. Unaliased imports from libraries, external attributes and excluded
+paths are not checked. Set `[checks] leading_underscores = false` to skip only this
+job. It defaults to on for existing projects even before reinstall; reinstall adds
+the explicit setting. Existing Quard source and test names are deliberately reported
+by its own full check: migrate them when ready, or opt out explicitly. Enabled
+violations exit 1; parse, read and invalid worker output exit 2, with findings
+from other files retained. Source names have one-based positions; path components
+have no source position.
 
 The independent encapsulated-only job checks explicit method calls and property access
 restricted by a consumer-supplied identity decorator on a member or its class, including
