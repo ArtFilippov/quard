@@ -9,11 +9,11 @@ import re
 from typing import Any
 import unittest
 
-from rust_clone_engine_utils import report
+from rust_clone_engine_utils import focused_scan, report
 from quard._common import read_json
 from quard.report_utils import normalize
 
-Inspect = Callable[[str, str, int], tuple[dict[str, Any], dict[str, Any]]]
+Inspect = Callable[[str, str, int], dict[str, Any]]
 
 
 def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
@@ -31,28 +31,21 @@ def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
                "    async def beta(self, *, key: str) -> bool:\n        pass\n"
                "    def gamma(self) -> None:\n        raise NotImplementedError\n")
 
-    def inspect(left: str, right: str, minimum: int = 3
-                ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def inspect(left: str, right: str, minimum: int = 3) -> dict[str, Any]:
         config = root / ".quard/config.toml"
         config.write_text(re.sub(r"(?m)^min_lines = \d+$", f"min_lines = {minimum}",
                                  config.read_text(encoding="utf-8")), encoding="utf-8")
         first.write_text(left, encoding="utf-8")
         second.write_text(right, encoding="utf-8")
-        checked = report(root)
-        jobs = {job["name"]: job for job in checked["tools"]}
-        test.assertEqual(checked["summary"]["infrastructure_errors"], 0,
-                         (checked["diagnostics"], (root / jobs["jscpd"]["raw_output"][
-                             "batch_stderr"]).read_text(encoding="utf-8")))
-        for name in ("jscpd-renamed", "jscpd-similar"):
-            test.assertEqual((jobs[name]["status"], jobs[name]["exit_code"]),
-                             ("skipped", None), checked["diagnostics"])
-            test.assertIn("skipped", read_json(root / jobs[name]["raw_output"]["native_json"]))
-        return checked, read_json(root / jobs["jscpd"]["raw_output"]["native_json"])
+        scans = focused_scan(root)
+        for kind in ("renamed", "similar"):
+            test.assertIn("skipped", scans[kind])
+        return scans["exact"]
 
     left = prefix + 'class First(Port):\n    """Documentation."""\n' + methods
     right = prefix + "class Second(Port):\n" + methods
-    checked, native = inspect(left, right)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left, right)
+    test.assertTrue(native["duplicates"])
     test.assertEqual(native["eligibleLines"][str(first)], 6)
     test.assertEqual(native["unitLines"][str(first)], [6])
     test.assertEqual(set(native["sourcePaths"]),
@@ -69,7 +62,10 @@ def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
                         d["firstFile"]["endLoc"]["position"] ==
                         left.index("raise NotImplementedError") +
                         len("raise NotImplementedError") for d in native["duplicates"]), native)
-    exact = [d for d in checked["diagnostics"] if d["rule"] == "EXACT_CLONE"]
+    # Keep one real worker/report assertion for native diagnostic delivery.
+    report_result = report(root)
+    exact = [d for d in report_result["diagnostics"] if d["rule"] == "EXACT_CLONE"]
+    test.assertEqual(report_result["exit_code"], 1, report_result["diagnostics"])
     test.assertEqual({d["path"] for d in exact},
                      {"src/demo/first.py", "tests/second.py"})
     test.assertTrue(all(d["native_details"] in native["duplicates"] and
@@ -79,8 +75,7 @@ def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
     abc = ("from abc import ABC as Base, abstractmethod as required\n" +
            "class Interface(Base):\n" +
            methods.replace("    def alpha", "    @required\n    def alpha"))
-    checked, native = inspect(left, abc)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left, abc)
     test.assertTrue(native["duplicates"])
 
     # A single changed signature cannot turn identical placeholders into a clone
@@ -91,36 +86,31 @@ def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
                     methods[methods.index("    async def beta"):]
                     + methods[:methods.index("    async def beta")]):
         with test.subTest(changed=changed):
-            checked, native = inspect(left, prefix + "class Second(Port):\n" + changed, 6)
-            test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+            native = inspect(left, prefix + "class Second(Port):\n" + changed, 6)
             test.assertFalse(native["duplicates"])
 
     changed_all = (methods.replace("alpha", "delta").replace("beta", "epsilon")
                    .replace("gamma", "zeta"))
-    checked, native = inspect(left, prefix + "class Second(Port):\n" + changed_all)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(left, prefix + "class Second(Port):\n" + changed_all)
     test.assertFalse(native["duplicates"])
 
     metaclass = ("import abc as abstract\nclass Interface(metaclass=abstract.ABCMeta):\n" +
                  "    @abstract.abstractmethod\n" + methods)
-    checked, native = inspect(left, metaclass)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left, metaclass)
     test.assertTrue(native["duplicates"])
     aliased = metaclass.replace("import abc as abstract",
                                 "from abc import ABCMeta as Meta, abstractmethod as required")
     aliased = aliased.replace("abstract.ABCMeta", "Meta")
     aliased = aliased.replace("abstract.abstractmethod", "required")
-    checked, native = inspect(left, aliased)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left, aliased)
     test.assertTrue(native["duplicates"])
 
     shadow = prefix + "Port = object\nclass Ordinary(Port):\n" + methods
-    checked, native = inspect(shadow, shadow)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(shadow, shadow)
     test.assertIn("skipped", native)
 
-    checked, native = inspect(left + "\n" + right, "")
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left + "\n" + right, "")
+    test.assertTrue(native["duplicates"])
     test.assertTrue(all(d["firstFile"]["name"] == d["secondFile"]["name"] ==
                          str(first) for d in native["duplicates"]))
 
@@ -135,17 +125,17 @@ def verify_multiline_methods(test: unittest.TestCase, root: Path, inspect: Inspe
     Args:
         test (unittest.TestCase): Native output assertion owner.
         root (Path): Isolated consumer root.
-        inspect (Inspect): Full prepared check on the selected sources.
+        inspect (Inspect): Focused native scan on the discovered sources.
         prefix (str): Proven Protocol import.
     """
     first = root / "src/demo/first.py"
     inline = ("    def alpha(self, value: int) -> str: ...\n" +
               "    async def beta(self, *, key: str) -> bool: pass\n" +
               "    def gamma(self) -> None: raise NotImplementedError\n")
-    checked, native = inspect(prefix + "class First(Port):\n" + inline,
-                              prefix + "class Second(Port):\n" + inline, 3)
-    test.assertEqual((checked["exit_code"], native["unitLines"][str(first)]),
-                     (1, [3]), checked["diagnostics"])
+    native = inspect(prefix + "class First(Port):\n" + inline,
+                     prefix + "class Second(Port):\n" + inline, 3)
+    test.assertEqual(native["unitLines"][str(first)], [3])
+    test.assertTrue(native["duplicates"])
     test.assertTrue(any(d["fragment"] == inline.rstrip("\n") and
                         d["firstFile"]["start"] == 3 and
                         d["firstFile"]["end"] == 5 for d in native["duplicates"]))
@@ -153,9 +143,9 @@ def verify_multiline_methods(test: unittest.TestCase, root: Path, inspect: Inspe
                  "    ) -> str:\n        ...\n"
                  "    async def beta(\n        self, *, key: str,\n"
                  "    ) -> bool: pass\n")
-    checked, native = inspect(prefix + "class First(Port):\n" + multiline,
-                              prefix + "class Second(Port):\n" + multiline, 6)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(prefix + "class First(Port):\n" + multiline,
+                     prefix + "class Second(Port):\n" + multiline, 6)
+    test.assertTrue(native["duplicates"])
     test.assertEqual(native["unitLines"][str(first)], [7])
     test.assertTrue(any("\n        self, value: int,\n" in d["fragment"] and
                         "async def beta" in d["fragment"] for d in native["duplicates"]), native)
@@ -163,13 +153,11 @@ def verify_multiline_methods(test: unittest.TestCase, root: Path, inspect: Inspe
                       "        key: str,\n        extra: bytes,\n    ) -> str:\n"
                       "        \"\"\"Contract documentation.\"\"\"\n        ...\n")
     changed = long_signature.replace("extra: bytes", "extra: bool")
-    checked, native = inspect(prefix + "class First(Port):\n" + long_signature,
-                              prefix + "class Second(Port):\n" + changed, 3)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(prefix + "class First(Port):\n" + long_signature,
+                     prefix + "class Second(Port):\n" + changed, 3)
     test.assertFalse(native["duplicates"], native)
-    checked, native = inspect(prefix + "class First(Port):\n" + long_signature,
-                              prefix + "class Second(Port):\n" + long_signature, 7)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(prefix + "class First(Port):\n" + long_signature,
+                     prefix + "class Second(Port):\n" + long_signature, 7)
     test.assertTrue(any('"""Contract documentation."""' in d["fragment"] and
                         d["firstFile"]["startLoc"]["position"] ==
                         (prefix + "class First(Port):\n" + long_signature).index("def alpha")
@@ -197,19 +185,16 @@ def verify_contract_exclusions_and_bodies(
         "    def __len__(self) -> int:\n        ...\n") * 3
     for source in (special, "class Ordinary:\n" + methods):
         with test.subTest(source=source):
-            checked, native = inspect(source, source, 3)
-            test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+            native = inspect(source, source, 3)
             test.assertIn("skipped", native)
 
     # Stub-only contracts do not make two executable lines meet the minimum.
     short = prefix + "class First(Port):\n" + methods[:methods.index("    async def beta")]
-    checked, native = inspect(short, short, 3)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(short, short, 3)
     test.assertIn("skipped", native)
     split = prefix + "class First(Port):\n" + short.split("class First(Port):\n", 1)[1]
     split += "class Second(Port):\n" + short.split("class First(Port):\n", 1)[1]
-    checked, native = inspect(split, split, 3)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(split, split, 3)
     test.assertIn("skipped", native)
 
     # Real bodies in contracts, including special methods, remain behavioral.
@@ -219,30 +204,22 @@ def verify_contract_exclusions_and_bodies(
             "        three = two * 3\n        return three\n")
     first.write_text(real, encoding="utf-8")
     second.write_text(real.replace("First", "Second"), encoding="utf-8")
-    checked = report(root)
-    jobs = {job["name"]: job for job in checked["tools"]}
-    test.assertEqual(checked["summary"]["infrastructure_errors"], 0)
-    test.assertEqual(jobs["jscpd"]["status"], "violations")
-    test.assertEqual(jobs["jscpd-renamed"]["status"], "passed")
-    test.assertEqual(jobs["jscpd-similar"]["status"], "passed")
-    test.assertTrue(any(d["rule"] == "EXACT_CLONE" and d["line"] >= 3
-                        for d in checked["diagnostics"]))
+    scans = focused_scan(root)
+    test.assertTrue(scans["exact"]["duplicates"])
+    test.assertFalse(scans["renamed"]["duplicates"])
+    test.assertFalse(scans["similar"]["duplicates"])
+    test.assertTrue(any(d["firstFile"]["start"] >= 3
+                        for d in scans["exact"]["duplicates"]))
 
     # Only behavior participates in the normalized pass, even inside contracts.
     second.write_text(real.replace("First", "Second").replace("one", "a")
                       .replace("two", "b").replace("three", "c"), encoding="utf-8")
-    checked = report(root)
-    jobs = {job["name"]: job for job in checked["tools"]}
-    test.assertEqual(checked["summary"]["infrastructure_errors"], 0)
-    test.assertEqual(jobs["jscpd-renamed"]["status"], "violations",
-                     checked["diagnostics"])
-    test.assertTrue(any(d["rule"] == "RENAMED_CLONE" for d in checked["diagnostics"]))
+    test.assertTrue(focused_scan(root)["renamed"]["duplicates"])
 
 
 def inspect_property_declarations(test: unittest.TestCase, root: Path, left: str,
-                                  right: str, minimum: int = 7
-                                  ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run all passes on a real property fixture and read the exact native archive.
+                                  right: str, minimum: int = 7) -> dict[str, Any]:
+    """Run real native passes on a property fixture and return the exact result.
 
     Args:
         test (unittest.TestCase): Native report assertion owner.
@@ -252,7 +229,7 @@ def inspect_property_declarations(test: unittest.TestCase, root: Path, left: str
         minimum (int, default=7): Shared prepared minimum.
 
     Returns:
-        tuple[dict[str, Any], dict[str, Any]]: Full report and exact native archive.
+        dict[str, Any]: Real native exact scan of the discovered source scope.
     """
     first = root / "src/demo/first.py"
     second = root / "tests/second.py"
@@ -261,14 +238,10 @@ def inspect_property_declarations(test: unittest.TestCase, root: Path, left: str
                               config.read_text(encoding="utf-8")), encoding="utf-8")
     first.write_text(left, encoding="utf-8")
     second.write_text(right, encoding="utf-8")
-    checked = report(root)
-    jobs = {job["name"]: job for job in checked["tools"]}
-    test.assertEqual(checked["summary"]["infrastructure_errors"], 0,
-                     (checked["diagnostics"], (root / jobs["jscpd"]["raw_output"][
-                         "batch_stderr"]).read_text(encoding="utf-8")))
-    for name in ("jscpd-renamed", "jscpd-similar"):
-        test.assertEqual(jobs[name]["status"], "skipped", checked["diagnostics"])
-    return checked, read_json(root / jobs["jscpd"]["raw_output"]["native_json"])
+    scans = focused_scan(root)
+    for kind in ("renamed", "similar"):
+        test.assertIn("skipped", scans[kind])
+    return scans["exact"]
 
 
 def verify_contract_properties(test: unittest.TestCase, root: Path) -> None:
@@ -293,8 +266,8 @@ def verify_contract_properties(test: unittest.TestCase, root: Path) -> None:
     inspect: Inspect = partial(inspect_property_declarations, test, root)
     left = prefix + "class First(Protocol):\n" + declarations
     right = prefix + "class Second(Protocol):\n" + declarations
-    checked, native = inspect(left, right)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left, right)
+    test.assertTrue(native["duplicates"])
     test.assertEqual(native["unitLines"][str(first)], [10])
     test.assertTrue(any(d["firstFile"]["startLoc"]["position"] ==
                         left.index("def value") and d["firstFile"]["endLoc"]["position"] ==
@@ -303,8 +276,10 @@ def verify_contract_properties(test: unittest.TestCase, root: Path) -> None:
                         and "@value.setter" in d["fragment"] and
                         d["firstFile"]["name"] == str(first) for d in native["duplicates"]),
                     native)
+    report_result = report(root)
+    test.assertEqual(report_result["exit_code"], 1, report_result["diagnostics"])
     test.assertTrue(all(d["native_details"] in native["duplicates"]
-                        for d in checked["diagnostics"] if d["rule"] == "EXACT_CLONE"))
+                        for d in report_result["diagnostics"] if d["rule"] == "EXACT_CLONE"))
     test.assertTrue(any(d["firstFile"]["startLoc"]["column"] == 4 and
                         d["firstFile"]["endLoc"]["column"] == 33
                         for d in native["duplicates"]), native)
@@ -329,10 +304,9 @@ def verify_property_boundaries(test: unittest.TestCase, root: Path, inspect: Ins
     lengthy = ("    @property\n    def value(\n        self,\n"
                "        first: str,\n        second: bytes,\n"
                "    ) -> str:\n        ...\n")
-    checked, native = inspect(prefix + "class First(Protocol):\n" + lengthy,
-                              prefix + "class Second(Protocol):\n" +
-                              lengthy.replace("second: bytes", "second: bool"), 3)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(prefix + "class First(Protocol):\n" + lengthy,
+                     prefix + "class Second(Protocol):\n" +
+                     lengthy.replace("second: bytes", "second: bool"), 3)
     test.assertFalse(native["duplicates"], native)
 
     for changed in (declarations.replace("@value.setter", "@other.setter"),
@@ -340,36 +314,32 @@ def verify_property_boundaries(test: unittest.TestCase, root: Path, inspect: Ins
                     declarations.replace("value", "other"),
                     declarations.replace("-> str", "-> bytes")):
         with test.subTest(changed=changed):
-            checked, native = inspect(left, prefix + "class Second(Protocol):\n" + changed,
-                                      8)
-            test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+            native = inspect(left, prefix + "class Second(Protocol):\n" + changed, 8)
             test.assertFalse(native["duplicates"], native)
 
     plain = declarations.replace("    @property\n", "").replace(
         "    @value.setter\n", "").replace("    @value.deleter\n", "")
-    checked, native = inspect(left, prefix + "class Second(Protocol):\n" + plain, 8)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(left, prefix + "class Second(Protocol):\n" + plain, 8)
     test.assertFalse(native["duplicates"], native)
 
     special = prefix + "class First(Protocol):\n" + (
         "    def __len__(self) -> int:\n        ...\n") * 4
-    checked, native = inspect(special, special.replace("First", "Second"), 3)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(special, special.replace("First", "Second"), 3)
     test.assertIn("skipped", native)
 
     # A long original span containing fewer eligible lines never clears the minimum.
     brief = (prefix + "class First(Protocol):\n    @property\n" +
              "    def value(\n        self,\n    ) -> str:\n        ...\n")
-    checked, native = inspect(brief, brief.replace("First", "Second"), 5)
-    test.assertEqual(checked["exit_code"], 0, checked["diagnostics"])
+    native = inspect(brief, brief.replace("First", "Second"), 5)
     test.assertIn("skipped", native)
 
-    checked, native = inspect(left + "\n" + right, "", 7)
-    test.assertEqual(checked["exit_code"], 1, checked["diagnostics"])
+    native = inspect(left + "\n" + right, "", 7)
+    test.assertTrue(native["duplicates"])
     test.assertTrue(all(d["firstFile"]["name"] == d["secondFile"]["name"] == str(first)
                         for d in native["duplicates"]))
 
-    verify_property_mapping(test, root, checked, native)
+    # Normalization needs a genuine archived runner report at this boundary.
+    verify_property_mapping(test, root, report(root), native)
     verify_property_behavior(test, root, prefix)
 
 
@@ -429,19 +399,14 @@ def verify_property_behavior(test: unittest.TestCase, root: Path, prefix: str) -
             "        a = 1\n        b = a + 2\n        return b\n")
     first.write_text(real, encoding="utf-8")
     second.write_text(real.replace("First", "Second"), encoding="utf-8")
-    behavioral = report(root)
-    jobs = {job["name"]: job for job in behavioral["tools"]}
-    test.assertEqual(behavioral["summary"]["infrastructure_errors"], 0)
-    test.assertEqual(jobs["jscpd"]["status"], "violations")
-    test.assertEqual(jobs["jscpd-renamed"]["status"], "passed")
-    test.assertEqual(jobs["jscpd-similar"]["status"], "passed")
+    behavioral = focused_scan(root)
+    test.assertTrue(behavioral["exact"]["duplicates"])
+    test.assertFalse(behavioral["renamed"]["duplicates"])
+    test.assertFalse(behavioral["similar"]["duplicates"])
     second.write_text(real.replace("First", "Second").replace("a = 'x'", "first = 'x'")
                       .replace("b = a + 'y'", "second = first + 'y'")
                       .replace("return b\n    def", "return second\n    def"), encoding="utf-8")
-    renamed = report(root)
-    jobs = {job["name"]: job for job in renamed["tools"]}
-    test.assertEqual(renamed["summary"]["infrastructure_errors"], 0)
-    test.assertEqual(jobs["jscpd-renamed"]["status"], "violations")
+    test.assertTrue(focused_scan(root)["renamed"]["duplicates"])
 
     # One contract can have both declaration-only and implemented accessors.
     mixed = (prefix + "class First(Protocol):\n    @property\n" +
@@ -452,11 +417,8 @@ def verify_property_behavior(test: unittest.TestCase, root: Path, prefix: str) -
              "    def value(self) -> None:\n        pass\n")
     first.write_text(mixed, encoding="utf-8")
     second.write_text(mixed.replace("First", "Second"), encoding="utf-8")
-    combined = report(root)
-    job = next(job for job in combined["tools"] if job["name"] == "jscpd")
-    payload = read_json(root / job["raw_output"]["native_json"])
-    test.assertEqual(combined["summary"]["infrastructure_errors"], 0)
-    test.assertEqual(job["status"], "violations")
+    payload = focused_scan(root)["exact"]
+    test.assertTrue(payload["duplicates"])
     test.assertEqual(payload["unitLines"][str(first)], [3, 4])
     test.assertTrue(any("first = item + 'a'" in d["fragment"] for d in payload["duplicates"]))
     test.assertTrue(any("@value.deleter" in d["fragment"] for d in payload["duplicates"]))

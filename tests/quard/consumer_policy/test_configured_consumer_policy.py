@@ -87,20 +87,24 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         path = self.root / ".quard/config.toml"
         original = path.read_text(encoding="utf-8")
         for key in CHECK_DEFAULTS:
-            if key == "constructor_purity":
-                continue
             with self.subTest(key=key):
-                path.write_text(original.replace(f"{key} = true", f"{key} = 1"),
-                                encoding="utf-8")
+                current = f"{key} = {str(CHECK_DEFAULTS[key]).lower()}"
+                self.assertIn(current, original)
+                path.write_text(original.replace(current, f"{key} = 1"), encoding="utf-8")
                 with self.assertRaises(QuardError) as failure:
                     self.policy().checks()
                 self.assertEqual(failure.exception.code, "INVALID_CHECKS")
         path.write_text(original.replace("lcom4 = true",
-                                         "lcom4 = true\ndependency_types = false"),
+                                         "lcom4 = true\nunknown_job = false"),
                         encoding="utf-8")
         with self.assertRaises(QuardError) as failure:
             self.policy().checks()
         self.assertEqual(failure.exception.code, "INVALID_CHECKS")
+        path.write_text(original.replace("lcom4 = true",
+                                         "lcom4 = true\nlcom4 = false"), encoding="utf-8")
+        with self.assertRaises(QuardError) as failure:
+            self.policy().checks()
+        self.assertEqual(failure.exception.code, "INVALID_CONFIG")
 
     def test_apply_preserves_other_settings(self):
         self.policy().apply()

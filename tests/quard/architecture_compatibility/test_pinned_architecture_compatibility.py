@@ -16,7 +16,11 @@ RULES = ["W9001", "W9003", "W9004", "W9006", "W9007", "W9009", "W9201", "W9202"]
 
 
 class TestPinnedArchitectureCompatibility(unittest.TestCase):
-    def lint(self, files, layers, *, rules=RULES, patched=True, extra="", pylint_extra=""):
+    def lint(self, files, layers, *, rules=RULES, patched=True, pair=True,
+             extra="", pylint_extra=""):
+        key = json.dumps([files, layers, rules, extra, pylint_extra], sort_keys=True)
+        if patched and key in self.__dict__.get("_paired_results", {}):
+            return self._paired_results.pop(key)
         with TemporaryDirectory(prefix="architecture-compat-") as directory:
             root = Path(directory)
             paths = []
@@ -34,18 +38,41 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
                 config += f'[[tool.clean-arch.layers]]\nmodule = "{module}"\nname = "{layer}"\n'
             (root / "pyproject.toml").write_text(config, encoding="utf-8")
             setup = (f'sys.path.insert(0, {str(QUARD / "src")!r}); '
-                     'from quard._architecture_compat import install_architecture_compat; '
-                     'install_architecture_compat(); install_architecture_compat(); ') if patched else ""
-            # A fresh process also isolates the plugin's singleton configuration.
+                      'from quard._architecture_compat import install_architecture_compat; '
+                      'install_architecture_compat(); install_architecture_compat(); ') if patched else ""
+            if not patched and pair:
+                # One isolated process compares the original and patched checker
+                # on the same fixture/config; the next test still gets a fresh one.
+                code = ('import sys, io, json, contextlib\n'
+                        'from pylint.lint import Run\n'
+                        'def check():\n'
+                        '    output = io.StringIO()\n'
+                        '    with contextlib.redirect_stdout(output):\n'
+                        '        run = Run(sys.argv[1:], exit=False)\n'
+                        '    return run.linter.msg_status, json.loads(output.getvalue())["messages"]\n')
+                code += ('native = check()\n'
+                         f'sys.path.insert(0, {str(QUARD / "src")!r})\n'
+                         'from quard._architecture_compat import install_architecture_compat\n'
+                         'install_architecture_compat()\ninstall_architecture_compat()\n'
+                         'fixed = check()\nprint(json.dumps([native, fixed]))\n')
+            else:
+                code = 'import sys; ' + setup + 'from pylint.lint import Run; Run(sys.argv[1:])'
+            # A fresh process isolates the plugin's singleton configuration per fixture.
             result = subprocess.run(
-                [sys.executable, "-c", 'import sys; ' + setup
-                 + 'from pylint.lint import Run; Run(sys.argv[1:])',
+                [sys.executable, "-c", code,
                  "--rcfile=pyproject.toml", "--output-format=json2", "--reports=no", "--score=no",
                  "--jobs=1", *paths],
                 cwd=root, capture_output=True, text=True, timeout=60, check=False,
             )
             self.assertIn(result.returncode, (0, 2, 4, 6, 8, 10, 12, 14), result.stdout + result.stderr)
-            messages = json.loads(result.stdout)["messages"]
+            if not patched and pair:
+                (native_status, native), (fixed_status, fixed) = json.loads(result.stdout)
+                for status in (native_status, fixed_status):
+                    self.assertIn(status, (0, 2, 4, 6, 8, 10, 12, 14))
+                self.__dict__.setdefault("_paired_results", {})[key] = fixed
+                messages = native
+            else:
+                messages = json.loads(result.stdout)["messages"]
             self.assertFalse([m for m in messages if m["messageId"].startswith("F")], messages)
             return messages
 
@@ -64,7 +91,8 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
             "external_io.py": "import socket\n",
         }
         layers = {"sample": "Domain"}
-        native = self.lint(files, layers, rules=["W9004"], patched=False)
+        # Retain a fresh patched process to prove installation before plugin loading.
+        native = self.lint(files, layers, rules=["W9004"], patched=False, pair=False)
         fixed = self.lint(files, layers, rules=["W9004"])
         self.assertGreater(len(native), len(fixed))
         self.assertEqual([(m["line"], m["messageId"]) for m in fixed],
@@ -768,12 +796,13 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
             def concrete() -> int: pass
             result = concrete()
         """
-        plain = self.lint({"sample.py": code.replace("DECORATOR", "")}, {},
-                          rules=["E1111"], patched=False)
-        abstract = self.lint({"sample.py": code.replace("DECORATOR", "@abstractmethod")}, {},
-                             rules=["E1111"], patched=False)
-        self.assertEqual([m["obj"] for m in plain], ["Consumer.run", ""])
-        self.assertEqual([(m["messageId"], m["obj"]) for m in abstract], [("E1111", "")])
+        messages = self.lint({"plain.py": code.replace("DECORATOR", ""),
+                              "abstract.py": code.replace("DECORATOR", "@abstractmethod")},
+                             {}, rules=["E1111"], patched=False, pair=False)
+        self.assertEqual([m["obj"] for m in messages if m["module"] == "plain"],
+                         ["Consumer.run", ""])
+        self.assertEqual([(m["messageId"], m["obj"]) for m in messages
+                          if m["module"] == "abstract"], [("E1111", "")])
 
     def test_inherited_framework_surface_requires_a_separate_domain_adapter(self):
         files = {

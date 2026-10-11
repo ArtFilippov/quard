@@ -288,22 +288,74 @@ Production check selection and analyzer policy were not changed.
   findings, 0 infrastructure errors; `.quard/reports/latest.json` and raw logs
   retain unresolved findings. Do not interpret this as a passing checkout check.
 
+## Remaining top-30 profiling and migration (11 October 2026)
+
+At the user's request, `test_real_uv_source_install_reinstall_locked_sync_and_submodule`
+and `test_real_wheel_uv_install_separate_tool_without_rust` are permanently
+skipped. The release wheel workflow no longer invokes the skipped test. The
+separate real-wheel full-consumer check and installer smoke probes still run;
+neither verifies a real uv Git-source installation or the disabled separate-tool
+wheel installation. Documentation now states that gap explicitly.
+
+- Repeated clone mutations in `check_runner` use the installed real
+  `quard_clones.SourceSession` over `ConfiguredConsumerPolicy.files()` and actual
+  discovered `.py` sources. They assert native counts, original paths, positions,
+  duplicates and negative cases. Selected genuine runner reports still verify
+  worker output, normalization, archived JSON, errors and independent statuses.
+  The full unmocked consumer test now runs one clean and one combined violating
+  check for exact, renamed and similar clones; a focused real-engine scan checks
+  the strict Type-3 negative case. Real error/adapter/worker report tests in this
+  owning runner directory remain justified additional native/report scenarios;
+  the two-report budget has not been met for this directory.
+- Paired original/patched Pylint compatibility results share one isolated process
+  per fixture, but still run real Pylint twice with the original and patched
+  checker. A separate fresh patched process retains the before-plugin-loading
+  regression; two native-only Protocol fixtures now run in one process. Different
+  plugin configurations remain isolated, so the directory has additional
+  justified real native scenarios beyond the two-report budget.
+- Invalid duplication values are checked individually at the real config parser;
+  representative malformed-value and malformed-TOML cases still exercise real
+  `apply.py`, `check.py` and installer errors. A switch-matrix test consolidates
+  its fully enabled fake-runner assertions. Pytest/unittest discovery now include
+  `consumer_policy` and `dispatch_site_model`; the former's test checks the
+  actual false default for `dependency_types`, an unknown job, and the distinct
+  duplicate-TOML `INVALID_CONFIG` result.
+- Before profiles (one run each): `architecture_compatibility` 38 passing in
+  65.87 s; `installation` 27 passing, 1 skipped in 64.49 s. The
+  `check_runner` before attempt had 66 passing and two **infrastructure failures**
+  after simultaneous profiling filled `/tmp`; its 58.00 s is not a passing
+  baseline. After: compatibility 38 passing in 38.27 s; installation 26 passing,
+  2 skipped in 8.51 s; check_runner 67 passing, 1 skipped in 26.78 s.
+  Timing JSON is local at `/tmp/opencode/{architecture-compat,installation,check-runner}-{before,after}.json`
+  (check_runner's final after run: `check-runner-after-final.json`).
+- Whole-suite pytest-durations: before 257.20 s, 405 passed, 1 skipped, one
+  test with two failures; final green run 129.59 s, **404 passed, 3 skipped,
+  324 subtests passed**, 407 calls totaling 124.74 s. Slowest remaining call:
+  `test_real_wheel_full_consumer_without_rust` at 8.83 s; the final top-30 JSON
+  is `/tmp/opencode/quard-test-durations-final.json` (local). Measurements are
+  single runs, not a stable benchmark. Unittest: 407 tests, 3 skipped, exit 0
+  in 121.349 s (final post-cleanup run: 123.793 s). `uv sync --locked
+  --group dev`: exit 0. Final checkout `check.py --json`: exit **1** with
+  **5,356 unresolved native findings**, zero infrastructure errors. Pylint
+  production/tests: violations with exit 28/30; other violating jobs have exit
+  1; clean jobs exit 0; constructor-purity is skipped. See
+  `.quard/reports/latest.json` and archived raw logs for all job statuses and
+  details. This is not a passing static check. No analyzer policy or ordinary
+  production job selection was changed; no consumer submodules were present.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's
    architecture at configuration time. The README profiling command uses
    `-p no:tach`; this does not disable the native Tach job in `check.py`.
-2. Pytest discovers additional tests beyond the `unittest` hook in
-   `tests/discovery_utils.py` (notably `consumer_policy` and
-   `dispatch_site_model`). `tests/quard/consumer_policy/test_configured_consumer_policy.py::TestConfiguredConsumerPolicy::test_each_new_switch_requires_a_boolean_and_unknown_jobs_fail`
-   fails: one subtest mutates a missing/unchanged setting and the final
-   assertion expects `INVALID_CHECKS` for duplicate TOML, which produces
-   `INVALID_CONFIG`. Investigate and fix the test and discovery mismatch before
-   treating pytest as the canonical green suite.
-3. Re-profile remaining tests taking more than one second. Other slow calls
-   include source builds, fresh-process Pylint compatibility regressions and
-   real wheel runs. Keep
-   real integration coverage; use per-job report durations before changing a loop.
+2. The only current pytest collection warning is a production `TestPlacement`
+   class with an `__init__`, imported by the folder-ownership test. Pytest and
+   unittest now discover the same 407 tests. The two requested permanent skips
+   remove real installation lifecycle coverage; do not call these skipped tests
+   passing install verification.
+3. Remaining tests above one second mostly exercise real Pylint, installer
+   smoke probes and one full consumer check. Measure per-job reports before
+   moving any further native integration cases.
 
 ## Suggested skills
 

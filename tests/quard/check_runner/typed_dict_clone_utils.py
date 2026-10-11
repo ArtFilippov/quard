@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 import unittest
 
-from rust_clone_engine_utils import report, wheel
-from quard._common import capture, read_json
+from rust_clone_engine_utils import focused_scan, report, wheel
+from quard._common import capture
 
 
 def _verify_standalone_renamed(test: unittest.TestCase, root: Path,
@@ -40,23 +40,21 @@ def _verify_standalone_renamed(test: unittest.TestCase, root: Path,
 
 
 def _inspect_schema(test: unittest.TestCase, root: Path, left: str, right: str,
-                    minimum: int, skip_behavior: bool = True
-                    ) -> tuple[dict[str, Any], dict[str, Any]]:
+                    minimum: int, skip_behavior: bool = True) -> dict[str, dict[str, Any]]:
     config = root / ".quard/config.toml"
     config.write_text(config.read_text(encoding="utf-8").replace(
         "min_lines = 3", f"min_lines = {minimum}").replace(
         "min_lines = 4", f"min_lines = {minimum}"), encoding="utf-8")
     (root / "src/demo/first.py").write_text(left, encoding="utf-8")
     (root / "tests/second.py").write_text(right, encoding="utf-8")
-    result = report(root)
-    test.assertEqual(result["summary"]["infrastructure_errors"], 0, result["diagnostics"])
-    jobs = {job["name"]: job for job in result["tools"]}
-    for name in ("jscpd-renamed", "jscpd-similar"):
-        test.assertEqual(jobs[name]["status"], "skipped" if skip_behavior else "passed",
-                         result["diagnostics"])
+    scans = focused_scan(root)
+    for kind in ("renamed", "similar"):
         if skip_behavior:
-            test.assertIn("skipped", read_json(root / jobs[name]["raw_output"]["native_json"]))
-    return result, read_json(root / jobs["jscpd"]["raw_output"]["native_json"])
+            test.assertIn("skipped", scans[kind])
+        else:
+            test.assertNotIn("skipped", scans[kind])
+            test.assertFalse(scans[kind]["duplicates"])
+    return scans
 
 
 def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
@@ -69,83 +67,80 @@ def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
     first = root / "src/demo/first.py"
     (root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
 
-    def inspect(left: str, right: str, minimum: int = 3) -> tuple[dict[str, Any],
-                                                                    dict[str, Any]]:
-        result, exact = _inspect_schema(test, root, left, right, minimum)
-        jobs = {job["name"]: job for job in result["tools"]}
-        for name in ("jscpd-renamed", "jscpd-similar"):
-            behavior = read_json(root / jobs[name]["raw_output"]["native_json"])
+    def inspect(left: str, right: str, minimum: int = 3) -> dict[str, Any]:
+        result = _inspect_schema(test, root, left, right, minimum)
+        exact = result["exact"]
+        for kind in ("renamed", "similar"):
+            behavior = result[kind]
             test.assertEqual(behavior["eligibleLines"][str(first)],
-                              int("TD = object" in left or "value = 1" in left))
+                               int("TD = object" in left or "value = 1" in left))
         test.assertEqual(exact["minimum"], minimum)
-        test.assertEqual(exact["sourcePaths"], [str(root / path) for path in read_json(
-            (root / result["report_path"]).parent / "clone-engine-files.json")["paths"]])
-        return result, exact
+        test.assertEqual(exact["sourcePaths"], [str(root / path) for path in (
+            "src/demo/__init__.py", "src/demo/domain/api.py", "src/demo/first.py",
+            "tests/second.py", "tests/test_value.py")])
+        return exact
 
     prefix = "from typing import TypedDict as TD\n"
     fields = "    one: int\n    two: str\n    three: list[int]\n    four: bytes\n"
     left = prefix + "class GroupCounts(TD):\n    distinct: float\n" + fields
     right = prefix + "class MicroCounts(TD):\n    different: bool\n" + fields
-    result, native = inspect(left, right)
-    test.assertEqual((result["exit_code"], native["unitLines"][str(first)]), (1, [5]))
+    native = inspect(left, right)
+    test.assertEqual(native["unitLines"][str(first)], [5])
     test.assertTrue(native["duplicates"], native)
     test.assertTrue(any(item["firstFile"]["start"] == 4 and
                         item["secondFile"]["start"] == 4 and
                         item["fragment"].startswith("    one: int") and
                         "four: bytes" in item["fragment"]
                         for item in native["duplicates"]), native["duplicates"])
-    test.assertEqual({item["path"] for item in result["diagnostics"] if
-                      item["rule"] == "EXACT_CLONE"},
+    # The report-path regression also checks normalized paths and coordinates.
+    report_result = report(root)
+    test.assertEqual(report_result["exit_code"], 1, report_result["diagnostics"])
+    test.assertEqual({item["path"] for item in report_result["diagnostics"] if
+                       item["rule"] == "EXACT_CLONE"},
                      {"src/demo/first.py", "tests/second.py"})
     test.assertTrue(all(item["native_details"] in native["duplicates"] and
-                        item["line"] >= 4 and item["column"] >= 1
-                        for item in result["diagnostics"] if item["rule"] == "EXACT_CLONE"))
+                     item["line"] >= 4 and item["column"] >= 1
+                     for item in report_result["diagnostics"] if item["rule"] == "EXACT_CLONE"))
 
     # Same-file schemas match; adjacent shorter schemas cannot concatenate.
-    same_file, native = inspect(left + "\n" + right, "")
-    test.assertTrue(native["duplicates"], same_file["diagnostics"])
+    native = inspect(left + "\n" + right, "")
+    test.assertTrue(native["duplicates"])
     test.assertTrue(all(item["firstFile"]["name"] == item["secondFile"]["name"]
                         == str(first) for item in native["duplicates"]))
     short = "    one: int\n    two: str\n"
     split = prefix + "class First(TD):\n" + short + "class Second(TD):\n    three: bytes\n"
-    result, native = inspect(split, split)
-    test.assertEqual(result["exit_code"], 0)
+    native = inspect(split, split)
     test.assertIn("skipped", native)
     test.assertEqual(native["unitLines"][str(first)], [2, 1])
     mixed = prefix + "class First(TD):\n" + short + "def calculate():\n    value = 1\n"
-    result, native = inspect(mixed, mixed)
-    test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+    native = inspect(mixed, mixed)
     test.assertIn("skipped", native)
     test.assertEqual(native["unitLines"][str(first)], [1, 2])
 
     # Exactly three matching trailing fields clear the configured minimum.
-    result, native = inspect(prefix + "class First(TD):\n    initial: float\n" + fields,
-                             prefix + "class Second(TD):\n    other: bool\n" + fields[13:])
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(prefix + "class First(TD):\n    initial: float\n" + fields,
+                     prefix + "class Second(TD):\n    other: bool\n" + fields[13:])
     test.assertTrue(native["duplicates"])
 
     # Differently named or typed fields cannot turn into Type-2/3 clones.
     for changed in (fields.replace("two: str", "other: str"),
                     fields.replace("two: str", "two: bytes")):
         with test.subTest(changed=changed):
-            result, native = inspect(prefix + "class First(TD):\n" + fields,
-                                     prefix + "class Second(TD):\n" + changed, 4)
-            test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+            native = inspect(prefix + "class First(TD):\n" + fields,
+                             prefix + "class Second(TD):\n" + changed, 4)
             test.assertFalse(native["duplicates"])
             test.assertEqual(native["unitLines"][str(first)], [4])
 
     _verify_standalone_renamed(test, root, prefix, fields)
 
-    result, native = inspect("import typing as tp\nclass Alpha(tp.TypedDict):\n" + fields,
-                             "import typing_extensions as tp\n" +
-                             "class Beta(tp.TypedDict):\n" + fields)
-    test.assertEqual(result["exit_code"], 1)
+    native = inspect("import typing as tp\nclass Alpha(tp.TypedDict):\n" + fields,
+                     "import typing_extensions as tp\n" +
+                     "class Beta(tp.TypedDict):\n" + fields)
     test.assertTrue(native["duplicates"])
     for declaration in ("class TypedDict:\n    pass\nclass Alpha(TypedDict):\n",
                         prefix + "TD = object\nclass Alpha(TD):\n"):
         with test.subTest(declaration=declaration):
-            result, native = inspect(declaration + fields, declaration + fields)
-            test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+            native = inspect(declaration + fields, declaration + fields)
             test.assertIn("skipped", native)
 
 
@@ -164,13 +159,12 @@ def verify_functional_typed_dict_fields(test: unittest.TestCase, root: Path) -> 
     other = prefix + "class Other(TD):\n    one: int\n    two: str\n" + "    three: list[int]\n"
 
     def inspect(left: str, right: str, minimum: int = 3,
-                skip_behavior: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
-        return _inspect_schema(test, root, left, right, minimum, skip_behavior)
+                skip_behavior: bool = True) -> dict[str, Any]:
+        return _inspect_schema(test, root, left, right, minimum, skip_behavior)["exact"]
 
     for right in (functional.replace("Counts", "Different"), other):
         with test.subTest(right=right):
-            result, native = inspect(functional, right)
-            test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+            native = inspect(functional, right)
             test.assertTrue(native["duplicates"], native)
             test.assertEqual(native["minimum"], 3)
             test.assertEqual(native["eligibleLines"][str(first)], 3)
@@ -184,55 +178,53 @@ def verify_functional_typed_dict_fields(test: unittest.TestCase, root: Path) -> 
                                 item["fragment"] == fields.rstrip("\n") and
                                 item["secondFile"]["start"] == (3 if right == other else 5)
                                 for item in native["duplicates"]), native["duplicates"])
-            exact = [d for d in result["diagnostics"] if d["rule"] == "EXACT_CLONE"]
-            test.assertEqual({d["path"] for d in exact},
-                             {"src/demo/first.py", "tests/second.py"})
+            # One real report proves native findings reach the archived report.
+            reported = report(root) if right == other else None
+            exact = ([d for d in reported["diagnostics"] if d["rule"] == "EXACT_CLONE"]
+                     if reported is not None else [])
+            if reported is not None:
+                test.assertEqual(reported["exit_code"], 1, reported["diagnostics"])
+                test.assertEqual({d["path"] for d in exact},
+                                 {"src/demo/first.py", "tests/second.py"})
             test.assertTrue(all(d["native_details"] in native["duplicates"] and
                                 d["line"] == (5 if d["path"] == "src/demo/first.py" else
                                               3 if right == other else 5)
                                 for d in exact), exact)
 
     # A different leading field does not prevent a three-field trailing match.
-    result, native = inspect(functional.replace(fields, "    'initial': bytes,\n" + fields),
-                             other.replace("    one: int", "    other: bool\n    one: int"))
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(functional.replace(fields, "    'initial': bytes,\n" + fields),
+                     other.replace("    one: int", "    other: bool\n    one: int"))
     test.assertTrue(any(item["firstFile"]["start"] == 6 and
                         item["secondFile"]["start"] == 4 for item in native["duplicates"]))
 
-    result, native = inspect(functional + "\n" + functional.replace("Counts", "Other"), "")
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(functional + "\n" + functional.replace("Counts", "Other"), "")
+    test.assertTrue(native["duplicates"])
     test.assertTrue(all(item["firstFile"]["name"] == item["secondFile"]["name"] ==
                         str(first) for item in native["duplicates"]))
 
     keyword = (prefix + "Kw = TD(\n    'Kw',\n    one=int,\n    two=str,\n" +
                "    three=list[int],\n)\n")
-    result, native = inspect(keyword, other)
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(keyword, other)
     test.assertTrue(native["duplicates"])
-    result, native = inspect(other, functional)
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(other, functional)
     test.assertTrue(any(item["secondFile"]["startLoc"]["position"] ==
                         functional.index("'one': int") for item in native["duplicates"]))
-    result, native = inspect(functional.replace("from typing import TypedDict as TD",
-                                                "import typing_extensions as tp").replace(
-                                                    " = TD(", " = tp.TypedDict("), other)
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(functional.replace("from typing import TypedDict as TD",
+                                        "import typing_extensions as tp").replace(
+                                            " = TD(", " = tp.TypedDict("), other)
     test.assertTrue(native["duplicates"])
     special = functional.replace("'one'", "'first-name'").replace(
         "'two'", "'привет'").replace("'three'", "'class'")
-    result, native = inspect(special, special.replace("'first-name'", '"first-name"')
-                             .replace("'привет'", '"привет"').replace("'class'", '"class"'))
-    test.assertEqual(result["exit_code"], 1, result["diagnostics"])
+    native = inspect(special, special.replace("'first-name'", '"first-name"')
+                     .replace("'привет'", '"привет"').replace("'class'", '"class"'))
     test.assertTrue(native["duplicates"])
 
     for right in (functional.replace("'two': str", "'other': str"),
                   functional.replace("'two': str", "'two': bytes")):
         with test.subTest(right=right):
-            result, native = inspect(functional, right, 3)
-            test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+            native = inspect(functional, right, 3)
             test.assertFalse(native["duplicates"])
-    result, native = inspect(functional, other, 4)
-    test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+    native = inspect(functional, other, 4)
     test.assertIn("skipped", native)
 
     # A one-line dictionary, shared field line, or opening-line field is not
@@ -243,11 +235,9 @@ def verify_functional_typed_dict_fields(test: unittest.TestCase, root: Path) -> 
     opening = functional.replace("    {\n    'one': int,", "    {'one': int,")
     for left in (compact, mixed, opening):
         with test.subTest(left=left):
-            result, native = inspect(left, other, 3)
-            test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+            native = inspect(left, other, 3)
             test.assertEqual(native["eligibleLines"][str(first)], 0)
             test.assertFalse(native["duplicates"])
     shadowed = prefix + "TD = object\n" + functional[len(prefix):]
-    result, native = inspect(shadowed, other, skip_behavior=False)
-    test.assertEqual(result["exit_code"], 0, result["diagnostics"])
+    native = inspect(shadowed, other, skip_behavior=False)
     test.assertFalse(native["duplicates"])

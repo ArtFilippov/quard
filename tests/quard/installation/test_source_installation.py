@@ -28,6 +28,7 @@ QUARD = Path(__file__).resolve().parents[3]
 
 
 class TestSourceInstallation(unittest.TestCase):
+    @unittest.skip("Real uv source-build lifecycle disabled by project decision")
     def test_real_uv_source_install_reinstall_locked_sync_and_submodule(self) -> None:
         cargo = shutil.which("cargo") or "/tmp/opencode/cargo/bin/cargo"
         self.assertTrue(Path(cargo).is_file(), "Rust is required for source installation")

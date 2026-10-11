@@ -111,8 +111,9 @@ profiles and the `tests/quard/architecture_draft/` report-path migration.
    catalog (`offline_fixtures.CATALOG`) instead of probing installed Pylint
    plugins when a test verifies folder rules or policy generation; retain a
    real discovery/profile case for Pylint. Stub uv/install subprocesses for
-   config-only tests; preserve a real source-build lifecycle test when build
-   behavior is the subject. Batch independent edits only if each mutation
+   config-only tests. The two source-install and separate-tool wheel-install
+   lifecycle tests are permanently skipped by project decision; do not count
+   them as installation coverage. Batch independent edits only if each mutation
    still has its own diagnostic assertion; restore files with
    `temporary_edits`. Batching full checks is an interim improvement, not a
    replacement for splitting feature checks from reporting.

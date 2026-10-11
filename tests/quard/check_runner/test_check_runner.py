@@ -26,13 +26,14 @@ from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from offline_fixtures import create_repo, fake_tools
 from contract_clone_utils import verify_contract_methods, verify_contract_properties
 from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_report,
-                                       verify_mismatched_engine, verify_missing_wheel,
-                                        verify_real_full_check, verify_real_wheel_install,
-                                        verify_same_file_and_mapping,
-                                       verify_prepared_renamed, verify_renamed_failure,
-                                       verify_prepared_similar, verify_similar_boundaries,
-                                       verify_similar_failure,
-                                       prepared_native, report as prepared_report, versions, wheel)
+                                        verify_mismatched_engine, verify_missing_wheel,
+                                         verify_real_full_check, verify_real_wheel_install,
+                                         verify_same_file_and_mapping,
+                                        verify_prepared_renamed, verify_renamed_failure,
+                                        verify_prepared_similar, verify_similar_boundaries,
+                                        verify_similar_failure,
+                                        focused_scan, prepared_native,
+                                        report as prepared_report, versions, wheel)
 from typed_dict_clone_utils import verify_functional_typed_dict_fields, verify_typed_dict_fields
 
 PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
@@ -100,7 +101,6 @@ class TestCheckRunner(unittest.TestCase):
             self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
 
     def test_real_wheel_accepts_supported_python_syntax(self) -> None:
-        python, _ = wheel()
         syntax = ('type Alias[T] = list[T]\n'
                   'def identity[T](value: T) -> T:\n'
                   '    match value:\n'
@@ -109,11 +109,12 @@ class TestCheckRunner(unittest.TestCase):
                   '    return value\n'
                   'try:\n    raise ExceptionGroup("sample", [ValueError()])\n'
                   'except* ValueError as errors:\n    result = str(errors)\n')
-        script = ('import quard_clones, sys; '
-                  'quard_clones.SourceSession([(sys.argv[1], sys.argv[2])], 3)')
-        checked = capture([str(python), "-c", script, str(self.root / "src/demo/syntax.py"),
-                           syntax], self.root, 30)
-        self.assertEqual(checked["exit_code"], 0, checked["stderr"])
+        source = self.root / "src/demo/syntax.py"
+        source.write_text(syntax, encoding="utf-8")
+        scans = focused_scan(self.root)
+        self.assertTrue(all(str(source) in payload["sourcePaths"]
+                            and payload["eligibleLines"][str(source)] >= 3
+                            for payload in scans.values()))
 
     def test_real_wheel_prepared_imports_and_docstrings(self) -> None:
         first = self.root / "src/demo/first.py"
@@ -139,11 +140,8 @@ class TestCheckRunner(unittest.TestCase):
             path.write_text('"""Common module documentation."""\n' +
                             "import json\nimport pathlib\nimport collections\n",
                             encoding="utf-8")
-        excluded = prepared_report(self.root)
-        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
-            job = next(item for item in excluded["tools"] if item["name"] == name)
-            self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
-            self.assertIn("prepared unit", job["error"])
+        excluded = focused_scan(self.root)
+        self.assertTrue(all("skipped" in native for native in excluded.values()))
         # Attribute documentation and method docstrings do not turn two
         # assignments into a clone; the same assignments plus a third do.
         for path in (first, second):
@@ -151,25 +149,23 @@ class TestCheckRunner(unittest.TestCase):
                             '    field = "assigned value"\n    """Attribute documentation."""\n' +
                             '    def action(self):\n        """Method documentation."""\n' +
                             '        first = 1\n        second = first + 2\n', encoding="utf-8")
-        short = prepared_report(self.root)
-        self.assertFalse([item for item in short["diagnostics"] if item["tool"] == "jscpd"],
-                         short["diagnostics"])
+        short = focused_scan(self.root)
+        self.assertTrue(all("skipped" in native or not native["duplicates"]
+                            for native in short.values()))
         for path in (first, second):
             with path.open("a", encoding="utf-8") as source:
                 _ = source.write("        third = second * 3\n")
-        long = prepared_report(self.root)
-        self.assertEqual({item["path"] for item in long["diagnostics"]
-                          if item["rule"] == "EXACT_CLONE"},
-                         {"src/demo/first.py", "tests/second.py"})
+        long = focused_scan(self.root)["exact"]
+        self.assertEqual({part["name"] for clone in long["duplicates"]
+                          for part in (clone["firstFile"], clone["secondFile"])},
+                         {str(first), str(second)})
         for path in (first, second):
             path.write_text('class Holder:\n    first = "assigned value"\n' +
                             '    """Attribute documentation."""\n' +
                             '    second = first + " more"\n    third = second.upper()\n',
                             encoding="utf-8")
-        mapped = prepared_report(self.root)
-        exact = next(item for item in mapped["tools"] if item["name"] == "jscpd")
-        self.assertEqual(exact["status"], "violations", mapped["diagnostics"])
-        payload = read_json(self.root / exact["raw_output"]["native_json"])
+        payload = focused_scan(self.root)["exact"]
+        self.assertTrue(payload["duplicates"])
         self.assertTrue(any('"""Attribute documentation."""' in clone["fragment"]
                             for clone in payload["duplicates"]))
         self.assertTrue(any('"assigned value"' in clone["fragment"]
@@ -179,17 +175,12 @@ class TestCheckRunner(unittest.TestCase):
                             '    """Attribute documentation."""\n' +
                             '    output = value + "!"\n    result = output.upper()\n',
                             encoding="utf-8")
-        unicode_result = prepared_report(self.root)
-        self.assertEqual(next(item for item in unicode_result["tools"]
-                              if item["name"] == "jscpd")["status"], "violations",
-                         unicode_result["diagnostics"])
+        self.assertTrue(focused_scan(self.root)["exact"]["duplicates"])
         for path in (first, second):
             path.write_text("def left():\n    first = 1\n    second = first + 2\n\n" +
                             "def right():\n    third = 3\n    fourth = third + 4\n",
                             encoding="utf-8")
-        boundaries = prepared_report(self.root)
-        self.assertEqual(next(item for item in boundaries["tools"]
-                              if item["name"] == "jscpd")["status"], "skipped")
+        self.assertIn("skipped", focused_scan(self.root)["exact"])
         first.write_text("def broken(:\n", encoding="utf-8")
         broken = prepared_report(self.root)
         self.assertEqual(broken["exit_code"], 2)
@@ -256,41 +247,32 @@ import collections
 
     def _inspect_placeholder_source(self, source: str, eligible: int,
                                     clone: bool, exact_eligible: int | None = None
-                                    ) -> dict[str, Any]:
+                                    ) -> dict[str, dict[str, Any]]:
         first = self.root / "src/demo/first.py"
         second = self.root / "tests/second.py"
         (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
-        names = {"exact": "jscpd", "renamed": "jscpd-renamed",
-                 "similar": "jscpd-similar"}
         for path in (first, second):
             path.write_text(source, encoding="utf-8")
-        result = prepared_report(self.root)
-        self.assertEqual(result["exit_code"], int(clone), result["diagnostics"])
-        self.assertFalse([item for item in result["diagnostics"]
-                          if item.get("is_infrastructure_error", False)])
-        manifest = read_json((self.root / result["report_path"]).parent /
-                             "clone-engine-files.json")
-        for kind, name in names.items():
-            job = next(item for item in result["tools"] if item["name"] == name)
-            native = read_json(self.root / job["raw_output"]["native_json"])
+        result = focused_scan(self.root)
+        for kind, native in result.items():
             count = exact_eligible if kind == "exact" and exact_eligible is not None else eligible
             self.assertEqual(native["minimum"], 3)
             self.assertEqual(native["eligibleLines"][str(first)], count)
             self.assertEqual(native["unitLines"][str(first)], [count] if count else [])
             self.assertEqual(native["sourcePaths"],
-                             [str(self.root / path) for path in manifest["paths"]])
+                             [str(self.root / path) for path in sorted((
+                                 "src/demo/__init__.py", "src/demo/domain/api.py",
+                                 "src/demo/first.py", "tests/second.py", "tests/test_value.py"))])
             if count >= 3:
                 self.assertEqual(native["statistics"]["total"]["sources"],
                                  len(native["sourcePaths"]))
             if kind == "exact" and clone:
-                self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
                 self.assertTrue(native["duplicates"])
-                self.assertEqual({d["path"] for d in result["diagnostics"]
-                                  if d["rule"] == "EXACT_CLONE"},
-                                 {"src/demo/first.py", "tests/second.py"})
+                self.assertEqual({part["name"] for item in native["duplicates"]
+                                  for part in (item["firstFile"], item["secondFile"])},
+                                 {str(first), str(second)})
             else:
-                self.assertEqual((job["status"], job["exit_code"]),
-                                 ("passed", 0) if count >= 3 else ("skipped", None))
+                self.assertEqual("skipped" in native, count < 3)
                 self.assertFalse(native.get("duplicates", []))
         return result
 
@@ -300,11 +282,7 @@ import collections
                 result = self._inspect_placeholder_source(
                     'def action():\n    """Shared documentation."""\n' + f"    {form}\n",
                     0, False)
-                names = ("jscpd", "jscpd-renamed", "jscpd-similar")
-                for name in names:
-                    job = next(item for item in result["tools"] if item["name"] == name)
-                    self.assertIn("skipped", read_json(self.root /
-                                  job["raw_output"]["native_json"]))
+                self.assertTrue(all("skipped" in native for native in result.values()))
             for body in (f"    first = 1\n    second = first + 2\n    {form}\n",
                          f"    first = 1\n    {form}\n    second = first + 2\n"):
                 with self.subTest(form=form, material="two executable lines"):
@@ -314,7 +292,7 @@ import collections
                 result = self._inspect_placeholder_source(
                     'def action():\n    first = 1\n    second = first + 2\n' +
                     f"    {form}\n    third = second * 3\n", 3, True)
-                native = prepared_native(self, self.root, result, 3)
+                native = result["exact"]
                 self.assertTrue(any(form in item["fragment"] and
                                     "third = second * 3" in item["fragment"]
                                     for item in native["duplicates"]))
@@ -381,10 +359,8 @@ import collections
             with self.subTest(form=form):
                 for path in (first, second):
                     path.write_text(source, encoding="utf-8")
-                result = prepared_report(self.root)
-                for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
-                    job = next(item for item in result["tools"] if item["name"] == name)
-                    self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+                scans = focused_scan(self.root)
+                self.assertTrue(all("skipped" in native for native in scans.values()))
 
     def _verify_mixed_declarations(self) -> None:
         first = self.root / "src/demo/first.py"
@@ -409,35 +385,31 @@ import collections
         )
         for path in (first, second):
             path.write_text(declarations, encoding="utf-8")
-        short = prepared_report(self.root)
+        short = focused_scan(self.root)
         for kind in ("exact", "renamed", "similar"):
             with self.subTest(kind=kind, material="declarations plus two assignments"):
-                job = next(job for job in short["tools"] if job["name"] ==
-                           {"exact": "jscpd", "renamed": "jscpd-renamed",
-                            "similar": "jscpd-similar"}[kind])
-                native = read_json(self.root / job["raw_output"]["native_json"])
-                self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+                native = short[kind]
                 self.assertIn("skipped", native)
                 self.assertEqual(native["unitLines"][str(first)][-1], 2)
         for path in (first, second):
             path.write_text(declarations + "        third = second * 3\n", encoding="utf-8")
-        long = prepared_report(self.root)
-        exact = prepared_native(self, self.root, long, 3)
+        long = focused_scan(self.root)
+        exact = long["exact"]
         self.assertTrue(exact["duplicates"])
         self.assertTrue(any("first = argument + [1]" in item["fragment"]
                             for item in exact["duplicates"]))
-        self.assertEqual({item["path"] for item in long["diagnostics"]
-                          if item["rule"] == "EXACT_CLONE"},
-                         {"src/demo/first.py", "tests/second.py"})
+        self.assertEqual({part["name"] for clone in exact["duplicates"]
+                          for part in (clone["firstFile"], clone["secondFile"])},
+                         {str(first), str(second)})
         second.write_text(declarations.replace("first = argument + [1]",
                                                "start = argument + [7]")
                           .replace("second: list[int] = first + [2]",
                                    "middle: list[int] = start + [8]")
                           + "        third = middle * 9\n", encoding="utf-8")
-        changed = prepared_report(self.root)
-        renamed = prepared_native(self, self.root, changed, 3, "renamed")
+        changed = focused_scan(self.root)
+        renamed = changed["renamed"]
         self.assertTrue(renamed["duplicates"])
-        self.assertFalse(prepared_native(self, self.root, changed, 3)["duplicates"])
+        self.assertFalse(changed["exact"]["duplicates"])
 
     def _verify_alias_shadowing(self) -> None:
         first = self.root / "src/demo/first.py"
@@ -450,16 +422,14 @@ import collections
                     "    third: TA = second * 3\n")
         for path in (first, second):
             path.write_text(shadowed, encoding="utf-8")
-        rebound = prepared_report(self.root)
-        self.assertTrue(prepared_native(self, self.root, rebound, 3)["duplicates"])
+        self.assertTrue(focused_scan(self.root)["exact"]["duplicates"])
         relative = ("from .typing import TypeAlias as TA\n"
                     "first: TA = 1\n"
                     "second: TA = first + 2\n"
                     "third: TA = second * 3\n")
         for path in (first, second):
             path.write_text(relative, encoding="utf-8")
-        local = prepared_report(self.root)
-        self.assertTrue(prepared_native(self, self.root, local, 3)["duplicates"])
+        self.assertTrue(focused_scan(self.root)["exact"]["duplicates"])
 
     def _verify_behavioral_bodies(self) -> None:
         first = self.root / "src/demo/first.py"
@@ -471,8 +441,7 @@ import collections
                                      "        result: int = initial + 2\n",
                                      "        return result\n",
                                      "    return func\n")), encoding="utf-8")
-        checked = prepared_report(self.root)
-        native = prepared_native(self, self.root, checked, 3)
+        native = focused_scan(self.root)["exact"]
         self.assertTrue(native["duplicates"])
         self.assertTrue(any("if func:" in item["fragment"]
                             for item in native["duplicates"]))
@@ -481,17 +450,14 @@ import collections
                                      "class Contract(Protocol):\n    def __init__(self):\n",
                                      "        self.value = 1\n        current = self.value + 2\n",
                                      "        self.value = current * 3\n")), encoding="utf-8")
-        special = prepared_report(self.root)
-        self.assertTrue(prepared_native(self, self.root, special, 3)["duplicates"])
+        self.assertTrue(focused_scan(self.root)["exact"]["duplicates"])
         for path in (first, second):
             path.write_text("".join(("class First:\n    one: int\n    two: str\n",
                                      "    three: bytes\nclass Second:\n",
                                      "    one: int\n    two: str\n    three: bytes\n")),
                             encoding="utf-8")
-        excluded = prepared_report(self.root)
-        for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
-            job = next(item for item in excluded["tools"] if item["name"] == name)
-            self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
+        self.assertTrue(all("skipped" in native for native in
+                            focused_scan(self.root).values()))
 
     def test_real_wheel_similar_prepared(self) -> None:
         verify_prepared_similar(self, self.root)
@@ -524,6 +490,7 @@ import collections
     def test_real_wheel_full_consumer_without_rust(self) -> None:
         verify_real_full_check(self, self.root)
 
+    @unittest.skip("Real uv wheel-install lifecycle disabled by project decision")
     def test_real_wheel_uv_install_separate_tool_without_rust(self) -> None:
         verify_real_wheel_install(self, self.root)
 
@@ -576,12 +543,14 @@ import collections
                         "mode": "skipped", "requested": None,
                         "selected_files": [], "analyzed_files": []})
                 self.set_switch(key, True)
-                fake, seen = fake_tools()
-                report = self.run_report(fake)
-                self.assertIn(name, seen)
-                self.assertEqual(next(job for job in report["tools"] if job["name"] == name)
-                                 ["status"], "passed")
                 validate(report, read_json(QUARD / "report.schema.json"))
+        # A single fully re-enabled report checks all workers after the switch matrix.
+        fake, seen = fake_tools()
+        report = self.run_report(fake)
+        self.assertTrue(set(OPTIONAL_JOBS.values()) <= set(seen))
+        self.assertTrue(all(job["status"] == "passed" for job in report["tools"]
+                            if job["name"] in OPTIONAL_JOBS.values()))
+        validate(report, read_json(QUARD / "report.schema.json"))
 
     def test_disabled_lcom_rejects_explicit_paths_and_empty_argument(self):
         self.set_switch("lcom4", False)

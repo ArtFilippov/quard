@@ -66,7 +66,6 @@ jobs:
         run: |
           mkdir -p /tmp/opencode
           QUARD_TEST_WHEEL="$(ls wheelhouse/*manylinux*x86_64.whl)" uv run --locked --group dev python -B -m unittest discover -s tests/quard/check_runner -p test_check_runner.py -k full_consumer_without_rust -v
-          QUARD_TEST_WHEEL="$(ls wheelhouse/*manylinux*x86_64.whl)" uv run --locked --group dev python -B -m unittest discover -s tests/quard/check_runner -p test_check_runner.py -k uv_install_separate_tool -v
       - name: Stable ABI across available consumer Python versions
         run: |
           for version in 3.12 3.13 3.14; do

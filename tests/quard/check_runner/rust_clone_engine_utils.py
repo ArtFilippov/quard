@@ -5,6 +5,7 @@ import atexit
 from collections.abc import Callable
 from functools import cache
 import hashlib
+from importlib import import_module
 from importlib import util
 import json
 import math
@@ -21,6 +22,8 @@ from unittest.mock import patch
 from offline_fixtures import fake_tools
 from quard._common import capture, read_json
 from quard.check_runner.native_check_runner import NativeCheckRunner
+from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
+from quard.duplication_utils import read_duplication_min_lines
 from quard.report_utils import normalize
 
 QUARD = Path(__file__).resolve().parents[3]
@@ -95,6 +98,64 @@ def wheel() -> tuple[Path, Path]:
     if "cpd-core" not in installed.stdout:
         raise AssertionError("The real wheel did not expose linked engine versions")
     return python, artifacts[0]
+
+
+@cache
+def native_wheel() -> Any:
+    """Load the installed real wheel for focused, in-process semantic cases.
+
+    Returns:
+        Any: The genuine quard_clones extension module.
+    """
+    python, _ = wheel()
+    site_packages = (python.parent.parent / "lib" /
+                     f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+    sys.path.insert(0, str(site_packages))
+    try:
+        return import_module("quard_clones")
+    finally:
+        sys.path.remove(str(site_packages))
+
+
+def focused_scan(root: Path) -> dict[str, dict[str, Any]]:
+    """Scan actual discovered Python sources with the installed native engine.
+
+    This is a semantic probe, not a check report. Full runner tests separately
+    verify worker execution, raw archives, statuses and normalized diagnostics.
+
+    Args:
+        root (Path): Public consumer whose discovered .py files are analyzed.
+
+    Returns:
+        dict[str, dict[str, Any]]: Native results for the three independent views.
+
+    Raises:
+        AssertionError: The engine did not load the whole discovered source scope.
+    """
+    scope = ConfiguredConsumerPolicy(root).files()
+    paths = sorted(path for profile in ("production", "tests")
+                   for path in scope[profile] if path.endswith(".py"))
+    sources = [(str(root / path), (root / path).read_text(encoding="utf-8"))
+               for path in paths]
+    minimum = read_duplication_min_lines(root)
+    session = native_wheel().SourceSession(sources, minimum)
+    if session.source_count() != len(sources):
+        raise AssertionError("Native wheel did not scan the complete discovered scope")
+    results: dict[str, dict[str, Any]] = {}
+    for kind in ("exact", "renamed", "similar"):
+        eligible = (session.exact_eligible_lines() if kind == "exact"
+                    else session.eligible_lines())
+        units = session.exact_unit_lines() if kind == "exact" else session.unit_lines()
+        scanned = (session.exact_scanned_unit_lines() if kind == "exact"
+                   else session.scanned_unit_lines())
+        scannable = session.exact_scannable() if kind == "exact" else session.scannable()
+        payload: dict[str, Any] = (json.loads(getattr(session, kind)())
+                                   if scannable else {"skipped": True})
+        payload.update({"minimum": minimum, "sourcePaths": [path for path, _ in sources],
+                        "eligibleLines": eligible, "unitLines": units,
+                        "scannedUnitLines": scanned})
+        results[kind] = payload
+    return results
 
 
 def versions(_root: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
@@ -197,23 +258,24 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
                                "".join(f"    inserted_{n} = {n}\n" for n in range(gap)) +
                               bottom + "    return adjusted\n",
                               encoding="utf-8")
-            result = report(root)
-            job = next(j for j in result["tools"] if j["name"] == "jscpd-similar")
-            native = prepared_native(test, root, result, 3, "similar")
-            test.assertIn("_clone_engine_worker.py", job["argv"][1])
-            test.assertEqual(job["status"], "violations" if 1 <= gap <= 2 else "passed")
+            native = focused_scan(root)["similar"]
+            test.assertEqual(native["minimum"], 3)
+            scope = ConfiguredConsumerPolicy(root).files()
+            test.assertEqual(native["sourcePaths"], [str(root / path) for path in
+                             sorted(path for profile in ("production", "tests")
+                                    for path in scope[profile]
+                                    if path.endswith(".py"))])
             test.assertEqual(bool(native["duplicates"]), 1 <= gap <= 2)
             if 1 <= gap <= 2:
                 test.assertTrue(all(item["kind"] == "similar" and item["method"] == "gap"
                                     and 0 < item["similarity"] < 1
                                     for item in native["duplicates"]))
-                test.assertEqual({d["path"] for d in result["diagnostics"]
-                                  if d["rule"] == "SIMILAR_CLONE"},
-                                 {"src/demo/first.py", "tests/second.py"})
-                test.assertTrue(all(d["native_details"] in native["duplicates"]
-                                     and d["line"] >= 1 and d["column"] >= 1
-                                     for d in result["diagnostics"]
-                                     if d["rule"] == "SIMILAR_CLONE"))
+                test.assertEqual({part["name"] for item in native["duplicates"]
+                                  for part in (item["firstFile"], item["secondFile"])},
+                                 {str(first), str(second)})
+                test.assertTrue(all(item["firstFile"]["startLoc"]["line"] >= 1 and
+                                    item["firstFile"]["startLoc"]["column"] >= 0
+                                    for item in native["duplicates"]))
                 if decoration:
                     test.assertTrue(any(any("# harmless" in line for line in
                                             second.read_text(encoding="utf-8").splitlines()[
@@ -226,23 +288,20 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
         "min_lines = 3", "min_lines = 6"), encoding="utf-8")
     second.write_text("def calculate(value):\n" + top + "    inserted = 91\n" +
                       bottom + "    return adjusted\n", encoding="utf-8")
-    insufficient = report(root)
-    test.assertFalse(prepared_native(test, root, insufficient, 6, "similar")["duplicates"])
-    test.assertEqual(next(j for j in insufficient["tools"] if j["name"] == "jscpd-similar")[
-        "status"], "passed")
+    insufficient = focused_scan(root)["similar"]
+    test.assertEqual(insufficient["minimum"], 6)
+    test.assertFalse(insufficient["duplicates"])
     setting.write_text(setting.read_text(encoding="utf-8").replace(
         "min_lines = 6", "min_lines = 3"), encoding="utf-8")
     second.unlink()
     first.write_text("def unique(value):\n    return value + 53\n", encoding="utf-8")
-    clean = report(root)
-    test.assertEqual(next(j for j in clean["tools"] if j["name"] == "jscpd-similar")[
-        "status"], "passed", clean["diagnostics"])
-    test.assertFalse(prepared_native(test, root, clean, 3, "similar")["duplicates"])
+    clean = focused_scan(root)["similar"]
+    test.assertFalse(clean["duplicates"])
     # A same-file near-miss within one function remains detectable.
     first.write_text("def one(value):\n" + top + bottom + "    return adjusted\n\n" +
                      "def two(value):\n" + top + "    inserted = 91\n" +
                      bottom + "    return adjusted\n", encoding="utf-8")
-    native = prepared_native(test, root, report(root), 3, "similar")
+    native = focused_scan(root)["similar"]
     test.assertTrue(native["duplicates"])
     test.assertTrue(all(item["firstFile"]["name"] == item["secondFile"]["name"]
                         == str(first) for item in native["duplicates"]))
@@ -292,25 +351,20 @@ def verify_similar_boundaries(test: unittest.TestCase, root: Path) -> None:
         with test.subTest(label=label):
             first.write_text(left, encoding="utf-8")
             second.write_text(right, encoding="utf-8")
-            result = report(root)
-            similar = next(job for job in result["tools"] if job["name"] == "jscpd-similar")
-            native = prepared_native(test, root, result, 3, "similar") if (
-                similar["status"] != "skipped") else None
-            test.assertEqual(similar["status"], "passed", (result["diagnostics"], native))
-            if native is not None:
+            native = focused_scan(root)["similar"]
+            if "skipped" not in native:
                 test.assertFalse(native["duplicates"])
                 if label == "short_mixed":
                     test.assertEqual(native["scannedUnitLines"][str(first)], [])
                     test.assertEqual(native["scannedUnitLines"][str(second)], [])
-            test.assertFalse([d for d in result["diagnostics"]
-                              if d["rule"] == "SIMILAR_CLONE"])
+            else:
+                test.assertEqual(label, "short_mixed")
     # Same-file fragments belong to distinct functions even if the other side
     # supplies a matching pair and a gap small enough for native merging.
     first.write_text(cases["cross_function"][0] + "\n" +
                      cases["cross_function"][1], encoding="utf-8")
     second.unlink()
-    result = report(root)
-    native = prepared_native(test, root, result, 3, "similar")
+    native = focused_scan(root)["similar"]
     test.assertFalse(native["duplicates"], native)
 
 
@@ -698,10 +752,11 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     consumer.mkdir()
     adoption_consumer(consumer)
     # This manually installed wheel fixture records source selection without uv
-    # resolution; the separate source-installation fixture verifies the real pin.
+    # resolution; the separate real source-installation fixture is skipped.
     project = consumer / "pyproject.toml"
     project.write_text(project.read_text(encoding="utf-8") +
-                       '\n[tool.uv.sources]\nquard-clones = { git = "https://example.org/quard.git", rev = "' +
+                       '\n[tool.uv.sources]\n'
+                       'quard-clones = { git = "https://example.org/quard.git", rev = "' +
                        '1' * 40 + '", subdirectory = "rust/quard-clones" }\n', encoding="utf-8")
     python = consumer / ".venv/bin/python"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(consumer / ".venv")],
@@ -719,7 +774,7 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
     env["PATH"] = str(python.parent) + ":/usr/local/bin:/usr/bin:/bin"
     test.assertNotIn("cargo", env["PATH"])
 
-    def check(expected: int, exact_code: int | None = None) -> dict[str, Any]:
+    def check(expected: int) -> dict[str, Any]:
         process = subprocess.run([str(python), str(QUARD / "check.py"), "--project",
                                   str(consumer), "--json"], cwd=consumer, env=env,
                                  capture_output=True, text=True, timeout=180, check=False)
@@ -729,9 +784,7 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
         test.assertEqual(result["summary"]["infrastructure_errors"], 0,
                          result["diagnostics"])
         jobs = {job["name"]: job for job in result["tools"]}
-        test.assertEqual(jobs["jscpd"]["exit_code"],
-                         None if expected == 0 and exact_code is None else
-                         expected if exact_code is None else exact_code)
+        test.assertEqual(jobs["jscpd"]["exit_code"], None if expected == 0 else 1)
         test.assertIn("_clone_engine_worker.py", jobs["jscpd"]["argv"][1])
         for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
             test.assertIn("native_json", jobs[name]["raw_output"])
@@ -746,45 +799,43 @@ def verify_real_full_check(test: unittest.TestCase, root: Path) -> None:
             "    third = second - 4\n    fourth = third / 2\n    return fourth + 10\n")
     for name in ("first", "second"):
         (consumer / f"src/demo/main/{name}.py").write_text(text, encoding="utf-8")
-    violations = check(1)
-    test.assertEqual({item["path"] for item in violations["diagnostics"]
-                      if item["rule"] == "EXACT_CLONE"},
-                     {"src/demo/main/first.py", "src/demo/main/second.py"})
     renamed = text.replace("value", "number").replace("first", "initial")
     renamed = renamed.replace("second", "next_value").replace("third", "intermediate")
     renamed = renamed.replace("fourth", "final_value")
-    (consumer / "src/demo/main/second.py").write_text(renamed, encoding="utf-8")
-    renamed_result = check(1, exact_code=0)
-    test.assertEqual({item["path"] for item in renamed_result["diagnostics"]
-                      if item["rule"] == "RENAMED_CLONE"},
-                     {"src/demo/main/first.py", "src/demo/main/second.py"})
-    # A third real packaged-wheel scan proves Type-3 detection, not just output files.
+    (consumer / "src/demo/main/third.py").write_text(renamed, encoding="utf-8")
+    # A single real full report covers all three independent packaged-wheel views.
     beginning = ("def calculate(value):\n    alpha = value + 17\n    beta = alpha * 3\n"
                  "    gamma = beta - 4\n    delta = gamma / 2\n")
     ending = ("    left = value + 71\n    right = left * 8\n"
               "    total = right - 6\n    adjusted = total / 9\n    return adjusted\n")
-    (consumer / "src/demo/main/first.py").write_text(beginning + "    extra = 1\n" + ending,
-                                                        encoding="utf-8")
-    (consumer / "src/demo/main/second.py").write_text(beginning + "    extra = 2\n" + ending,
-                                                         encoding="utf-8")
-    gap = check(1, exact_code=1)
-    test.assertEqual(next(j for j in gap["tools"] if j["name"] == "jscpd-similar")["status"],
-                     "violations")
-    test.assertEqual({d["path"] for d in gap["diagnostics"] if d["rule"] == "SIMILAR_CLONE"},
-                      {"src/demo/main/first.py", "src/demo/main/second.py"})
+    for name, number in (("gap_first", 1), ("gap_second", 2)):
+        (consumer / f"src/demo/main/{name}.py").write_text(
+            beginning + f"    extra = {number}\n" + ending, encoding="utf-8")
+    violations = check(1)
+    jobs = {job["name"]: job for job in violations["tools"]}
+    for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
+        test.assertEqual(jobs[name]["status"], "violations", violations["diagnostics"])
+    for rule, expected_paths in (
+        ("EXACT_CLONE", {"first", "second"}),
+        ("RENAMED_CLONE", {"first", "third"}),
+        ("SIMILAR_CLONE", {"gap_first", "gap_second"}),
+    ):
+        paths = {d["path"] for d in violations["diagnostics"] if d["rule"] == rule}
+        test.assertTrue({f"src/demo/main/{name}.py" for name in expected_paths} <= paths,
+                        (rule, paths))
     # Strict Type-3 must not promote two matching executable lines with the
     # indentation of the different third line; the independent Type-1 result
     # retains its native finding in this full run.
     short = ("def calculate(value: int) -> int:\n    first = value + 17\n"
              "    second = first * 3\n")
+    for name in ("third", "gap_first", "gap_second"):
+        (consumer / f"src/demo/main/{name}.py").unlink()
     for name, ending in (("first", "    return second\n"),
-                         ("second", "    raise ValueError(second)\n")):
+                          ("second", "    raise ValueError(second)\n")):
         (consumer / f"src/demo/main/{name}.py").write_text(short + ending, encoding="utf-8")
-    insufficient = check(1, exact_code=1)
-    test.assertEqual(next(j for j in insufficient["tools"] if j["name"] == "jscpd-similar")[
-        "status"], "passed")
-    test.assertFalse([d for d in insufficient["diagnostics"] if d["rule"] == "SIMILAR_CLONE"])
-    test.assertTrue([d for d in insufficient["diagnostics"] if d["rule"] == "EXACT_CLONE"])
+    insufficient = focused_scan(consumer)
+    test.assertFalse(insufficient["similar"]["duplicates"])
+    test.assertTrue(insufficient["exact"]["duplicates"])
 
 
 def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:

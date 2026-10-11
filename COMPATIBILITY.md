@@ -294,8 +294,9 @@ reviewed-конфигурации. Generated-проекты запускают �
 
 `tests/quard/architecture_compatibility/test_pinned_architecture_compatibility.py` запускает настоящий Pylint в отдельных процессах
 на временных пакетах: сравнивает проблемные примеры с непатченным плагином и
-проверяет отрицательные случаи. Это изолирует singleton-конфигурацию плагина и
-проверяет установку патча до загрузки plugins, включая повторный вызов installer.
+проверяет отрицательные случаи. Парное сравнение на одной конфигурации выполняется
+в одном процессе; разные конфигурации изолированы. Отдельный сценарий проверяет
+установку патча до загрузки plugins, включая повторный вызов installer.
 
 ```bash
 uv run --locked --group dev python -B -m unittest discover -s tests/quard/architecture_compatibility -v

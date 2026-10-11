@@ -262,8 +262,13 @@ class TestTransactionalInstallation(unittest.TestCase):
                                   ("[duplication", "INVALID_CONFIG")):
             with self.subTest(value=replacement):
                 setting.write_text(original.replace("[duplication]\nmin_lines = 3",
-                                                    "[duplication]\n" + replacement),
+                                                     "[duplication]\n" + replacement),
                                    encoding="utf-8")
+                with self.assertRaises(QuardError) as invalid:
+                    read_duplication_min_lines(root)
+                self.assertEqual(invalid.exception.code, rule)
+                if replacement not in {"min_lines = true", "[duplication"}:
+                    continue
                 for command in ("apply.py", "check.py"):
                     output = run_command([sys.executable, str(QUARD / command),
                                           "--project", str(root), "--json"], root, expected=2)

@@ -320,9 +320,10 @@ upgrading Quard, reinstall to acquire the pinned Git source or check exits 2
 with a migration link and three explicit job errors.
 The reproducible same-scope CLI/Rust performance comparison and seven-run
 measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
-The isolated source fixture runs uv install, reinstall, locked sync and full
-check from a separate tool clone and a nonstandard submodule path with spaces,
-checking that neither tool tree changes. The rollout history is in
+The source-install and separate-tool wheel-install lifecycle fixtures are
+permanently skipped. They formerly covered uv install, reinstall, locked sync,
+full check and clean tool trees from separate clones and nonstandard submodules.
+The rollout history is in
 [the #127 integration record](docs/issue-127-clone-rollout.md).
 Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
