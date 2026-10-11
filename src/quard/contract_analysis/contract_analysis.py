@@ -8,7 +8,7 @@ _EMPTY_NAMES: frozenset[str] = frozenset()
 
 
 class ContractAnalysis(Protocol):
-    """Resolve class ancestry, public members and contract diagnostics."""
+    """Resolve class ancestry and contract diagnostics."""
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         """Create an analyzer.
@@ -24,10 +24,6 @@ class ContractAnalysis(Protocol):
     def has_contract(self, name: str, seen: frozenset[str] = _EMPTY_NAMES,
                      source: tuple[ast.ClassDef, str] | None = None) -> bool: ...
     def local_module(self, resolved: str) -> bool: ...
-    def inherited_api(self, name: str, seen: frozenset[str] = _EMPTY_NAMES,
-                      source: tuple[ast.ClassDef, str] | None = None) -> tuple[set[str], bool]: ...
-    def public_members(self, name: str, node: ast.ClassDef,
-                       path: str) -> dict[str, ast.stmt]: ...
     def declaration(self, name: str, seen: frozenset[str] = _EMPTY_NAMES,
                     source: tuple[ast.ClassDef, str] | None = None) -> bool: ...
     def inherited_implementations(self, name: str, seen: frozenset[str] | None = None,

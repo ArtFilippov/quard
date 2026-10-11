@@ -357,9 +357,13 @@ It forbids stored class values, including `Final` constants, at declaration and
 statically named writes through known classes. Initialized dataclass instance
 fields, Enum members and `__slots__` remain allowed.
 The class-contract rule checks every discovered `.py` and `.pyi` class in both
-profiles for an explicit inherited contract and public member coverage by local
-contracts, independently of LCOM4 selection. See [PROFILE.md](PROFILE.md#tools-and-scope)
-for the opaque-external-base exception.
+profiles for an explicit inherited contract, independently of LCOM4 selection.
+Implementation methods and properties absent from inherited local contracts are
+implementation-only members, including when an unrelated contract has the same name.
+Reviewed production Pylint disables W9201 through its native configuration on
+installation and apply; W9202 and other enabled rules remain active. Generated
+projects do not load the legacy plugin. This policy is independent of the optional
+leading-underscore check.
 It also rejects redeclarations of methods and recognized properties from any
 resolvable customer-owned non-contract ancestor, while allowing declarations supplied
 only by local contracts. Each member receives one violation per class and source file.

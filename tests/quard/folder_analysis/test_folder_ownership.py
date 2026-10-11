@@ -294,8 +294,7 @@ class TestFolderOwnership(unittest.TestCase):
         contracts, _ = self.run_worker("class-contracts")
         outer, _ = self.run_worker("outer-classes")
         self.assertEqual({d["rule"] for d in folders["diagnostics"]}, {"ENVELOPE_FILE"})
-        self.assertEqual({d["rule"] for d in contracts["diagnostics"]},
-                         {"UNCOVERED_CLASS_MEMBER"})
+        self.assertEqual(contracts["diagnostics"], [])
         self.assertEqual([d["rule"] for d in outer["diagnostics"]],
                          ["MULTIPLE_OUTER_CLASSES", "MULTIPLE_OUTER_CLASSES"])
 

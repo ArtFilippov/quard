@@ -531,10 +531,7 @@ class TestArchitectureDraft(unittest.TestCase):
             files = ConfiguredConsumerPolicy(root).files()
             findings, error = class_contracts(root, sorted(files["production"] + files["tests"]))
             self.assertIsNone(error, findings)
-            self.assertTrue(any(d["rule"] == "UNCOVERED_CLASS_MEMBER" and
-                                d["path"] == "src/demo/reader/envelopes/reader_envelope.py" and
-                                d["line"] > 0 and d["column"] > 0
-                                for d in findings), findings)
+            self.assertNotIn("UNCOVERED_CLASS_MEMBER", {d["rule"] for d in findings})
             self.assertEqual(self.folder_findings(root), [])
             execution = capture([sys.executable, "-c",
                                  "import sys; sys.path.insert(0, 'src'); " +

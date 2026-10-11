@@ -253,6 +253,53 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             self.assertNotIn("clean_architecture_linter", config["main"]["load-plugins"])
             self.assertFalse(set(config["messages_control"]["disable"]) & {"W9001", "W9201"})
 
+    def test_reviewed_w9201_is_disabled_on_install_and_upgrade(self):
+        for fresh in (True, False):
+            with self.subTest(fresh=fresh), TemporaryDirectory(
+                    prefix="quard-reviewed-w9201-") as directory:
+                root = Path(directory)
+                create_repo(root)
+                project = root / "pyproject.toml"
+                doc = tomlkit.parse(project.read_text(encoding="utf-8"))
+                pylint = doc["tool"]["pylint"]
+                pylint["design"]["ignored-parents"].append("foreign.Framework")
+                pylint["messages_control"]["disable"].append("consumer-own-rule")
+                pylint["messages_control"]["enable"].append("W9202")
+                project.write_text(tomlkit.dumps(doc), encoding="utf-8")
+                configure(root, initial=fresh, plugins=CATALOG["plugins"], catalog=CATALOG)
+                production = load_toml(project)["tool"]["pylint"]
+                tests = load_toml(root / ".quard/pylint-tests.toml")["tool"]["pylint"]
+                self.assertNotIn("W9202", production["messages_control"]["disable"])
+                for config in (production, tests):
+                    control = config["messages_control"]
+                    self.assertEqual(control["disable"].count("W9201"), 1)
+                    self.assertIn("consumer-own-rule", control["disable"])
+                    self.assertIn("foreign.Framework", config["design"]["ignored-parents"])
+                    self.assertIn("W9202", control["enable"])
+                self.assertFalse(configure(root))
+                notes = read_json(root / ".quard/policy-notes.json")
+                self.assertIn("W9201", notes["production_disabled"])
+
+    def test_reviewed_native_w9202_and_unrelated_rules_still_report(self):
+        root = self.root
+        (root / "src/demo/domain/api.py").write_text(
+            "from typing import Protocol\nclass Port(Protocol):\n"
+            "    def run(self): ...\n", encoding="utf-8")
+        adapter = root / "src/demo/infrastructure"
+        adapter.mkdir()
+        (adapter / "driver.py").write_text(
+            "import os\nfrom demo.domain.api import Port\n"
+            "class Driver(Port):\n"
+            "    def run(self): return 1\n"
+            "    def extra(self): pass\n", encoding="utf-8")
+        report = selected_report(self, root, "pylint-production", "class-contracts")
+        rules = {(item["rule"], item["path"]) for item in report["diagnostics"]}
+        self.assertIn(("W9202", "src/demo/infrastructure/driver.py"), rules)
+        self.assertIn(("W0611", "src/demo/infrastructure/driver.py"), rules)
+        self.assertNotIn(("W9201", "src/demo/infrastructure/driver.py"), rules)
+        self.assertFalse(any(item["rule"] == "UNCOVERED_CLASS_MEMBER" for item in
+                             report["diagnostics"]))
+
     def test_generated_pylint_report_and_reviewed_profile(self):
         for managed in (False, True):
             with self.subTest(generated=managed), TemporaryDirectory(

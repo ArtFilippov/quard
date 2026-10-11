@@ -169,52 +169,6 @@ class Contracts(ContractAnalysis):
         return resolved.split(".")[0] in self.customer_roots
 
     @override
-    def inherited_api(self, name: str, seen: frozenset[str] = frozenset(),
-                      source: tuple[ast.ClassDef, str] | None = None
-                      ) -> tuple[set[str], bool]:
-        """Collect local contract members and proven opaque external ancestry."""
-        if name in seen:
-            return set(), False
-        members: set[str] = set()
-        external = False
-        node, path = source or (self.nodes[name], self.paths[name])
-        for base in node.bases:
-            resolved = self.resolved(name, base, path)
-            if resolved in self.nodes:
-                if self.declaration(resolved):
-                    members.update(self.public_members(resolved, self.nodes[resolved],
-                                                       self.paths[resolved]))
-                inherited, opaque = self.inherited_api(resolved, seen | {name})
-                members.update(inherited)
-                external |= opaque
-            elif (resolved and resolved not in CONTRACT_BASES
-                  and not self.local_module(resolved)):
-                external = True
-        return members, external
-
-    @override
-    def public_members(self, name: str, node: ast.ClassDef, path: str) -> dict[str, ast.stmt]:
-        """Find locally declared public instance methods and properties."""
-        members: dict[str, ast.stmt] = {}
-        for item in node.body:
-            if isinstance(item, METHOD):
-                if (item.name.startswith("_") and not item.name.startswith("__")
-                        or item.name in SPECIAL_METHODS):
-                    continue
-                if any(self.resolved(name, decorator, path) in {
-                        "builtins.staticmethod", "builtins.classmethod"}
-                        for decorator in item.decorator_list):
-                    continue
-                members.setdefault(item.name, item)
-            elif (isinstance(item, ast.Assign) and isinstance(item.value, ast.Call)
-                  and self.resolved(name, item.value.func, path) in {
-                      "builtins.property", "functools.cached_property"}):
-                for target in item.targets:
-                    if isinstance(target, ast.Name) and not target.id.startswith("_"):
-                        members.setdefault(target.id, item)
-        return members
-
-    @override
     def declaration(self, name: str, seen: frozenset[str] = frozenset(),
                     source: tuple[ast.ClassDef, str] | None = None) -> bool:
         if name in seen:
@@ -320,16 +274,6 @@ class Contracts(ContractAnalysis):
                                 "line": node.lineno, "column": node.col_offset + 1,
                                 "symbol": name.removeprefix(module + "."),
                                 "message": f"{name}: customer class requires an explicitly inherited contract."})
-            elif not self.declaration(name, source=source):
-                members, external = self.inherited_api(name, source=source)
-                if not external:
-                    for member, item in self.public_members(name, node, path).items():
-                        if member not in members:
-                            symbol = f"{name.removeprefix(module + '.')}.{member}"
-                            results.append({"rule": "UNCOVERED_CLASS_MEMBER", "path": path,
-                                            "line": item.lineno, "column": item.col_offset + 1,
-                                            "symbol": symbol, "message":
-                                            f"{name}.{member}: no inherited local contract declares this member."})
         return results
 
 

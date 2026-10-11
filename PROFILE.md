@@ -13,7 +13,9 @@ violations baseline.
   architecture, DI, Protocol, I/O and structural heuristics. Generated-policy
   projects do not load this legacy five-layer plugin in either Pylint profile or
   maintain its layer map. Plugin-only messages are absent, not passing checks.
-  Both modes retain pinned Pylint Protocol fixes; reviewed mode retains the
+  Reviewed production disables W9201, which incorrectly requires implementation-only
+  members to be declared by a Domain Protocol; W9202 and the other enabled plugin
+  rules remain active. Both modes retain pinned Pylint Protocol fixes; reviewed mode retains the
   version-guarded plugin fixes in `COMPATIBILITY.md`.
 * **Pyright 1.1.414** with its Node runtime: strict plus the additional diagnostics
   in `_policy.PYRIGHT_EXTRA`. Cycles are assigned to Pylint.
@@ -120,20 +122,12 @@ violations baseline.
   prove a contract; explicit imports outside customer package roots remain
   opaque external bases. Source failures and malformed worker reports are
   infrastructure errors.
-  `UNCOVERED_CLASS_MEMBER` points to each public instance method or property
-  declared on a customer implementation class that no inherited local Protocol or
-  abstract-interface declaration names. Multiple local contracts may cover
-  different members; contracts through customer ancestors, aliases and stubs
-  count. Decorated and statically assigned built-in or `functools.cached_property`
-  properties count; Python data-model hooks, private members, inherited methods
-  and non-instance methods do not require fresh declarations. The check compares
-  names, leaving signatures to Pyright. A proven explicitly inherited opaque
-  external base (directly or via customer ancestry) may supply otherwise uncovered
-  behavior, so the entire class is exempt from member coverage; its source is never
-  inspected. Unknown and unresolved customer bases do not grant this exemption.
-  Explicit `object` still satisfies the inheritance requirement but supplies no
-  public API exemption. This trade-off permits extra local methods on classes that also
-  inherit an external framework base.
+  An implementation member not named in its explicitly inherited local contracts is
+  implementation-only, even if an unrelated contract declares that name. No
+  `UNCOVERED_CLASS_MEMBER` finding is emitted in source, stubs or tests. Member
+  visibility does not depend on leading underscores; optional underscore checks
+  remain independent. Explicit opaque external bases (including `object`) still
+  satisfy the inheritance requirement; unresolved customer bases do not.
   `CUSTOMER_METHOD_OVERRIDE` reports a directly declared sync or async method or
   recognized property that redeclares a member on any resolvable customer-owned
   non-contract ancestor, even when a contract or other base comes first in MRO.
@@ -689,7 +683,8 @@ in `.quard/pylint-catalog.json` and `.quard/policy-notes.json`.
 Production disables mandatory docstrings and four checks explicitly delegated to
 Pyright: reimported, undefined-variable, used-before-assignment and
 possibly-used-before-assignment. Unused/private/unreachable diagnostics and
-architecture W9001/W9003 remain: partial overlap is not identical coverage.
+architecture W9001/W9003 remain in reviewed mode: partial overlap is not identical
+coverage. Reviewed production also disables W9201; W9202 remains enabled.
 
 Tests retain strict typing, execution/syntax/exception checks and validation of
 existing docs. They allow fixture/reused names and unused fixture arguments,

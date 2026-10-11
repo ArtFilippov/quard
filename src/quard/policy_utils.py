@@ -48,6 +48,9 @@ PRODUCTION_DISABLED = {
     "used-before-assignment": "Pyright reportUnboundVariable=error.",
     "possibly-used-before-assignment": "Pyright reportPossiblyUnboundVariable=error.",
 }
+REVIEWED_PRODUCTION_DISABLED = {
+    "W9201": "Implementation-only members need not belong to an inherited public contract.",
+}
 TEST_DISABLED = {
     "too-few-public-methods": "Test containers and fakes may expose one operation.",
     "no-self-use": "Test frameworks call instance methods without instance state.",
@@ -61,7 +64,7 @@ TEST_DISABLED = {
 # Filter through the installed catalog before use to avoid unknown message IDs.
 TEST_ARCH_DISABLED = [
     "W9001", "W9003", "W9004", "W9005", "W9006", "W9007", "W9009",
-    "W9010", "W9011", "W9012", "W9013", "W9015", "W9102", "W9201", "W9202", "W9301", "W9601",
+    "W9010", "W9011", "W9012", "W9013", "W9015", "W9102", "W9202", "W9301", "W9601",
 ]
 PYRIGHT_EXTRA = [
     "reportCallInDefaultInitializer", "reportImplicitOverride", "reportImplicitStringConcatenation",
@@ -301,7 +304,9 @@ def test_pylint(base: dict[str, Any], limits: dict[str, int], catalog: dict[str,
 
 
 def policy_notes(plugins: list[str]) -> dict[str, Any]:
-    return render_policy_notes(plugins, PRODUCTION_DISABLED, TEST_DISABLED, TEST_ARCH_DISABLED)
+    disabled = {**PRODUCTION_DISABLED, **(REVIEWED_PRODUCTION_DISABLED
+                                     if LEGACY_PLUGIN in plugins else {})}
+    return render_policy_notes(plugins, disabled, TEST_DISABLED, TEST_ARCH_DISABLED)
 
 
 def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = None,
@@ -344,9 +349,19 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
                                               read_json(root / ".quard/pylint-catalog.json"))
             tool["pylint"].setdefault("main", {})["load-plugins"] = official_plugins(
                 native_catalog["plugins"])
+        # The reviewed-only W9201 disable has no registered rule in generated mode.
+        control = tool["pylint"].get("messages_control", {})
+        if "disable" in control and "W9201" in control["disable"]:
+            control["disable"] = [rule for rule in control["disable"] if rule != "W9201"]
         removed_layer_map = tool.pop("clean-arch", None) is not None
     else:
         removed_layer_map = False
+        # W9201 treats every extra method as public API, unlike Quard's inherited
+        # contract boundary. Apply on upgrades too, without replacing native settings.
+        control = tool["pylint"].setdefault("messages_control", {})
+        disabled = control.setdefault("disable", [])
+        if "W9201" not in disabled:
+            disabled.append("W9201")
     apply_limits(tool["pylint"], limits["production"])
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]
@@ -370,6 +385,9 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     outputs: dict[str, str] = {
         "pyproject.toml": rendered_project,
         ".quard/pylint-tests.toml": "# Test-only profile. Regenerate with quard/apply.py.\n" + tomlkit.dumps(tests),
+        ".quard/policy-notes.json": json.dumps(
+            policy_notes(plain["main"]["load-plugins"]), ensure_ascii=False,
+            indent=2, sort_keys=True) + "\n",
     }
     if "pyright" in tool:
         outputs["pyrightconfig.json"] = json.dumps(tomllib.loads(rendered_project)["tool"]["pyright"], ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -378,8 +396,6 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         tach = tomlkit.parse(tach_path.read_text(encoding="utf-8"))
         tach["exclude"] = exclude_globs(scope) + ["tests/**"] + [f"**/{name}/**" for name in scope["test_directory_names"]]
         outputs["tach.toml"] = tomlkit.dumps(tach)
-    if initial:
-        outputs[".quard/policy-notes.json"] = json.dumps(policy_notes(plugins or []), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     previous = {}
     for name in outputs:
         path = root / name

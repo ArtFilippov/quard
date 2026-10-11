@@ -2,6 +2,9 @@
 
 Research only; no policy or consumer changes. Scope is the agreements in [map #94](https://github.com/ArtFilippov/quard/issues/94) and the [question in #97](https://github.com/ArtFilippov/quard/issues/97). Versions are pinned in [tools.json](../tools.json): Tach 0.35.1, clean-architecture-linter-plugin 1.2.2, Pylint 4.0.8. Findings below compare the *installed pinned packages* with [Tach's v0.35.1 source](https://github.com/gauge-sh/tach/tree/v0.35.1) and [plugin v1.2.2 source](https://github.com/noah-goodrich/pylint-clean-architecture/tree/v1.2.2); the live Tach [configuration](https://docs.gauge.sh/usage/configuration/), [layers](https://docs.gauge.sh/usage/layers/), [interfaces](https://docs.gauge.sh/usage/interfaces/) and [commands](https://docs.gauge.sh/usage/commands/) docs explain the user-facing controls. Where docs and pinned behavior differ, pinned code governs.
 
+Historical audit: issue #128 later disabled reviewed production W9201 by policy;
+current coverage is documented in [PROFILE.md](../PROFILE.md#tools-and-scope).
+
 ## What Tach can enforce
 
 | Dependency row from #94 | Native fit and necessary qualification |
