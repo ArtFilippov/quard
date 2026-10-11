@@ -1,4 +1,4 @@
-# Совместимость Quard 1.1.0
+# Совместимость Quard 1.2.0
 
 Для обычного in-memory clone-pass (#125) зафиксированы
 `quard-clones 0.1.0` и связанные Rust-крейты в `tools.json` и Cargo.lock.
