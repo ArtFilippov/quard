@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import ast
 
+from quard.field_ownership.bindings import module_name
+
 
 class BindingScanner(ast.NodeVisitor):
     """Report syntactic bindings, without treating external attribute access as ownership."""
 
-    def __init__(self, path: str, lines: list[str]) -> None:
+    def __init__(self, path: str, lines: list[str], modules: frozenset[str] = frozenset()) -> None:
         self.path = path
         self.lines = lines
         self.diagnostics: list[dict[str, object]] = []
         self.in_class = False
+        self.module = module_name(path)
+        self.modules = modules
+
+    def local_module(self, name: str) -> bool:
+        """Accept only a discovered module or its package prefix, never an external import."""
+        return any(module == name or module.startswith(name + ".") for module in self.modules)
 
     def add(self, name: str, node: ast.AST, *, locate: bool = False) -> None:
         from quard.leading_underscores_utils import forbidden
@@ -76,9 +84,27 @@ class BindingScanner(ast.NodeVisitor):
         for alias in node.names:
             if alias.asname:
                 self.add(alias.asname, alias, locate=True)
+            elif self.local_module(alias.name.split(".")[0]):
+                # `import pkg.child` binds only `pkg`, whereas `as` binds the full alias.
+                self.add(alias.name.split(".")[0], alias)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self.visit_Import(node)
+        package = self.module if self.path.endswith(("/__init__.py", "/__init__.pyi")) else (
+            self.module.rpartition(".")[0])
+        parts = package.split(".") if package else []
+        if node.level:
+            if node.level > len(parts):
+                target = ""
+            else:
+                target = ".".join([*parts[:len(parts) - node.level + 1], node.module]
+                                  if node.module else parts[:len(parts) - node.level + 1])
+        else:
+            target = node.module or ""
+        for alias in node.names:
+            if alias.asname:
+                self.add(alias.asname, alias, locate=True)
+            elif target and self.local_module(target):
+                self.add(alias.name, alias)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.name:

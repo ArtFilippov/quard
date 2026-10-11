@@ -105,6 +105,68 @@ class Model:
         self.assertEqual([(d["rule"], d["symbol"]) for d in paths],
                          [("LEADING_UNDERSCORE_PATH", "__custom__")])
 
+    def test_exception_data_names_are_special_but_invented_dunders_are_not(self):
+        self.put("src/demo/exception.py", '''__traceback__ = None
+__cause__ = None
+__context__ = None
+__suppress_context__ = False
+__notes__ = []
+__annotate__ = None
+__base__ = None
+__value__ = None
+__invented__ = 1
+class Error(Exception):
+    def __init__(self):
+        self.__traceback__ = None
+        self.__cause__ = None
+        self.__context__ = None
+        self.__suppress_context__ = False
+        self.__notes__ = []
+        self.__invented__ = 1
+''')
+        findings, error = analyze(self.root, ["src/demo/exception.py"])
+        self.assertIsNone(error)
+        self.assertEqual([(d["symbol"], d["line"]) for d in findings],
+                         [("__invented__", 9), ("__invented__", 17)])
+
+    def test_unaliased_imports_bind_local_names_only_for_first_party_modules(self):
+        self.put("src/pkg/__init__.py", "\n")
+        self.put("src/pkg/_local.py", "_thing = 1\n")
+        self.put("src/_pkg/__init__.py", "\n")
+        self.put("src/pkg/client.py", '''import _pkg
+import _pkg.component
+from ._local import _thing
+from pkg._local import _thing
+from . import _local
+from pkg import _local
+import pkg._local
+import _external
+from external import _remote
+from external.module import _remote
+from pkg._local import _thing as _renamed
+''')
+        self.put("src/pkg/client.pyi", "from ._local import _thing\nfrom vendor import _external\n")
+        self.put("tests/test_imports.py", "from pkg import _local\nfrom vendor import _outside\n")
+        paths = ["src/pkg/__init__.py", "src/pkg/_local.py", "src/_pkg/__init__.py",
+                 "src/pkg/client.py", "src/pkg/client.pyi", "tests/test_imports.py"]
+        findings, error = analyze(self.root, paths)
+        self.assertIsNone(error)
+        bindings = [(d["symbol"], d["line"], d["column"]) for d in findings
+                    if d["path"] == "src/pkg/client.py" and d["rule"] == "LEADING_UNDERSCORE_NAME"]
+        self.assertEqual(bindings, [("_pkg", 1, 8), ("_pkg", 2, 8),
+                                    ("_thing", 3, 21), ("_thing", 4, 24),
+                                    ("_local", 5, 15), ("_local", 6, 17),
+                                    ("_renamed", 11, 34)])
+        self.assertEqual({(d["path"], d["symbol"]) for d in findings
+                          if d["rule"] == "LEADING_UNDERSCORE_NAME" and d["path"] in paths[4:]},
+                         {("src/pkg/client.pyi", "_thing"), ("tests/test_imports.py", "_local")})
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual({(d["symbol"], d["line"]) for d in result["diagnostics"]
+                          if d["path"] == "src/pkg/client.py" and d["rule"] == "LEADING_UNDERSCORE_NAME"},
+                         {(name, line) for name, line, _ in bindings})
+        self.assertFalse(any(d["is_infrastructure_error"] for d in result["diagnostics"]))
+
     def test_proven_attribute_writes_and_dictionary_forms_in_source_and_stub(self):
         code = '''import builtins as bi
 from builtins import setattr as put, vars as mapping

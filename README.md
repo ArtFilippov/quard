@@ -400,14 +400,17 @@ raw stdout and stderr remain archived alongside the standard positioned diagnost
 
 The independent `leading-underscores` job checks discovered production, test and
 companion-stub paths and Python bindings (including nested declarations, parameters,
-assignments, import aliases and stored receiver fields). It reports leading `_`
+assignments, import aliases, unchanged imports from discovered first-party modules,
+and stored receiver fields). It reports leading `_`
 in module and directory names once per discovered path component. Proven first-party
 attribute writes, literal-name built-in setters and instance-dictionary writes
 (including known dictionary aliases), plus literal slots, are declarations. The
-standalone `_`,
-Python-defined special names such as `__init__`, `__slots__` and `__all__`, and
-required `__init__.py`/`__main__.py` modules are allowed; invented `__custom__`
-names are not. Unaliased imports from libraries, external attributes and excluded
+standalone `_` and Python-defined special names such as `__init__`, `__slots__`,
+`__all__` and
+exception fields (`__traceback__`, `__cause__`, `__context__`,
+`__suppress_context__`, `__notes__`) are allowed, as are required
+`__init__.py`/`__main__.py` modules; invented `__custom__` names are not.
+Unaliased imports from external libraries, external attributes and excluded
 paths are not checked. Set `[checks] leading_underscores = false` to skip only this
 job. It defaults to on for existing projects even before reinstall; reinstall adds
 the explicit setting. Existing Quard source and test names are deliberately reported

@@ -10,6 +10,7 @@ import sys
 from typing import cast
 
 from quard.field_ownership.ownership import Ownership
+from quard.field_ownership.bindings import module_name
 from quard.leading_attribute_scanner import AttributeScanner
 from quard.leading_underscores_scanner import BindingScanner
 
@@ -19,9 +20,12 @@ SPECIAL = frozenset("""
 __name__ __doc__ __package__ __loader__ __spec__ __path__ __file__ __cached__
 __builtins__ __all__ __annotations__ __dict__ __weakref__ __module__ __qualname__
 __class__ __classcell__ __slots__ __match_args__ __orig_bases__ __parameters__
-__type_params__ __abstractmethods__ __isabstractmethod__ __final__ __wrapped__
+__type_params__ __annotate__ __base__ __abstractmethods__ __isabstractmethod__
+__final__ __wrapped__
 __signature__ __defaults__ __kwdefaults__ __code__ __closure__ __globals__
 __self__ __func__ __objclass__ __args__ __origin__ __metadata__ __required_keys__
+__value__ __bound__ __constraints__ __default__ __covariant__ __contravariant__
+__infer_variance__
 __optional_keys__ __total__ __dataclass_fields__ __dataclass_params__
 __init__ __new__ __del__ __init_subclass__ __class_getitem__ __mro_entries__
 __prepare__ __instancecheck__ __subclasscheck__ __subclasshook__
@@ -29,6 +33,7 @@ __get__ __set__ __delete__ __set_name__ __getattr__ __getattribute__
 __setattr__ __delattr__ __dir__ __call__ __getstate__ __setstate__
 __reduce__ __reduce_ex__ __copy__ __deepcopy__ __missing__
 __getnewargs__ __getnewargs_ex__ __mro__ __bases__ __flags__ __subclasses__
+__traceback__ __cause__ __context__ __suppress_context__ __notes__
 __text_signature__ __post_init__ __static_attributes__ __firstlineno__
 __repr__ __str__ __bytes__ __format__ __hash__ __bool__ __len__
 __iter__ __next__ __reversed__ __contains__ __getitem__ __setitem__
@@ -99,12 +104,14 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
             continue
-        scanner = BindingScanner(path, text.splitlines())
-        scanner.visit(tree)
-        diagnostics.extend(scanner.diagnostics)
         trees[path] = tree
         lines[path] = text.splitlines()
     if trees:
+        modules = frozenset(module_name(path) for path in trees)
+        for path, tree in trees.items():
+            scanner = BindingScanner(path, lines[path], modules)
+            scanner.visit(tree)
+            diagnostics.extend(scanner.diagnostics)
         ownership = Ownership(trees)
         for path, tree in trees.items():
             visitor = AttributeScanner(ownership, path, lines[path])

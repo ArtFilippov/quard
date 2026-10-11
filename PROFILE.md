@@ -193,16 +193,19 @@ violations baseline.
   `collections.namedtuple` assignments with literal class names also count.
 * **Leading underscores (default-on, optional)**: `LEADING_UNDERSCORE_NAME` checks
   first-party class/function/type-parameter/parameter and variable definitions,
-  explicit import aliases, pattern and exception bindings, and stored receiver
-  fields and proven first-party class/instance attribute writes (including literal
-  slots, built-in `setattr`, and known-key instance-dictionary writes and aliases).
+  explicit import aliases, unaliased names bound from discovered first-party
+  modules/packages (including relative imports), pattern and exception bindings,
+  stored receiver fields and proven first-party class/instance attribute writes
+  (including literal slots, built-in `setattr`, and known-key instance-dictionary
+  writes and aliases).
   It scans discovered `.py`
   and `.pyi` files in both profiles, independently of LCOM4. Unaliased external
   imports and assignments to unknown external objects are not local declarations.
   `LEADING_UNDERSCORE_PATH` checks module and directory components of discovered
   files, without inventing source coordinates. Excluded directories do not enter
   the manifest. The single `_` placeholder, Python data-model and interpreter
-  names, and `__init__`/`__main__` modules are allowed; arbitrary double-underscore
+  names (including the five exception context/traceback/note fields), and
+  `__init__`/`__main__` modules are allowed; arbitrary double-underscore
   names are not. Existing findings remain normal violations without migration
   baselines. Set `leading_underscores = false` in `[checks]` to skip this job only;
   disabled runs have no worker, manifest or exit code. Malformed source and output
