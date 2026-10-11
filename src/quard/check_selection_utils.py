@@ -13,6 +13,7 @@ OPTIONAL_JOBS = {
     "outer_classes": "outer-classes", "free_function_placement": "free-function-placement",
     "leading_underscores": "leading-underscores",
     "encapsulated_only": "encapsulated-only",
+    "lambda_injection": "lambda-injection",
     "pyright": "pyright", "pydoclint": "pydoclint",
 }
 CONSTRUCTOR_PURITY = "constructor_purity"

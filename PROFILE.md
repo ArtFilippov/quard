@@ -117,6 +117,9 @@ violations baseline.
 * **Constructor purity (default-on, optional)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including
   nested classes. It is unaffected by `--lcom_files`; stubs have no checked body.
+* **Lambda injection (default-on, optional)**: `LAMBDA_INJECTION` checks directly
+  supplied lambdas in production assembly files, independently of LCOM4 and
+  generated/reviewed architecture selection. See [Lambda injection](#lambda-injection).
 * **Non-instance methods**: Quard's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
   on consumer-owned classes, independently of the native analyzers and LCOM4.
@@ -559,6 +562,27 @@ This does not claim universal runtime coverage. Source read/parse errors, execut
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
 valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain
 their diagnostics. Ordinary reports, manifests and logs stay in the chosen consumer.
+
+## Lambda injection
+
+Set `[checks] lambda_injection = false` to skip the independent `lambda-injection`
+job; missing settings default to `true` on new and upgraded projects. It scans
+discovered production `.py` files beneath a `main/` directory or directly in a
+contract group's `envelopes/` directory. Nested envelope directories, tests, stubs
+and ordinary modules are not assembly sites. Direct positional and keyword lambdas
+are checked when the call target resolves to a project class or an imported External
+target. External means imported from outside discovered consumer package roots,
+including imported member and module aliases. Unresolved call targets are ignored.
+
+Lambda bodies may use constants, parameters/names, attribute reads, calls (including
+project functions and opaque External functions), and list, tuple, set and dict
+literals built from these expressions. Calls can chain or nest, and their arguments
+are checked even if the callee is External. Conditional expressions, subscriptions,
+arithmetic, assignment expressions, comprehensions and other unsupported expressions
+receive positioned `LAMBDA_INJECTION` violations advising a wrapper class. The
+rule constrains syntax, not the purity or runtime behavior of called functions.
+Source read/parse and worker/report failures exit 2; valid violations exit 1 and
+clean results exit 0. Raw output and diagnostics are archived with the usual report.
 
 ## Constructor purity
 

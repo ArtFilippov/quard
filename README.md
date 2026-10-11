@@ -185,6 +185,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `leading_underscores = true` | `leading-underscores` (first-party names and paths) |
 | `encapsulated_only = true` | `encapsulated-only` |
 | `constructor_purity = true` | `constructor-purity` |
+| `lambda_injection = true` | `lambda-injection` |
 | `pyright = true` | `pyright` |
 | `pydoclint = true` | `pydoclint` |
 | `duplicate_detection = true` | `jscpd`, `jscpd-renamed`, `jscpd-similar` |
@@ -341,6 +342,10 @@ definition-time defaults and annotations, plus proven project decorator factorie
 and applications are checked. External decorators are opaque; unknown applications
 fail. See
 [PROFILE.md](PROFILE.md#constructor-purity).
+The independent lambda-injection job checks directly supplied lambdas in production
+`main/` descendants and files directly in a contract group's `envelopes/` folder,
+for both generated and reviewed architecture. It does not narrow with LCOM4;
+see [PROFILE.md](PROFILE.md#lambda-injection).
 The instance-field boundary rule uses the same full scope and reports proven
 external access to consumer-defined stored fields, including first assignments
 to known consumer instances. Literal-name built-in `getattr`/`setattr`/`delattr`

@@ -2,6 +2,7 @@
 # The required Pylint profile always runs; checks below select optional independent jobs.
 [checks]
 constructor_purity = true
+lambda_injection = true
 lcom4 = true
 method_decorators = true
 instance_fields = true

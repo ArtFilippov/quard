@@ -32,6 +32,7 @@ WORKERS = {
     "_leading_underscores_worker.py": "leading-underscores",
     "_encapsulated_only_worker.py": "encapsulated-only",
     "_constructor_purity_worker.py": "constructor-purity",
+    "_lambda_injection_worker.py": "lambda-injection",
 }
 
 EMPTY_OUTPUT = {

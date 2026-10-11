@@ -571,6 +571,42 @@ def parse_constructor_purity(text: str, root: Path) -> tuple[list[dict[str, Any]
     return items, error
 
 
+def parse_lambda_injection(text: str, root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    """Validate worker evidence before classifying syntax or infrastructure failures."""
+    obj = find_json(text, "quard_lambda_injection_adapter")
+    if (type(obj["quard_lambda_injection_adapter"]) is not int
+            or obj["quard_lambda_injection_adapter"] != 1
+            or not isinstance(obj.get("diagnostics"), list)
+            or "execution_error" not in obj):
+        raise ValueError("Unsupported lambda injection adapter report schema")
+    error = obj["execution_error"]
+    errors = {"LAMBDA_INJECTION_PARSE_ERROR", "LAMBDA_INJECTION_EXECUTION_ERROR"}
+    if error is not None and error not in errors:
+        raise ValueError("Unknown lambda injection execution error")
+    items = []
+    for entry in obj["diagnostics"]:
+        if not isinstance(entry, dict) or entry.get("rule") not in {"LAMBDA_INJECTION", *errors}:
+            raise ValueError("Malformed lambda injection diagnostic")
+        rule = entry["rule"]
+        if (not isinstance(entry.get("message"), str)
+                or entry.get("path") is not None and not isinstance(entry["path"], str)
+                or entry.get("line") is not None and (type(entry["line"]) is not int or entry["line"] < 1)
+                or entry.get("column") is not None and (type(entry["column"]) is not int or entry["column"] < 1)):
+            raise ValueError("Malformed lambda injection diagnostic location")
+        if rule == "LAMBDA_INJECTION" and (
+                not isinstance(entry.get("path"), str) or not isinstance(entry.get("symbol"), str)
+                or type(entry.get("line")) is not int or type(entry.get("column")) is not int):
+            raise ValueError("Missing lambda injection location")
+        items.append(diagnostic("lambda-injection", rule, entry["message"],
+                                path=relative_path(entry.get("path"), root), line=entry.get("line"),
+                                column=entry.get("column"), symbol=entry.get("symbol"),
+                                is_infrastructure_error=rule in errors))
+    if bool(error) != any(item["is_infrastructure_error"] for item in items) or (
+            error and not any(item["rule"] == error for item in items)):
+        raise ValueError("Lambda injection error/diagnostic mismatch")
+    return items, error
+
+
 def _jscpd_integer(value: object, *, minimum: int = 1) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
 
@@ -841,6 +877,12 @@ def normalize(tool: str, result: dict[str, Any], root: Path, json_file: Path | N
             expected = 2 if parse_error else (1 if items else 0)
             if result.get("exit_code") != expected:
                 error = error or "CONSTRUCTOR_PURITY_EXECUTION_ERROR"
+        elif tool == "lambda-injection":
+            items, parse_error = parse_lambda_injection(result.get("stdout", ""), root)
+            error = error or parse_error
+            expected = 2 if parse_error else (1 if items else 0)
+            if result.get("exit_code") != expected:
+                error = error or "LAMBDA_INJECTION_EXECUTION_ERROR"
         elif tool == "encapsulated-only":
             items, parse_error = parse_encapsulated_only(result.get("stdout", ""), diagnostic)
             error = error or parse_error
