@@ -404,7 +404,8 @@ assignments, import aliases, unchanged imports from discovered first-party modul
 and stored receiver fields). It reports leading `_`
 in module and directory names once per discovered path component. Proven first-party
 attribute writes, literal-name built-in setters and instance-dictionary writes
-(including known dictionary aliases), plus literal slots, are declarations. The
+(including known dictionary aliases), plus literal string, sequence and mapping
+`__slots__` (also when annotated), are declarations. The
 standalone `_` and Python-defined special names such as `__init__`, `__slots__`,
 `__all__` and
 exception fields (`__traceback__`, `__cause__`, `__context__`,

@@ -196,7 +196,8 @@ violations baseline.
   explicit import aliases, unaliased names bound from discovered first-party
   modules/packages (including relative imports), pattern and exception bindings,
   stored receiver fields and proven first-party class/instance attribute writes
-  (including literal slots, built-in `setattr`, and known-key instance-dictionary
+  (including literal string, sequence and mapping `__slots__` assignments with or
+  without an annotation, built-in `setattr`, and known-key instance-dictionary
   writes and aliases).
   It scans discovered `.py`
   and `.pyi` files in both profiles, independently of LCOM4. Unaliased external

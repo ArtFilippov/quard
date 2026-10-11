@@ -72,13 +72,27 @@ class BindingScanner(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         if (self.in_class and any(isinstance(target, ast.Name) and target.id == "__slots__"
-                                  for target in node.targets)
-                and isinstance(node.value, (ast.Tuple, ast.List, ast.Constant))):
-            items = node.value.elts if isinstance(node.value, (ast.Tuple, ast.List)) else [node.value]
-            for item in items:
-                if isinstance(item, ast.Constant) and isinstance(item.value, str):
-                    self.add(item.value, item)
+                                  for target in node.targets)):
+            self.slots(node.value)
         self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if (self.in_class and isinstance(node.target, ast.Name)
+                and node.target.id == "__slots__" and node.value is not None):
+            self.slots(node.value)
+        self.generic_visit(node)
+
+    def slots(self, value: ast.expr) -> None:
+        """Treat literal slot strings and mapping keys as declared attributes."""
+        if isinstance(value, (ast.Tuple, ast.List)):
+            items = value.elts
+        elif isinstance(value, ast.Dict):
+            items = [key for key in value.keys if key is not None]
+        else:
+            items = [value]
+        for item in items:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                self.add(item.value, item)
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:

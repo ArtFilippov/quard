@@ -217,6 +217,46 @@ setattr(Model, "_class_attribute", 1)
         self.assertIn("_stub_dict", {d["symbol"] for d in result["diagnostics"]})
         self.assertFalse(any(d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_mapping_slots_and_annotated_slot_values_in_source_and_stub(self):
+        self.put("src/demo/slots.py", '''name = "_computed"
+class Mapping:
+    __slots__ = {"_mapped": "description", "__dict__": "special", "_": "placeholder",
+                 "__custom__": "not special", name: "computed"}
+class Annotated:
+    __slots__: dict[str, str] = {"_annotated": "description", "__weakref__": "special"}
+class TupleSlots:
+    __slots__: tuple[str, ...] = ("_tuple",)
+class StringSlots:
+    __slots__: str = "_single"
+class Unproven:
+    __slots__: dict[str, str]
+    ordinary = {"_ordinary": "description"}
+''')
+        self.put("src/demo/slots.pyi", '''class StubMapping:
+    __slots__ = {"_stub_mapped": "description"}
+class StubAnnotated:
+    __slots__: dict[str, str] = {"_stub_annotated": "description"}
+class StubUnproven:
+    __slots__: dict[str, str]
+''')
+        paths = ["src/demo/slots.py", "src/demo/slots.pyi"]
+        findings, error = analyze(self.root, paths)
+        self.assertIsNone(error)
+        names = [(d["path"], d["symbol"], d["line"], d["column"])
+                 for d in findings if d["rule"] == "LEADING_UNDERSCORE_NAME"]
+        self.assertEqual(names, [(paths[0], "_mapped", 3, 18),
+                                 (paths[0], "__custom__", 4, 18),
+                                 (paths[0], "_annotated", 6, 34),
+                                 (paths[0], "_tuple", 8, 35),
+                                 (paths[0], "_single", 10, 22),
+                                 (paths[1], "_stub_mapped", 2, 18),
+                                 (paths[1], "_stub_annotated", 4, 34)])
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual({d["symbol"] for d in result["diagnostics"]},
+                         {name for _, name, _, _ in names})
+        self.assertFalse(any(d["is_infrastructure_error"] for d in result["diagnostics"]))
+
     def test_external_unknown_and_ambiguous_owners_are_not_declarations(self):
         self.put("src/demo/owners.py", '''from external import Client
 class Local:
@@ -256,6 +296,8 @@ setattr(Local(), "_", 1)
 
     def test_disabled_naming_keeps_other_jobs_and_never_starts_worker(self):
         self.put("src/demo/_bad.py", "class _Bad: pass\n")
+        self.put("src/demo/model.pyi", 'class Model:\n'
+                 '    __slots__: dict[str, str] = {"_skipped": "description"}\n')
         config = self.root / ".quard/config.toml"
         config.write_text(config.read_text(encoding="utf-8").replace(
             "leading_underscores = true", "leading_underscores = false").replace(
@@ -278,7 +320,8 @@ setattr(Local(), "_", 1)
         self.assertIn("class-contracts", jobs)
 
     def test_worker_normalization_and_error_semantics(self):
-        self.put("src/demo/_bad.py", "class _Bad:\n    pass\n")
+        self.put("src/demo/_bad.py", 'class _Bad:\n'
+                 '    __slots__ = {"_retained": "description"}\n')
         job = self.job()
         result = execute_job(job, self.root, self.run_dir, 30)
         self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
@@ -291,6 +334,7 @@ setattr(Local(), "_", 1)
         self.assertEqual((result["status"], result["exit_code"]), ("error", 2))
         self.assertIn("LEADING_UNDERSCORES_PARSE_ERROR", {d["rule"] for d in result["diagnostics"]})
         self.assertIn("LEADING_UNDERSCORE_NAME", {d["rule"] for d in result["diagnostics"]})
+        self.assertIn("_retained", {d.get("symbol") for d in result["diagnostics"]})
         for payload, code in (("bad JSON", 0), (json.dumps({
                 "quard_leading_underscores_adapter": 1, "diagnostics": [{
                     "rule": "LEADING_UNDERSCORE_NAME", "path": "src/demo/_bad.py",
