@@ -569,10 +569,22 @@ Set `[checks] lambda_injection = false` to skip the independent `lambda-injectio
 job; missing settings default to `true` on new and upgraded projects. It scans
 discovered production `.py` files beneath a `main/` directory or directly in a
 contract group's `envelopes/` directory. Nested envelope directories, tests, stubs
-and ordinary modules are not assembly sites. Direct positional and keyword lambdas
-are checked when the call target resolves to a project class or an imported External
-target. External means imported from outside discovered consumer package roots,
+and ordinary modules are not assembly sites. Positional and keyword arguments,
+including references inside direct lambdas, are checked when the call target
+resolves to a project class or an imported External target. External means imported
+from outside discovered consumer package roots,
 including imported member and module aliases. Unresolved call targets are ignored.
+
+An injected value may come from a direct function or lambda parameter, a call to a
+proven project class or function (without requiring an object result), or an explicit
+External import, call or field. Primitive literals and simple containers are checked
+recursively. Local assignments, aliases, branches and enclosing-function captures
+retain all possible origins: an unknown or unproved alternative fails at the argument
+reference. An imported ready-made project value is not assembled locally. A module
+value assembled at module level may be injected there, but reading that global from
+a function does not establish a local origin. External call behavior remains opaque;
+its arguments still undergo the same check. Unknown call targets are outside the
+assembly-call check; unknown calls used *as injected values* have unproved origins.
 
 Lambda bodies may use constants, parameters/names, attribute reads, calls (including
 project functions and opaque External functions), and list, tuple, set and dict
@@ -580,7 +592,8 @@ literals built from these expressions. Calls can chain or nest, and their argume
 are checked even if the callee is External. Conditional expressions, subscriptions,
 arithmetic, assignment expressions, comprehensions and other unsupported expressions
 receive positioned `LAMBDA_INJECTION` violations advising a wrapper class. The
-rule constrains syntax, not the purity or runtime behavior of called functions.
+rule constrains syntax and value origins, not the purity or runtime behavior of
+called functions.
 Source read/parse and worker/report failures exit 2; valid violations exit 1 and
 clean results exit 0. Raw output and diagnostics are archived with the usual report.
 

@@ -119,6 +119,138 @@ def build(value, condition):
         self.assertEqual([(d["path"], d["line"]) for d in result["diagnostics"]],
                          [("src/main/wire.py", 8)])
 
+    def test_argument_origins_and_external_fields(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\n"
+                 "def provide(): return Builder()\n"
+                 "ready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, provide, ready
+from outside_package import settings as external_settings
+import outside_package as outside
+
+def wire(port, selected):
+    created = provide()
+    alias = created
+    Builder(port, value=[alias, {'field': external_settings.field}], other=42)
+    outside.connect(alias, config=external_settings.field)
+    Builder(provide(), external_settings.field, outside.make(port))
+    Builder(ready)
+    Builder(missing)
+    Builder(lambda arg: (arg, alias, external_settings.field))
+    Builder(lambda arg: missing)
+    outside.connect(lambda arg: ready)
+    unknown(ready)
+
+assembled = Builder()
+Builder(assembled)
+Builder(ready)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(11, "argument"), (12, "argument"), (14, "argument"),
+                          (15, "argument"), (20, "argument")])
+        self.assertTrue(all(d["column"] > 0 for d in result["diagnostics"]))
+
+    def test_branch_captures_and_scope_boundaries(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\n"
+                 "ready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+from outside_package import value as external_value
+
+module_value = Builder()
+Builder(module_value)
+
+def outer(input_value, choose):
+    good = Builder()
+    if choose:
+        chosen = good
+    else:
+        chosen = ready
+    Builder(chosen)
+    if choose:
+        safe = input_value
+    else:
+        safe = external_value.field
+    Builder(safe)
+    def inner():
+        Builder(good)
+        Builder(chosen)
+        Builder(module_value)
+        Builder(lambda arg: (good, chosen, module_value))
+    return inner
+
+def reads_global():
+    Builder(module_value)
+    Builder(external_value.field)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(13, "argument"), (21, "argument"), (22, "argument"),
+                          (23, "argument"), (23, "argument"), (27, "argument")])
+
+    def test_nested_calls_and_unproved_container_elements(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\n"
+                 "def provide(value): return value\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, provide
+from outside_package import connect
+def wire(value):
+    def local_factory():
+        return value
+    Builder(local_factory())
+    Builder(connect(provide(value)))
+    Builder(connect(missing))
+    Builder(items={'bad': missing})
+    Builder(items=[value if value else 0])
+    Builder(lambda arg: connect(missing))
+    connect(value, key=missing)
+    unknown(missing)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(8, "argument"), (9, "argument"), (10, "argument"),
+                          (11, "argument"), (12, "argument")])
+
+    def test_later_rebinding_invalidates_a_nested_capture(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\nready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+def outer():
+    captured = Builder()
+    def inner():
+        Builder(captured)
+    captured = ready
+    return inner
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(5, "argument")])
+
+    def test_later_rebinding_invalidates_a_direct_lambda_capture(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\nready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+def outer():
+    captured = Builder()
+    Builder(lambda arg: captured)
+    captured = ready
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(4, "argument")])
+
+    def test_unsupported_lambda_still_checks_referenced_values(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\nready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+Builder(lambda arg: ready if arg else arg)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(2, "lambda"), (2, "argument")])
+
     def test_generated_and_reviewed_reporting_independent_of_lcom(self):
         self.put("src/demo/main/wire.py", "from demo.domain.api import Builder\n"
                  "Builder(lambda x: x[0])\n")
