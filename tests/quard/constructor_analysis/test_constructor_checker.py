@@ -568,7 +568,7 @@ class Model:
                              "constructor_purity = true\nunknown = false\n", "[constructor_purity]\nenabled = true\n",
                              "constructor_purity = [\n"):
                 with self.subTest(content=content):
-                    setting.write_text(original.replace("constructor_purity = false", content.rstrip()), encoding="utf-8")
+                    setting.write_text(original.replace("constructor_purity = true", content.rstrip()), encoding="utf-8")
                     seen.clear()
                     report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
                     validate(report, json.loads((QUARD / "report.schema.json").read_text(encoding="utf-8")))
@@ -641,6 +641,22 @@ class Model:
             self.assertEqual({d["rule"] for d in report["diagnostics"]},
                              {"UNREADABLE_TOOL_OUTPUT", "reportArgumentType"})
             self.assertEqual(report["summary"]["infrastructure_errors"], 1)
+
+    def test_missing_constructor_setting_runs_by_default(self):
+        with TemporaryDirectory(prefix="quard-constructor-default-", dir=self.root) as directory:
+            root = Path(directory)
+            create_repo(root)
+            setting = root / ".quard/config.toml"
+            setting.write_text(setting.read_text(encoding="utf-8").replace(
+                "constructor_purity = false\n", ""), encoding="utf-8")
+            fake, seen = fake_tools()
+            report = run_checks(root, capture_fn=fake, versions_fn=lambda _: ({}, []))
+            tool = next(job for job in report["tools"] if job["name"] == "constructor-purity")
+            self.assertEqual((report["status"], report["exit_code"]), ("passed", 0))
+            self.assertEqual((tool["status"], tool["exit_code"]), ("passed", 0))
+            self.assertIn("constructor-purity", seen)
+            self.assertTrue((root / report["report_path"]).parent.joinpath(
+                "constructor-purity-files.json").is_file())
 
 
 if __name__ == "__main__":

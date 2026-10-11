@@ -184,7 +184,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `free_function_placement = true` | `free-function-placement` |
 | `leading_underscores = true` | `leading-underscores` (first-party names and paths) |
 | `encapsulated_only = true` | `encapsulated-only` |
-| `constructor_purity = false` | `constructor-purity` (opt in explicitly) |
+| `constructor_purity = true` | `constructor-purity` |
 | `pyright = true` | `pyright` |
 | `pydoclint = true` | `pydoclint` |
 | `duplicate_detection = true` | `jscpd`, `jscpd-renamed`, `jscpd-similar` |
@@ -198,11 +198,12 @@ Explicitly enabling it on a reviewed project is a configuration error (exit 2).
 Tach-only acceptance requirement for reviewed projects. Generated architecture
 still regenerates `tach.toml` even with Tach disabled. With Tach enabled,
 reviewed projects still require acceptance.
-Other new switches default to `true` on fresh installations and upgrades; explicit
+Other switches default to `true` on fresh installations and upgrades; explicit
 values survive reinstallation. Missing new keys use those defaults until upgrade.
 All values must be booleans; unknown keys fail
 with exit 2. Disabled jobs appear as `skipped` with null exit codes and have no
-manifest or worker execution. Set `constructor_purity = true` to opt in to that job.
+manifest or worker execution. Missing `constructor_purity` also defaults to `true`;
+set it to `false` to skip the job.
 Disabling duplicate detection skips all three clone jobs, their manifests and their
 native JSON, without changing Pylint's required duplicate-code rule. Pyright and
 pydoclint likewise skip only their own jobs; their native configuration remains
@@ -213,7 +214,7 @@ If `lcom4 = false`, passing `--lcom_files` (even `""`) is a configuration error
 (exit 2); when enabled, full, selected and empty-string coverage work as below.
 Installation migrates existing `.quard/readability.toml`, `.quard/scope.toml` and
 `.quard/checks.toml` into the single configuration (constructor purity defaults
-to false), then removes those three files. It retains existing limits, test
+to true), then removes those three files. It retains existing limits, test
 overrides and scope. Check/apply before migration fail with exit 2 and instruct
 you to reinstall. Installation rollback restores the original files on failure.
 Use `apply.py` after changing readability or scope; check reports unapplied

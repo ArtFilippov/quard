@@ -188,6 +188,14 @@ class TestTransactionalInstallation(unittest.TestCase):
             first = managed_bytes(root)
             self.installation().install(root, QUARD, progress=False)
             self.assertEqual(managed_bytes(root), first)
+        self.assertFalse(_policy.read_checks(root)["constructor_purity"])
+
+    def test_fresh_install_enables_constructor_purity(self):
+        with TemporaryDirectory(prefix="quard-constructor-default-") as directory:
+            root = self.project(directory)
+            with patch.object(entry, "capture", fake_uv):
+                self.installation().install(root, QUARD, progress=False)
+            self.assertTrue(_policy.read_checks(root)["constructor_purity"])
 
     def test_upgrade_adds_new_enabled_switches_without_overwriting_choices(self):
         root = self.configured_project()
@@ -432,7 +440,7 @@ class TestTransactionalInstallation(unittest.TestCase):
                             ("readability.toml", "scope.toml", "checks.toml")))
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
 
-    def test_constructor_opt_in_survives_reinstall_and_invalid_setting_fails(self):
+    def test_constructor_enabled_choice_survives_reinstall_and_invalid_setting_fails(self):
         root = self.configured_project()
         setting = root / ".quard/config.toml"
         setting.write_text(setting.read_text().replace("constructor_purity = false",
@@ -454,9 +462,13 @@ class TestTransactionalInstallation(unittest.TestCase):
     def test_missing_constructor_setting_created_only_on_install(self):
         root = self.configured_project()
         setting = root / ".quard/config.toml"
-        setting.unlink()
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "constructor_purity = false\n", ""), encoding="utf-8")
+        self.assertTrue(_policy.read_checks(root)["constructor_purity"])
         with patch.object(entry, "capture", fake_uv):
             self.installation().install(root, QUARD, progress=False)
+        self.assertIn("constructor_purity = true", setting.read_text(encoding="utf-8"))
+        self.assertTrue(_policy.read_checks(root)["constructor_purity"])
         self.assertFalse(_policy.read_checks(root)["dependency_types"])
         self.assertTrue(_policy.read_checks(root)["tach"])
 

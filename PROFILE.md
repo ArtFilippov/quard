@@ -114,7 +114,7 @@ violations baseline.
   Set `duplicate_detection = false` under `[checks]` to skip all three jobs; the
   Pylint profile and its duplicate-code rule are unaffected.
 * **LCOM4**: Quard's basic AST-based class cohesion check, run as its own job.
-* **Constructor purity (opt-in)**: the independent `CONSTRUCTOR_PURITY` rule checks
+* **Constructor purity (default-on, optional)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including
   nested classes. It is unaffected by `--lcom_files`; stubs have no checked body.
 * **Non-instance methods**: Quard's source-positioned `NON_INSTANCE_METHOD` rule rejects
@@ -562,13 +562,13 @@ their diagnostics. Ordinary reports, manifests and logs stay in the chosen consu
 
 ## Constructor purity
 
-Set `constructor_purity = true` under `[checks]` in the consumer's `.quard/config.toml` to enable
-this independent job on ordinary full checks. The default is `false`, including
-when migrating an older installation with no `checks.toml`. The other independent
-Quard job switches are documented in [README.md](README.md#daily-commands) and default
-to `true` even on upgrades. Malformed or unknown settings fail as configuration errors (exit 2).
-Disabled checks appear as `skipped` with a null exit code in the report; no
-manifest or worker is started. Reinstallation preserves an existing opt-in.
+The `constructor_purity` switch under `[checks]` in the consumer's `.quard/config.toml`
+defaults to `true` on new installations and when the key is absent. Reinstallation
+preserves an explicit `false`; set it to `false` to skip this independent job.
+The other independent Quard job switches are documented in
+[README.md](README.md#daily-commands). Malformed or unknown settings fail as
+configuration errors (exit 2). Disabled checks appear as `skipped` with a null
+exit code in the report; no manifest or worker is started.
 
 The `constructor-purity` job examines every directly declared `__init__` body in
 discovered production and test `.py` files, including nested classes. Excluded

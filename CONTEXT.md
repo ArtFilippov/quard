@@ -11,8 +11,9 @@ check selection. Consumer-owned native options are retained when settings are ap
 A **selectable check** is an independent Quard job that a consumer can enable in
 `.quard/config.toml` under `[checks]`. The three clone jobs are selected together
 by `duplicate_detection`; other independent jobs have their own switches.
-`constructor_purity` is opt-in. Disabled jobs are reported as skipped, not
-passed; the required Pylint profile remains independent of these switches.
+`constructor_purity` is enabled by default and can be explicitly disabled.
+Disabled jobs are reported as skipped, not passed; the required Pylint profile
+remains independent of these switches.
 
 ## Source scope
 

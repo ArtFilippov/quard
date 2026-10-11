@@ -1,2 +1,2 @@
-# Optional independent jobs. Set to true to check constructor syntax.
-constructor_purity = false
+# Optional independent jobs. Set to false to skip constructor syntax.
+constructor_purity = true

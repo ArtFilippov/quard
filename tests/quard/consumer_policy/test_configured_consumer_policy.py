@@ -88,7 +88,7 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         original = path.read_text(encoding="utf-8")
         for key in CHECK_DEFAULTS:
             with self.subTest(key=key):
-                current = f"{key} = {str(CHECK_DEFAULTS[key]).lower()}"
+                current = f"{key} = {str(load_toml(path)['checks'][key]).lower()}"
                 self.assertIn(current, original)
                 path.write_text(original.replace(current, f"{key} = 1"), encoding="utf-8")
                 with self.assertRaises(QuardError) as failure:

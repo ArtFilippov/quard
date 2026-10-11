@@ -20,7 +20,7 @@ DUPLICATE_JOBS = ("jscpd", "jscpd-renamed", "jscpd-similar")
 TACH_JOBS = ("tach", "tach-external")
 DEPENDENCY_TYPES = "dependency_types"
 CHECK_DEFAULTS = {**dict.fromkeys(OPTIONAL_JOBS, True), "duplicate_detection": True,
-                  "tach": True, DEPENDENCY_TYPES: False, CONSTRUCTOR_PURITY: False}
+                  "tach": True, DEPENDENCY_TYPES: False, CONSTRUCTOR_PURITY: True}
 
 
 def architecture_defaults(root: Path) -> dict[str, bool]:
@@ -56,7 +56,7 @@ def validate_checks(data: object) -> dict[str, bool]:
     if not isinstance(data, dict):
         raise QuardError("INVALID_CHECKS", f"[checks] expects boolean switches: {expected}.")
     entries = cast(dict[str, Any], data)
-    if (set(entries) - CHECK_DEFAULTS.keys() or CONSTRUCTOR_PURITY not in entries
+    if (set(entries) - CHECK_DEFAULTS.keys()
             or any(not isinstance(value, bool) for value in entries.values())):
         raise QuardError("INVALID_CHECKS", f"[checks] expects boolean switches: {expected}.")
     return cast(dict[str, bool], {**CHECK_DEFAULTS, **entries})

@@ -21,8 +21,8 @@ from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerP
 from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from quard.architecture_draft.generated_architecture_utils import generated, regenerate
 from quard.check_runner.check_runner import CheckRunner
-from quard.check_selection_utils import (CHECK_DEFAULTS, DUPLICATE_JOBS, OPTIONAL_JOBS,
-                                        TACH_JOBS, validate_architecture_checks)
+from quard.check_selection_utils import (CHECK_DEFAULTS, CONSTRUCTOR_PURITY, DUPLICATE_JOBS,
+                                         OPTIONAL_JOBS, TACH_JOBS, validate_architecture_checks)
 from quard.check_runner.runner_utils import (binary, execute_job, installed_versions,
                                                inactive_job, make_jobs, select_lcom_files,
                                                capture_clone_batch)
@@ -94,7 +94,7 @@ class NativeCheckRunner(CheckRunner):
             try:
                 checks = policy.checks()
             except QuardError as exc:
-                checks = CHECK_DEFAULTS.copy()
+                checks = {**CHECK_DEFAULTS, CONSTRUCTOR_PURITY: False}
                 diagnostics.append(diagnostic("constructor-purity", exc.code, str(exc),
                                               is_infrastructure_error=True))
                 results.append({"name": "constructor-purity", "tool": "constructor-purity",

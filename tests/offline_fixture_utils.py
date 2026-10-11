@@ -49,8 +49,10 @@ def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None
     (root / ".quard").mkdir()
     shutil.copy2(QUARD / "defaults/config.toml", root / ".quard/config.toml")
     setting = root / ".quard/config.toml"
+    # Most offline fixtures exercise other jobs with an explicit constructor opt-out.
     setting.write_text(setting.read_text(encoding="utf-8").replace(
-        "dependency_types = true", "dependency_types = false"), encoding="utf-8")
+        "dependency_types = true", "dependency_types = false").replace(
+        "constructor_purity = true", "constructor_purity = false"), encoding="utf-8")
     (root / "src/demo/domain").mkdir(parents=True)
     (root / "src/demo/__init__.py").write_text(
         '"""Autonomous fixture.\n\nUsed by isolated checks.\nNo application imports.\n"""\n',
