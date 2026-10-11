@@ -19,6 +19,8 @@ violations baseline.
   version-guarded plugin fixes in `COMPATIBILITY.md`.
   Reviewed W9007 checks returns on contract-facing methods in Infrastructure and
   Bootstrap, including underscored members and resolvable alias/ancestor chains.
+  Contract declarations must belong to the selected discovered first-party source
+  manifest; external packages remain opaque even inside a project's `.venv/`.
   An Infrastructure method absent from its explicitly inherited local contracts
   receives the existing precise Domain Protocol return exception regardless of
   spelling; free functions retain that exception. Bootstrap wiring is exempt only

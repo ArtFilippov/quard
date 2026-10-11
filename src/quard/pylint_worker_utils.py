@@ -59,7 +59,7 @@ def main() -> int:
     if args.generated:
         install_pylint_protocol_compat()
     else:
-        install_architecture_compat()
+        install_architecture_compat(files)
     result = Run(["--rcfile=" + args.config, "--output-format=json2", "--output=" + args.output,
                   "--jobs=1", *files], exit=False)
     return result.linter.msg_status

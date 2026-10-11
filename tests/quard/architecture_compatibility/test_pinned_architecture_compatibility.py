@@ -17,8 +17,8 @@ RULES = ["W9001", "W9003", "W9004", "W9006", "W9007", "W9009", "W9201", "W9202"]
 
 class TestPinnedArchitectureCompatibility(unittest.TestCase):
     def lint(self, files, layers, *, rules=RULES, patched=True, pair=True,
-             extra="", pylint_extra=""):
-        key = json.dumps([files, layers, rules, extra, pylint_extra], sort_keys=True)
+             extra="", pylint_extra="", site_packages=None):
+        key = json.dumps([files, layers, rules, extra, pylint_extra, site_packages], sort_keys=True)
         if patched and key in self.__dict__.get("_paired_results", {}):
             return self._paired_results.pop(key)
         with TemporaryDirectory(prefix="architecture-compat-") as directory:
@@ -29,6 +29,12 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(textwrap.dedent(code).lstrip(), encoding="utf-8")
                 paths.append(str(path))
+            site_root = root / ".venv/lib/python3.13/site-packages"
+            if site_packages is not None:
+                for name, code in site_packages.items():
+                    path = site_root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(textwrap.dedent(code).lstrip(), encoding="utf-8")
             config = ('[tool.pylint.main]\nload-plugins = ["clean_architecture_linter"]\n'
                       'persistent = false\n[tool.pylint.messages_control]\ndisable = ["all"]\n'
                       f'enable = {json.dumps(rules + ["fatal", "astroid-error"])}\n'
@@ -39,7 +45,8 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
             (root / "pyproject.toml").write_text(config, encoding="utf-8")
             setup = (f'sys.path.insert(0, {str(QUARD / "src")!r}); '
                       'from quard._architecture_compat import install_architecture_compat; '
-                      'install_architecture_compat(); install_architecture_compat(); ') if patched else ""
+                      f'install_architecture_compat({paths!r}); '
+                      f'install_architecture_compat({paths!r}); ') if patched else ""
             if not patched and pair:
                 # One isolated process compares the original and patched checker
                 # on the same fixture/config; the next test still gets a fresh one.
@@ -53,10 +60,13 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
                 code += ('native = check()\n'
                          f'sys.path.insert(0, {str(QUARD / "src")!r})\n'
                          'from quard._architecture_compat import install_architecture_compat\n'
-                         'install_architecture_compat()\ninstall_architecture_compat()\n'
+                         f'install_architecture_compat({paths!r})\n'
+                         f'install_architecture_compat({paths!r})\n'
                          'fixed = check()\nprint(json.dumps([native, fixed]))\n')
             else:
                 code = 'import sys; ' + setup + 'from pylint.lint import Run; Run(sys.argv[1:])'
+            if site_packages is not None:
+                code = f'import sys; sys.path.insert(0, {str(site_root)!r}); ' + code
             # A fresh process isolates the plugin's singleton configuration per fixture.
             result = subprocess.run(
                 [sys.executable, "-c", code,
@@ -492,6 +502,43 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
         messages = self.lint(files, layers, rules=["W9007"])
         self.assertEqual([m["obj"] for m in messages],
                          ["RecordsRepository.fetch", "RecordsRepository._hidden"])
+
+    def test_w9007_in_root_site_packages_is_not_a_local_contract(self):
+        files = {
+            "sample/__init__.py": "",
+            "sample/contracts.py": """
+                from typing import Protocol
+                class LocalPort(Protocol):
+                    def fetch(self): ...
+                    def local_only(self): ...
+            """,
+            "sample/io.py": "class Driver: pass\n",
+            "sample/compose.py": """
+                from vendor.ports import ExternalPort as Imported
+                from .contracts import LocalPort
+                from .io import Driver
+                class VendorBase(Imported): pass
+                class Vendor(VendorBase):
+                    def fetch(self): return Driver()
+                    def local_only(self): return Driver()
+                class Local(LocalPort):
+                    def fetch(self): return Driver()
+                class Unknown(MissingBase):
+                    def fetch(self): return Driver()
+            """,
+        }
+        site_packages = {
+            "vendor/__init__.py": "",
+            "vendor/ports.py": """
+                from typing import Protocol
+                class ExternalPort(Protocol):
+                    def fetch(self): ...
+            """,
+        }
+        messages = self.lint(files, {"sample.contracts": "Domain", "sample.io": "Infrastructure",
+                                     "sample.compose": "Bootstrap"},
+                             rules=["W9007"], site_packages=site_packages)
+        self.assertEqual([message["obj"] for message in messages], ["Local.fetch"])
 
     def test_context_manager_self_return_is_not_raw_data_escape(self):
         files = {"adapter.py": """

@@ -7,6 +7,7 @@ See COMPATIBILITY.md for the upstream defects and regression contract.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from functools import wraps
 from importlib.metadata import version
 from pathlib import Path
@@ -20,6 +21,7 @@ from astroid.util import safe_infer
 
 _installed = False
 _pylint_protocol_installed = False
+_first_party_sources: frozenset[Path] = frozenset()
 
 # These symbols supply values, synchronization or thread orchestration, not
 # filesystem/network/process I/O. The containing modules are not allowlisted.
@@ -84,9 +86,9 @@ def _inherited_classes(node):
 
 
 def _declared_contract(node):
-    """Recognize local Protocol and abstract-interface declarations, not concrete bases."""
+    """Use discovered source files, not all modules importable beneath the project root."""
     path = node.root().file
-    if not path or not Path(path).resolve().is_relative_to(Path.cwd().resolve()):
+    if not path or Path(path).resolve() not in _first_party_sources:
         return False
     if _is_protocol(node):
         return True
@@ -767,8 +769,15 @@ def install_pinned_plugin() -> None:
     _installed = True
 
 
-def install_architecture_compat() -> None:
-    """Install once per worker, before ``pylint.lint.Run`` loads plugins."""
+def install_architecture_compat(source_files: Iterable[str] | None = None) -> None:
+    """Install before Pylint and retain the selected first-party source manifest.
+
+    Args:
+        source_files (Iterable[str] | None, default=None): Selected source paths;
+            absent evidence grants no local-contract membership.
+    """
+    global _first_party_sources
+    _first_party_sources = frozenset(Path(path).resolve() for path in (source_files or ()))
     from quard.architecture_compatibility.pinned_architecture_compatibility import (
         PinnedArchitectureCompatibility,
     )
