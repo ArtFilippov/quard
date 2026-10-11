@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+.testmondata*
 .quard/reports/
 .quard/logs/
 .quard/cache/

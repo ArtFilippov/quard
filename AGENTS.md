@@ -34,6 +34,10 @@ Inspect `tools[*].status` and `is_infrastructure_error`; report actual exit code
 and unresolved diagnostics. Do not describe tool failures as a passing check.
 Install failure details: `.quard/logs/install-error.json` and `install.log`.
 
+During development, prefer incremental `pytest-testmon` runs for Quard tests
+using the command in `README.md` (Development and integration). Seed its database
+with a full pytest run first; finish tool changes with the full checks below.
+
 After tool changes, run from the Quard checkout:
 
 ```bash

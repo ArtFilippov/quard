@@ -21,6 +21,7 @@ dev = [
   "tach==0.35.1",
   "pydoclint==0.9.1",
   "pytest-durations==1.9.0",
+  "pytest-testmon==2.2.0",
   "jscpd==5.4.0",
   "tomlkit==0.13.3",
   "packaging==25.0",

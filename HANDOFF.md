@@ -343,14 +343,45 @@ wheel installation. Documentation now states that gap explicitly.
   details. This is not a passing static check. No analyzer policy or ordinary
   production job selection was changed; no consumer submodules were present.
 
+## Incremental Quard tests (11 October 2026)
+
+- The user confirmed `pytest-testmon` (not `pytest-testmom`) for Quard's own tests,
+  not consumer projects. `pytest-testmon==2.2.0` is pinned in the dev group and
+  `uv.lock`; `.testmondata*` is ignored. The disabled source-install fixture's
+  checkout copy excludes this database. `README.md` gives the local command;
+  `AGENTS.md` prefers incremental runs during development while retaining full
+  `unittest` and `check.py` completion checks. No consumer dependencies or analyzer
+  policy changed.
+- The working command is `uv run --locked --group dev python -B -m pytest tests -q
+  -p no:tach -o cache_dir=.quard/cache/pytest-testmon --testmon`. Testmon needs
+  pytest's cache provider: `-p no:cacheprovider` causes a configuration-time
+  `KeyError: 'lf'`. The redirected cache stays inside ignored `.quard/cache/`;
+  `-p no:tach` still avoids the unrelated Tach pytest-plugin crash.
+- The first full testmon collection (`--testmon-noselect`) had one failure in
+  `TestCalls.test_default_inequality_delegates_to_marked_equality`; that test
+  passed alone with and without testmon, and a repeated full collection passed:
+  **441 passed, 3 skipped, 345 subtests passed**, exit 0 in 228.02 s (one
+  `TestPlacement` collection warning). With an unchanged tree, `--testmon`
+  ran no tests and exited 0. A temporary edit to
+  `src/quard/report_parsing/native_report_parser.py` selected **1 test**
+  (12 deselected, exit 0); reverting the edit selected that test again. The
+  temporary source edit is absent from the final diff.
+- `uv sync --locked --group dev`: exit 0. Full `unittest discover -s tests -v`:
+  **427 tests, 3 skipped**, exit 0. Checkout `check.py`: exit **1** with
+  **6,128 unresolved diagnostics** and **0 infrastructure errors**; statuses,
+  native exit codes and raw logs are in `.quard/reports/latest.json` and its
+  archived run. No consumer submodules are present. `git diff --check` passes.
+
 ## Open work
 
 1. Pytest auto-loads Tach's pytest plugin, which panics on this checkout's
    architecture at configuration time. The README profiling command uses
    `-p no:tach`; this does not disable the native Tach job in `check.py`.
 2. The only current pytest collection warning is a production `TestPlacement`
-   class with an `__init__`, imported by the folder-ownership test. Pytest and
-   unittest now discover the same 407 tests. The two requested permanent skips
+   class with an `__init__`, imported by the folder-ownership test. The latest
+   testmon-enabled pytest run counted 444 calls, while unittest counted 427 tests;
+   do not infer equal coverage from the older 407-test measurements. The three
+   skipped calls include the two requested permanent lifecycle skips, which
    remove real installation lifecycle coverage; do not call these skipped tests
    passing install verification.
 3. Remaining tests above one second mostly exercise real Pylint, installer

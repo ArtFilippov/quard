@@ -36,7 +36,8 @@ class TestSourceInstallation(unittest.TestCase):
             base = Path(tmp)
             tool = base / "separate tool"
             shutil.copytree(QUARD, tool, ignore=shutil.ignore_patterns(
-                ".git", ".venv", ".quard", ".tach", "tach.toml", "__pycache__", "target"))
+                ".git", ".venv", ".quard", ".tach", "tach.toml", "__pycache__", "target",
+                ".testmondata*"))
             run_command(["git", "init", "-b", "main"], tool)
             run_command(["git", "add", "."], tool)
             run_command(["git", "commit", "-m", "pinned fixture"], tool)

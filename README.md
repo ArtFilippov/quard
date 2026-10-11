@@ -549,6 +549,20 @@ uv run --locked --group dev python -B -m unittest discover -s tests -v
 uv run --locked --group dev python check.py
 ```
 
+For faster local feedback, run the Quard tests incrementally with the pinned
+`pytest-testmon` plugin. The first run covers the whole suite and creates an
+ignored `.testmondata` database; repeat the same command after edits to select
+affected tests (including tests that failed last time):
+
+```bash
+uv run --locked --group dev python -B -m pytest tests -q \
+  -p no:tach -o cache_dir=.quard/cache/pytest-testmon --testmon
+```
+
+Run the full `unittest` suite and `check.py` before finishing tool changes.
+Testmon tracks executed Python code, not changes to static files or external
+services. Its incremental result is not a full-suite result.
+
 To profile the test suite with the pinned `pytest-durations` plugin:
 
 ```bash
@@ -561,7 +575,8 @@ against this checkout's generated architecture; the normal `check.py` command
 still runs the native Tach job. Pytest collects test files that the `unittest`
 discovery hook does not include, so compare their test counts when interpreting
 the profile. `-p no:cacheprovider` keeps pytest from writing a cache into the
-checkout, which the source-install cleanliness test rejects.
+checkout, which the source-install cleanliness test rejects. Testmon needs
+the cache provider; its command above puts that cache under `.quard/cache/`.
 
 Quard's implementation lives in `src/quard/`. Root Python commands are consumer
 entry points. The checkout has generated
