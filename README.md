@@ -394,7 +394,10 @@ raw stdout and stderr remain archived alongside the standard positioned diagnost
 The independent `leading-underscores` job checks discovered production, test and
 companion-stub paths and Python bindings (including nested declarations, parameters,
 assignments, import aliases and stored receiver fields). It reports leading `_`
-in module and directory names once per discovered path component. The standalone `_`,
+in module and directory names once per discovered path component. Proven first-party
+attribute writes, literal-name built-in setters and instance-dictionary writes
+(including known dictionary aliases), plus literal slots, are declarations. The
+standalone `_`,
 Python-defined special names such as `__init__`, `__slots__` and `__all__`, and
 required `__init__.py`/`__main__.py` modules are allowed; invented `__custom__`
 names are not. Unaliased imports from libraries, external attributes and excluded

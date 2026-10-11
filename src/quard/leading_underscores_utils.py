@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 from typing import cast
 
+from quard.field_ownership.ownership import Ownership
+from quard.leading_attribute_scanner import AttributeScanner
 from quard.leading_underscores_scanner import BindingScanner
 
 # Python's data model, import machinery, class creation and typing reserve these names.
@@ -65,6 +67,8 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
     diagnostics: list[dict[str, object]] = []
     error: str | None = None
     seen_paths: set[tuple[str, str]] = set()
+    trees: dict[str, ast.Module] = {}
+    lines: dict[str, list[str]] = {}
     for path in paths:
         source = Path(path)
         if (source.is_absolute() or PARENT_SEGMENT in source.parts
@@ -98,6 +102,14 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
         scanner = BindingScanner(path, text.splitlines())
         scanner.visit(tree)
         diagnostics.extend(scanner.diagnostics)
+        trees[path] = tree
+        lines[path] = text.splitlines()
+    if trees:
+        ownership = Ownership(trees)
+        for path, tree in trees.items():
+            visitor = AttributeScanner(ownership, path, lines[path])
+            visitor.visit(tree)
+            diagnostics.extend(visitor.names.diagnostics)
     return diagnostics, error
 
 

@@ -184,7 +184,9 @@ violations baseline.
 * **Leading underscores (default-on, optional)**: `LEADING_UNDERSCORE_NAME` checks
   first-party class/function/type-parameter/parameter and variable definitions,
   explicit import aliases, pattern and exception bindings, and stored receiver
-  fields (including literal slots and direct `setattr`). It scans discovered `.py`
+  fields and proven first-party class/instance attribute writes (including literal
+  slots, built-in `setattr`, and known-key instance-dictionary writes and aliases).
+  It scans discovered `.py`
   and `.pyi` files in both profiles, independently of LCOM4. Unaliased external
   imports and assignments to unknown external objects are not local declarations.
   `LEADING_UNDERSCORE_PATH` checks module and directory components of discovered

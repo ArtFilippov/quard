@@ -105,6 +105,116 @@ class Model:
         self.assertEqual([(d["rule"], d["symbol"]) for d in paths],
                          [("LEADING_UNDERSCORE_PATH", "__custom__")])
 
+    def test_proven_attribute_writes_and_dictionary_forms_in_source_and_stub(self):
+        code = '''import builtins as bi
+from builtins import setattr as put, vars as mapping
+class Model:
+    __slots__ = "_slot"
+    def __init__(self):
+        alias = self
+        alias._direct = 1
+        bi.setattr(alias, "_builtin", 2)
+        put(self, "_imported", 3)
+        mapping(self)["_mapped"] = 4
+        self.__dict__["_dictionary"] = 5
+        mapping(self).__setitem__("_method", 6)
+        self.__dict__.update({"_updated": 7})
+        self.__dict__.setdefault("_defaulted", 8)
+        dictionary = vars(self)
+        dictionary["_alias_dict"] = 1
+        dictionary.update(_keyword=1)
+        dictionary.setdefault("_implicit")
+model = Model()
+model._outside = 9
+setattr(Model, "_class_attribute", 1)
+'''
+        self.put("src/demo/model.py", code)
+        self.put("src/demo/model.pyi", 'class Model:\n    __slots__ = ("_stub_slot",)\n'
+                 '    def accept(self, other: "Model") -> None:\n'
+                 '        other.__dict__["_stub_dict"] = 1\n'
+                 '        other._stub_attr = 2\n')
+        paths = ["src/demo/model.py", "src/demo/model.pyi"]
+        findings, error = analyze(self.root, paths)
+        self.assertIsNone(error)
+        locations = {(d["path"], d["symbol"]): (d["line"], d["column"])
+                     for d in findings if d["rule"] == "LEADING_UNDERSCORE_NAME"}
+        for name in ("_slot", "_direct", "_builtin", "_imported", "_mapped",
+                     "_dictionary", "_method", "_updated", "_defaulted", "_alias_dict",
+                     "_keyword", "_implicit", "_outside",
+                     "_class_attribute"):
+            self.assertIn((paths[0], name), locations)
+        for name in ("_stub_slot", "_stub_dict", "_stub_attr"):
+            self.assertIn((paths[1], name), locations)
+        self.assertEqual(locations[(paths[0], "_direct")], (7, 15))
+        self.assertEqual(locations[(paths[0], "_builtin")], (8, 27))
+        self.assertEqual(locations[(paths[0], "_alias_dict")], (16, 20))
+        self.assertTrue(all(line > 0 and column > 0 for line, column in locations.values()))
+        job = self.job()
+        result = execute_job(job, self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertIn("_stub_dict", {d["symbol"] for d in result["diagnostics"]})
+        self.assertFalse(any(d["is_infrastructure_error"] for d in result["diagnostics"]))
+
+    def test_external_unknown_and_ambiguous_owners_are_not_declarations(self):
+        self.put("src/demo/owners.py", '''from external import Client
+class Local:
+    def __init__(self, peer: Client):
+        peer._external = 1
+        setattr(peer, "_external_set", 1)
+        peer.__dict__["_external_dict"] = 1
+        self._local = 1
+        alias = self
+        alias = peer
+        alias._ambiguous = 1
+        if peer:
+            maybe = self
+        else:
+            maybe = peer
+        maybe._branch = 1
+        setattr(maybe, "_branch_set", 1)
+        vars(maybe)["_branch_dict"] = 1
+    def no_proof(self, unknown):
+        unknown._unknown = 1
+        unknown.__dict__["_unknown_dict"] = 1
+        setattr(unknown, "_unknown_set", 1)
+    @staticmethod
+    def static(peer):
+        peer._static = 1
+text = "_ordinary_string"
+data = {"_ordinary_key": 1}
+name = "_computed"
+setattr(Local(), name, 1)
+setattr(Local(), "__init__", 1)
+setattr(Local(), "_", 1)
+''')
+        findings, error = analyze(self.root, ["src/demo/owners.py"])
+        self.assertIsNone(error)
+        self.assertEqual({d["symbol"] for d in findings if d["rule"] == "LEADING_UNDERSCORE_NAME"},
+                         {"_local"})
+
+    def test_disabled_naming_keeps_other_jobs_and_never_starts_worker(self):
+        self.put("src/demo/_bad.py", "class _Bad: pass\n")
+        config = self.root / ".quard/config.toml"
+        config.write_text(config.read_text(encoding="utf-8").replace(
+            "leading_underscores = true", "leading_underscores = false").replace(
+            "duplicate_detection = true", "duplicate_detection = false"), encoding="utf-8")
+        fake, seen = fake_tools()
+
+        def guarded(argv, cwd, timeout):
+            self.assertNotIn("_leading_underscores_worker.py", " ".join(argv))
+            return fake(argv, cwd, timeout)
+
+        with patch("quard.check_runner.native_check_runner.require_source_pin"):
+            report = run_checks(self.root, capture_fn=guarded, versions_fn=lambda _: ({}, []))
+        self.assertEqual((report["status"], report["exit_code"]), ("passed", 0))
+        self.assertTrue(seen)
+        jobs = {job["name"]: job for job in report["tools"]}
+        self.assertEqual((jobs["leading-underscores"]["status"],
+                          jobs["leading-underscores"]["exit_code"]), ("skipped", None))
+        self.assertIn("instance-fields", jobs)
+        self.assertIn("encapsulated-only", jobs)
+        self.assertIn("class-contracts", jobs)
+
     def test_worker_normalization_and_error_semantics(self):
         self.put("src/demo/_bad.py", "class _Bad:\n    pass\n")
         job = self.job()
