@@ -368,6 +368,13 @@ leading-underscore check.
 It also rejects redeclarations of methods and recognized properties from any
 resolvable customer-owned non-contract ancestor, while allowing declarations supplied
 only by local contracts. Each member receives one violation per class and source file.
+Reviewed W9007 treats methods declared in explicitly inherited local Protocols
+or abstract interfaces as contract-facing, including inherited aliases and `_`
+names. Helpers outside those contracts can use the precise annotated Domain
+Protocol return exception regardless of spelling. Bootstrap wiring is exempt
+outside proven contract methods; unknown bases, unrelated same-named contracts
+and `*Repository` suffixes grant no contract status. Disabling the naming job
+does not change W9007; see [ADR 0006](docs/adr/0006-inherited-contract-return-boundaries.md).
 The independent outer-class rule checks every discovered production and test `.py` and
 `.pyi` file, even when LCOM4 is narrowed or skipped. A file may declare at most one
 class outside another class; function-local classes count as outer classes.

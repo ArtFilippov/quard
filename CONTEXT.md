@@ -93,6 +93,14 @@ Local Protocol and abstract-interface declarations are contracts, even when a
 method has a body; they supply overridable members, not forbidden implementations.
 An external or unresolved base cannot establish a customer method override.
 
+## Contract-facing method
+
+A **contract-facing method** is a customer method whose name is declared by a
+local Protocol or abstract interface reachable through its class's explicitly
+inherited, resolvable bases. A method on an unrelated contract with the same name
+does not qualify. An implementation-only method is not contract-facing even when
+its name lacks a leading underscore; see [ADR 0006](docs/adr/0006-inherited-contract-return-boundaries.md).
+
 ## Restricted member
 
 A **restricted member** is a method or property whose invocation or access is

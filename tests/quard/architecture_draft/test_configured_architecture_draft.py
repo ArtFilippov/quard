@@ -300,6 +300,61 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         self.assertFalse(any(item["rule"] == "UNCOVERED_CLASS_MEMBER" for item in
                              report["diagnostics"]))
 
+    def test_return_contract_and_naming_jobs_in_both_architecture_modes(self):
+        for managed in (False, True):
+            with self.subTest(generated=managed), TemporaryDirectory(
+                    prefix="quard-return-policy-") as directory:
+                root = Path(directory)
+                create_repo(root, ready=not managed)
+                if managed:
+                    write_json(root / ".quard/architecture.generated.json", IDENTITY)
+                    configure(root, initial=True, plugins=CATALOG["plugins"], catalog=CATALOG)
+                (root / "src/demo/domain/api.py").write_text(
+                    "from typing import Protocol\nclass Port(Protocol):\n"
+                    "    def fetch(self): ...\n    def _hidden(self): ...\n",
+                    encoding="utf-8")
+                folder = root / "src/demo/infrastructure"
+                folder.mkdir()
+                (folder / "driver.py").write_text(
+                    "from demo.domain.api import Port\n"
+                    "class Connection: pass\n"
+                    "class Driver(Port):\n"
+                    "    def fetch(self): return Connection()\n"
+                    "    def _hidden(self): return Connection()\n"
+                    "    def helper(self) -> Port: return Driver()\n"
+                    "    def _old_helper(self) -> Port: return Driver()\n"
+                    "    def stub(self): pass\n", encoding="utf-8")
+                jobs = ("pylint-production", "class-contracts", "leading-underscores")
+                report = selected_report(self, root, *jobs)
+                findings = {(item["rule"], item["symbol"]) for item in report["diagnostics"]}
+                self.assertIn(("LEADING_UNDERSCORE_NAME", "_hidden"), findings)
+                self.assertIn(("LEADING_UNDERSCORE_NAME", "_old_helper"), findings)
+                rules = {(item["rule"], item["path"], item["symbol"])
+                         for item in report["diagnostics"]}
+                driver = "src/demo/infrastructure/driver.py"
+                if managed:
+                    self.assertFalse(any(rule.startswith("W9") for rule, _, _ in rules), rules)
+                else:
+                    self.assertEqual({item["line"] for item in report["diagnostics"] if
+                                      item["rule"] == "W9007" and item["path"] == driver},
+                                     {4, 5})
+                    self.assertIn(("W9202", driver, "concrete-method-stub"), rules)
+                    self.assertFalse(any(rule == "W9201" for rule, _, _ in rules), rules)
+                config = root / ".quard/config.toml"
+                config.write_text(config.read_text(encoding="utf-8").replace(
+                    "leading_underscores = true", "leading_underscores = false"), encoding="utf-8")
+                independent = selected_report(self, root, "pylint-production", "class-contracts")
+                naming = next(tool for tool in independent["tools"] if tool["name"] ==
+                              "leading-underscores")
+                self.assertEqual((naming["status"], naming["exit_code"]), ("skipped", None))
+                self.assertFalse(any(item["rule"].startswith("LEADING_UNDERSCORE") for item in
+                                     independent["diagnostics"]))
+                before = {(item["rule"], item["path"], item["symbol"]) for item in
+                          report["diagnostics"] if item["tool"] != "leading-underscores"}
+                after = {(item["rule"], item["path"], item["symbol"]) for item in
+                         independent["diagnostics"]}
+                self.assertEqual(before, after)
+
     def test_generated_pylint_report_and_reviewed_profile(self):
         for managed in (False, True):
             with self.subTest(generated=managed), TemporaryDirectory(

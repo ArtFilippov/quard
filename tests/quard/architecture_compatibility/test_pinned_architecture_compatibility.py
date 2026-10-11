@@ -229,7 +229,7 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
                   "sample.compose": "Bootstrap"}
         messages = self.lint(files, layers, rules=["W9007"])
         self.assertEqual([(m["messageId"], m["obj"]) for m in messages],
-                         [("W9007", "RecordsRepository.fetch"), ("W9007", "Implementation.fetch")])
+                         [("W9007", "Implementation.fetch")])
 
     def test_protocol_aliases_qualified_bases_and_inherited_contracts(self):
         files = {
@@ -415,7 +415,83 @@ class TestPinnedArchitectureCompatibility(unittest.TestCase):
         messages = self.lint(files, layers, rules=["W9007"],
                              extra='infrastructure_modules = ["sample.runtime"]')
         self.assertEqual([m["obj"] for m in messages],
-                         ["vague", "unchecked", "unannotated", "wrong", "raw", "Repository.leaked"])
+                         ["vague", "unchecked", "unannotated", "wrong", "raw"])
+
+    def test_w9007_internal_returns_follow_inherited_members_not_underscores(self):
+        files = {
+            "sample/__init__.py": "",
+            "sample/contracts.py": """
+                from abc import ABC, abstractmethod
+                from typing import Protocol
+                class Port(Protocol):
+                    def fetch(self): ...
+                    def _hidden(self): ...
+                class Other(Protocol):
+                    def shared(self): ...
+                class Abstract(ABC):
+                    @abstractmethod
+                    def deliver(self): ...
+            """,
+            "sample/alias.py": "from .contracts import Port as Exported\n",
+            "sample/io.py": "class Driver: pass\n",
+            "sample/adapter.py": """
+                from .alias import Exported as PortAlias
+                from .contracts import Abstract
+                from .io import Driver
+                class Base(PortAlias):
+                    def fetch(self): return Driver()
+                    def _hidden(self): return Driver()
+                class Adapter(Base, Abstract):
+                    def fetch(self): return Driver()
+                    def _hidden(self): return Driver()
+                    def deliver(self): return Driver()
+                    def shared(self) -> PortAlias: return Base()
+                    def helper(self) -> PortAlias: return Base()
+                    def _helper(self) -> PortAlias: return Base()
+                class Unknown(MissingBase):
+                    def shared(self) -> PortAlias: return Base()
+            """,
+        }
+        layers = {"sample.contracts": "Domain", "sample.io": "Infrastructure",
+                  "sample.adapter": "Infrastructure"}
+        messages = self.lint(files, layers, rules=["W9007"],
+                             extra='infrastructure_modules = ["sample.io"]')
+        self.assertEqual([m["obj"] for m in messages],
+                         ["Base.fetch", "Base._hidden", "Adapter.fetch", "Adapter._hidden",
+                          "Adapter.deliver"])
+
+    def test_w9007_bootstrap_keeps_only_proven_contract_members(self):
+        files = {
+            "sample/__init__.py": "",
+            "sample/contracts.py": """
+                from typing import Protocol
+                class Port(Protocol):
+                    def fetch(self): ...
+                    def _hidden(self): ...
+                class Other(Protocol):
+                    def shared(self): ...
+            """,
+            "sample/alias.py": "from .contracts import Port as Exported\n",
+            "sample/io.py": "class Driver: pass\n",
+            "sample/compose.py": """
+                from .alias import Exported
+                from .io import Driver
+                class Base(Exported): pass
+                class RecordsRepository(Base):
+                    def fetch(self): return Driver()
+                    def _hidden(self): return Driver()
+                    def shared(self): return Driver()
+                    def helper(self): return Driver()
+                class Unknown(MissingBase):
+                    def fetch(self): return Driver()
+                def wiring(): return Driver()
+            """,
+        }
+        layers = {"sample.contracts": "Domain", "sample.io": "Infrastructure",
+                  "sample.compose": "Bootstrap"}
+        messages = self.lint(files, layers, rules=["W9007"])
+        self.assertEqual([m["obj"] for m in messages],
+                         ["RecordsRepository.fetch", "RecordsRepository._hidden"])
 
     def test_context_manager_self_return_is_not_raw_data_escape(self):
         files = {"adapter.py": """

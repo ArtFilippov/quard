@@ -66,6 +66,50 @@ def _protocol_ancestors(node):
     return ancestors
 
 
+def _inherited_classes(node):
+    """Walk only statically resolved base edges, including imported and generic aliases."""
+    pending = [node]
+    seen = {node}
+    while pending:
+        current = pending.pop()
+        for base in current.bases:
+            if isinstance(base, nodes.Subscript):
+                base = base.value
+            ancestor = safe_infer(base)
+            if not isinstance(ancestor, nodes.ClassDef) or ancestor in seen:
+                continue
+            seen.add(ancestor)
+            yield ancestor
+            pending.append(ancestor)
+
+
+def _declared_contract(node):
+    """Recognize local Protocol and abstract-interface declarations, not concrete bases."""
+    path = node.root().file
+    if not path or not Path(path).resolve().is_relative_to(Path.cwd().resolve()):
+        return False
+    if _is_protocol(node):
+        return True
+    bases = {ancestor.qname() for ancestor in _inherited_classes(node)}
+    meta = {safe_infer(keyword.value).qname() for keyword in node.keywords
+            if keyword.arg == "metaclass" and isinstance(safe_infer(keyword.value), nodes.ClassDef)}
+    if not (bases | meta) & {"abc.ABC", "abc.ABCMeta"}:
+        return False
+    return any(isinstance(member, nodes.FunctionDef) and member.decorators
+               and any(isinstance(decorator, nodes.NodeNG) and
+                       isinstance(inferred := safe_infer(decorator), nodes.FunctionDef)
+                       and inferred.qname() in {"abc.abstractmethod", "abc.abstractproperty"}
+                       for decorator in member.decorators.nodes)
+               for member in node.body)
+
+
+def _inherited_contract_member(cls, name):
+    """A matching unrelated contract or unknown base cannot establish membership."""
+    return any(_declared_contract(ancestor) and
+               any(isinstance(member, nodes.FunctionDef) for member in ancestor.locals.get(name, ()))
+               for ancestor in _inherited_classes(cls))
+
+
 def _annotation_definitions(annotation):
     """Resolve a declared value type, without treating a name as a type by spelling."""
     if annotation is None:
@@ -495,7 +539,8 @@ def _patch_design(checker):
         root = node.root()
         internal = (self.config_loader.get_layer_for_module(root.name, root.file or "") == "Infrastructure"
                     and (isinstance(method.parent, nodes.Module)
-                         or method.name.startswith("_") and not method.name.startswith("__")))
+                         or isinstance(method.parent, nodes.ClassDef)
+                         and not _inherited_contract_member(method.parent, method.name)))
         for contract in declared:
             if contract is cls or contract in ancestors:
                 if domain_protocol(self, contract) or internal:
@@ -522,18 +567,9 @@ def _patch_design(checker):
 
     def domain_facing_method(self, node):
         method = node.scope()
-        cls = method.parent
-        if (not isinstance(method, nodes.FunctionDef) or not isinstance(cls, nodes.ClassDef)
-                or method.name.startswith("_")):
-            return False
-        if cls.name.endswith("Repository"):
-            return True
-        for ancestor in _protocol_ancestors(cls):
-            root = ancestor.root()
-            if (_is_protocol(ancestor) and self.config_loader.get_layer_for_module(
-                    root.name, root.file or "") == "Domain"):
-                return True
-        return False
+        return (isinstance(method, nodes.FunctionDef) and
+                isinstance(method.parent, nodes.ClassDef) and
+                _inherited_contract_member(method.parent, method.name))
 
     def visit_return(self, node):
         if node.value is None:

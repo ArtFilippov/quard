@@ -17,6 +17,16 @@ violations baseline.
   members to be declared by a Domain Protocol; W9202 and the other enabled plugin
   rules remain active. Both modes retain pinned Pylint Protocol fixes; reviewed mode retains the
   version-guarded plugin fixes in `COMPATIBILITY.md`.
+  Reviewed W9007 checks returns on contract-facing methods in Infrastructure and
+  Bootstrap, including underscored members and resolvable alias/ancestor chains.
+  An Infrastructure method absent from its explicitly inherited local contracts
+  receives the existing precise Domain Protocol return exception regardless of
+  spelling; free functions retain that exception. Bootstrap wiring is exempt only
+  outside proven contract methods. Unknown ancestry, an unrelated same-named
+  contract and a `*Repository` suffix do not prove membership. Raw returns,
+  infrastructure returns without a qualifying annotation, context-manager self
+  returns and other native findings retain their existing checks. The optional
+  leading-underscore job does not control reviewed Pylint.
 * **Pyright 1.1.414** with its Node runtime: strict plus the additional diagnostics
   in `_policy.PYRIGHT_EXTRA`. Cycles are assigned to Pylint.
 * **Tach 0.35.1**: both internal and external checks, explicit module/public API
