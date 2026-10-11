@@ -237,6 +237,12 @@ class TestFreeFunctionPlacement(unittest.TestCase):
             ("UTILITIES_MODULE_CLASS", "src/demo/format_utils.py", 5, 5, "Local"),
         })
         self.assertTrue(all(not d["is_infrastructure_error"] for d in result["diagnostics"]))
+        message = ("first: design this code around object-oriented classes rather than "
+                   "free functions. If a free function is unavoidable, declare it in a "
+                   "class-free <group_name>_utils.py "
+                   "module (or companion stub).")
+        self.assertEqual(next(d["message"] for d in result["diagnostics"]
+                              if d["symbol"] == "first"), message)
 
     def test_parse_read_and_manifest_errors_do_not_pass(self):
         self.put("src/demo/broken.pyi", "def broken(\n")

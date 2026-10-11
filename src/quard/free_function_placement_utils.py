@@ -66,9 +66,11 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                 diagnostics.append({"rule": "FREE_FUNCTION_PLACEMENT", "path": path,
                                     "line": node.lineno, "column": node.col_offset + 1,
                                     "symbol": node.name,
-                                    "message": (f"{node.name}: free function must be declared in a "
-                                                + "class-free <group_name>_utils.py module "
-                                                + "(or companion stub).")})
+                                    "message": (f"{node.name}: design this code around "
+                                                + "object-oriented classes rather than free functions. "
+                                                + "If a free function is unavoidable, "
+                                                + "declare it in a class-free <group_name>_utils.py "
+                                                + "module (or companion stub).")})
     return diagnostics, error
 
 
