@@ -120,3 +120,16 @@ declared restriction, distinct from the requirement imposed by an inherited cont
 An **effective restriction** is a member's restriction after declaration, class
 marking, inherited members and inherited contract requirements are considered.
 Conflicting declarations do not erase an established restriction.
+
+## Assembly-site lambda injection
+
+An **assembly site** is a discovered production module beneath `main/` or a file
+directly in a contract group's `envelopes/` directory. **Lambda injection** is a
+lambda supplied to a proven project-class or External call there, directly or through
+local aliases, branch alternatives, enclosing-function captures or simple containers.
+Its body, nested lambdas and definition-time defaults must use the supported
+declarative expression shapes; forbidden shapes point to the expression and suggest
+a wrapper class. **Injected value provenance** is the separate proof that each
+argument source comes from a parameter, local assembly or an explicit External
+value. An unresolved branch or project global read inside a function supplies no
+local proof and receives an origin diagnostic at the argument or alias.

@@ -342,8 +342,8 @@ definition-time defaults and annotations, plus proven project decorator factorie
 and applications are checked. External decorators are opaque; unknown applications
 fail. See
 [PROFILE.md](PROFILE.md#constructor-purity).
-The independent lambda-injection job checks argument provenance and directly supplied
-lambda syntax in production `main/` descendants and files directly in a contract
+The independent lambda-injection job checks argument provenance and direct or locally
+aliased lambda syntax in production `main/` descendants and files directly in a contract
 group's `envelopes/` folder,
 for both generated and reviewed architecture. It does not narrow with LCOM4;
 see [PROFILE.md](PROFILE.md#lambda-injection).

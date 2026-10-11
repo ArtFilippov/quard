@@ -94,7 +94,7 @@ def build(value):
 ''')
         self.put("src/demo/domain/api.py", "class Builder: pass\n")
         result = execute_job(self.job(), self.root, self.run_dir, 30)
-        self.assertEqual([d["line"] for d in result["diagnostics"]], [4, 5, 6, 7, 8, 9, 10])
+        self.assertEqual([d["line"] for d in result["diagnostics"]], [4, 5, 6, 7, 8, 9])
         self.assertTrue(all(d["rule"] == "LAMBDA_INJECTION" for d in result["diagnostics"]))
 
     def test_root_main_and_conditional_origins(self):
@@ -250,6 +250,127 @@ Builder(lambda arg: ready if arg else arg)
         result = execute_job(self.job(), self.root, self.run_dir, 30)
         self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
                          [(2, "lambda"), (2, "argument")])
+
+    def test_indirect_lambdas_branches_and_closures(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\nready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+def outer(port, choose):
+    good = lambda x: Builder(port, x)
+    bad = lambda x: x[0]
+    if choose:
+        selected = good
+    else:
+        selected = bad
+    alias = selected
+    def inner():
+        Builder(alias)
+    inner()
+    if choose:
+        maybe = good
+    Builder(maybe)
+    Builder(good)
+    Builder([lambda x: (lambda y: y + 1), good])
+    Builder(ready)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(4, "lambda"), (15, "argument"), (17, "lambda"),
+                          (18, "argument")])
+        self.assertTrue(all("wrapper class" in d["message"] for d in result["diagnostics"]
+                            if d["symbol"] == "lambda"))
+
+    def test_defaults_nested_values_and_scope_provenance(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder
+global_factory = lambda x: x
+Builder(global_factory)
+def outer(port):
+    local = lambda x, dep=port: (lambda y, default=x[0]: y)
+    alias = local
+    Builder({'factory': alias})
+    def inner():
+        Builder(alias)
+        Builder(global_factory)
+    return inner
+def clean(port):
+    factory = lambda x, dep=Builder(port): (lambda y=port: Builder(y, x))
+    Builder(factory)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(5, "lambda"), (10, "argument")])
+
+    def test_indirect_lambda_unknown_capture_and_default(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\nready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+def build(port):
+    factory = lambda x, dep=ready: Builder(x, missing)
+    alias = factory
+    Builder(alias)
+    safe = lambda x: port
+    Builder(safe)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(3, "argument"), (3, "argument")])
+        self.assertTrue(all("Unresolved" in d["message"] for d in result["diagnostics"]))
+        self.assertIn("project module binding", result["diagnostics"][0]["message"])
+
+    def test_stored_container_and_shadowed_lambda_parameters(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder
+def wire(port):
+    unsafe = lambda x: x[0]
+    stored = [unsafe]
+    Builder(stored)
+    safe = lambda unsafe, dep=port: (lambda y: unsafe)
+    Builder(safe)
+    Builder(lambda x, dep=port[0]: x)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(3, "lambda"), (8, "lambda")])
+
+    def test_every_branch_body_and_keyword_default(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder
+def wire(port, choose):
+    first = lambda x: x[0]
+    second = lambda x, *, dep=port + 1: x if x else port
+    if choose:
+        factory = first
+    else:
+        factory = second
+    Builder(factory)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"]), ("violations", 1))
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(3, "lambda"), (4, "lambda"), (4, "lambda")])
+
+    def test_default_origin_is_frozen_at_definition(self):
+        self.put("src/demo/domain/api.py", "class Builder: pass\nready = Builder()\n")
+        self.put("src/demo/main/wire.py", '''\
+from demo.domain.api import Builder, ready
+def wire(port):
+    source = port
+    good = lambda x=source: x
+    source = ready
+    Builder(good)
+    bad = lambda x=source: x
+    source = port
+    Builder(bad)
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]],
+                         [(7, "argument")])
 
     def test_generated_and_reviewed_reporting_independent_of_lcom(self):
         self.put("src/demo/main/wire.py", "from demo.domain.api import Builder\n"

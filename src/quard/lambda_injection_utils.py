@@ -1,4 +1,4 @@
-"""Check directly injected lambdas at production composition sites."""
+"""Check direct and indirect lambda injection at production composition sites."""
 from __future__ import annotations
 
 import argparse
@@ -51,7 +51,7 @@ def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check direct lambda injection at assembly sites.")
+    parser = argparse.ArgumentParser(description="Check lambda injection at assembly sites.")
     _ = parser.add_argument("--manifest", type=Path, required=True)
     args = parser.parse_args()
     try:

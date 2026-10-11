@@ -117,8 +117,8 @@ violations baseline.
 * **Constructor purity (default-on, optional)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including
   nested classes. It is unaffected by `--lcom_files`; stubs have no checked body.
-* **Lambda injection (default-on, optional)**: `LAMBDA_INJECTION` checks directly
-  supplied lambdas in production assembly files, independently of LCOM4 and
+* **Lambda injection (default-on, optional)**: `LAMBDA_INJECTION` checks direct
+  and locally aliased lambdas in production assembly files, independently of LCOM4 and
   generated/reviewed architecture selection. See [Lambda injection](#lambda-injection).
 * **Non-instance methods**: Quard's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
@@ -586,14 +586,22 @@ a function does not establish a local origin. External call behavior remains opa
 its arguments still undergo the same check. Unknown call targets are outside the
 assembly-call check; unknown calls used *as injected values* have unproved origins.
 
-Lambda bodies may use constants, parameters/names, attribute reads, calls (including
-project functions and opaque External functions), and list, tuple, set and dict
-literals built from these expressions. Calls can chain or nest, and their arguments
-are checked even if the callee is External. Conditional expressions, subscriptions,
-arithmetic, assignment expressions, comprehensions and other unsupported expressions
-receive positioned `LAMBDA_INJECTION` violations advising a wrapper class. The
-rule constrains syntax and value origins, not the purity or runtime behavior of
-called functions.
+Lambdas passed directly or through local bindings, aliases, branch alternatives,
+enclosing-function captures and simple containers receive the same check. Every
+possible body and origin must pass; an unresolved assignment alternative fails at
+its argument alias. Nested lambdas and definition-time positional or keyword defaults
+are checked recursively. Lambda bodies may use constants, parameters/names, attribute
+reads, calls (including project functions and opaque External functions), and list,
+tuple, set and dict literals built from these expressions. Calls can chain or nest,
+and their arguments are checked even if the callee is External. Conditional
+expressions, subscriptions, arithmetic, assignment expressions, comprehensions and
+other unsupported expressions receive positioned `LAMBDA_INJECTION` shape violations
+at the offending expression, advising a wrapper class. Unresolved value sources
+receive separate positioned origin explanations at the name, alias or call. The rule
+constrains syntax and value origins, not the purity or runtime behavior of called
+functions. A function's read of a project module global does not acquire local
+provenance merely because the global lambda definition is visible; module-level
+assembly and External values retain their usual scope rules.
 Source read/parse and worker/report failures exit 2; valid violations exit 1 and
 clean results exit 0. Raw output and diagnostics are archived with the usual report.
 
