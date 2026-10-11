@@ -1,8 +1,11 @@
 # Quard agent instructions
 
 Read `README.md`, `PROFILE.md` and `COMPATIBILITY.md` before changing analyzer policy
-or version-specific patches. Preserve native diagnostics: do not filter failures,
-loosen limits, add baselines, or run `tach sync` routinely to obtain a green result.
+or version-specific patches. Preserve diagnostics from enabled checks: do not filter
+failures, loosen limits, add baselines, or run `tach sync` routinely to obtain a green
+result. A policy decision made while developing Quard may disable a native rule
+when it does not fit Quard's current model. Make that change in the analyzer
+configuration and report the resulting check coverage accurately.
 Before migrating slow integration tests to focused/unit tests, read
 `TEST_MIGRATION_RUNBOOK.md`.
 
