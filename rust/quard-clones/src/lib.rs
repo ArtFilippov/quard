@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use cpd_core::detect::{detect_prepared, merge_gapped_clones, PathFilters};
-use cpd_core::models::{CpdClone, KindFilter, SourceFile};
+use cpd_core::hash::token_hash;
+use cpd_core::models::{CpdClone, KindFilter, SourceFile, TokenKind};
 use cpd_finder::orchestrate::{FilePreparer, RunConfig};
 use cpd_finder::statistics;
 use cpd_reporter::shared::extract_lines;
@@ -12,6 +13,44 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 
 mod preparation;
+
+// Retain native raw hashes for Type-1/Type-2 classification. Only the hashes
+// handed to detection distinguish callable identities and local alias relations.
+fn rename_hashes(source: &mut cpd_core::detect::PreparedSource, unit: &preparation::Unit) {
+    let mut locals: HashMap<&str, usize> = HashMap::new();
+    for (index, (start, end)) in source.spans.iter().enumerate() {
+        let offset = start.offset as usize;
+        if let Some(identity) = unit.identities.get(&offset) {
+            source.hashes[index] = token_hash(
+                TokenKind::Identifier.discriminant(),
+                &format!("callable:{identity}"),
+            );
+        } else if source
+            .raw_hashes
+            .get(index)
+            .is_some_and(|raw| *raw != source.hashes[index])
+        {
+            let Some(token) = unit.text.get(offset..end.offset as usize) else {
+                continue;
+            };
+            // Only normalized identifiers receive ordinal names. Native literal
+            // normalization continues unchanged across the entire unit.
+            if token
+                .chars()
+                .next()
+                .is_some_and(|ch| ch == '_' || ch.is_alphabetic())
+                && token.chars().all(|ch| ch == '_' || ch.is_alphanumeric())
+            {
+                let next = locals.len();
+                let ordinal = *locals.entry(token).or_insert(next);
+                source.hashes[index] = token_hash(
+                    TokenKind::Identifier.discriminant(),
+                    &format!("local:{ordinal}"),
+                );
+            }
+        }
+    }
+}
 
 struct SourceMap {
     path: String,
@@ -314,6 +353,7 @@ impl SourceSession {
                             "incomplete normalized preparation",
                         ));
                     }
+                    rename_hashes(&mut detection[0], &unit);
                     prepared_renamed.append(&mut detection);
                     renamed_scanned_unit_lines
                         .get_mut(&path)
@@ -349,6 +389,7 @@ impl SourceSession {
                         "incomplete native call preparation",
                     ));
                 }
+                rename_hashes(&mut detection[0], &unit);
                 prepared_calls.append(&mut detection);
                 maps.insert(
                     id,

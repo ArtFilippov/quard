@@ -521,6 +521,96 @@ import collections
         self.assertEqual(larger_minimum["minimum"], 6)
         self.assertFalse(larger_minimum.get("duplicates", []), larger_minimum)
 
+    def test_real_wheel_renamed_respects_callable_identity_and_local_relations(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+
+        def compare(left: str, right: str) -> list[dict[str, Any]]:
+            first.write_text(left, encoding="utf-8")
+            second.write_text(right, encoding="utf-8")
+            return focused_scan(self.root)["renamed"].get("duplicates", [])
+
+        left = ("class Actor: pass\n"
+                "def build(value):\n"
+                "    first = wire(Actor, value, 17)\n"
+                "    second = wire(Actor, first, 18)\n"
+                "    return wire(Actor, second, 19)\n")
+        different = left.replace("Actor", "Other").replace("17", "21")
+        self.assertFalse(compare(left, different))
+        aliased = ("from demo.first import Actor as Alias\n"
+                   "def build(other):\n"
+                   "    start = wire(Alias, other, 21)\n"
+                   "    middle = wire(Alias, start, 22)\n"
+                   "    return wire(Alias, middle, 23)\n")
+        matches = compare(left, aliased)
+        self.assertTrue(matches, matches)
+        self.assertEqual({item["kind"] for item in matches}, {"renamed"})
+        self.assertTrue(any(item["fragment"] == "\n".join(left.splitlines()[2:5])
+                            and item["firstFile"]["start"] == 3
+                            and item["firstFile"]["end"] == 5 for item in matches), matches)
+
+        constructed = ("class Actor: pass\n"
+                       "def build(value):\n    a = Actor(value, 17)\n"
+                       "    b = Actor(a, 18)\n    return Actor(b, 19)\n")
+        self.assertFalse(compare(constructed, constructed.replace("Actor", "Other")
+                                 .replace("17", "21")))
+        alias_constructor = ("from demo.first import Actor as Renamed\n"
+                             "def build(other):\n    x = Renamed(other, 21)\n"
+                             "    y = Renamed(x, 22)\n    return Renamed(y, 23)\n")
+        self.assertTrue(compare(constructed, alias_constructor))
+        bound_constructor = ("from demo.first import Actor\n"
+                             "Renamed = Actor\n"
+                             "def build(other):\n    x = Renamed(other, 21)\n"
+                             "    y = Renamed(x, 22)\n    return Renamed(y, 23)\n")
+        self.assertTrue(compare(constructed, bound_constructor))
+        module_constructor = ("import demo.first as source\n"
+                              "def build(other):\n    x = source.Actor(other, 21)\n"
+                              "    y = source.Actor(x, 22)\n    return source.Actor(y, 23)\n")
+        self.assertTrue(compare(module_constructor, module_constructor.replace(
+            "source", "origin").replace("21", "31").replace("22", "32")
+            .replace("23", "33").replace("x =", "a =").replace("(x,", "(a,")
+            .replace("y =", "b =").replace("(y,", "(b,")))
+        qualified_value = ("import demo.first as source\n"
+                           "def build(other):\n    x = wire(source.Actor, other, 21)\n"
+                           "    y = wire(source.Actor, x, 22)\n"
+                           "    return wire(source.Actor, y, 23)\n")
+        self.assertTrue(compare(qualified_value, qualified_value.replace(
+            "source", "origin").replace("21", "31").replace("22", "32")
+            .replace("23", "33").replace("x =", "a =").replace(", x,", ", a,")
+            .replace("y =", "b =").replace(", y,", ", b,")))
+        self.assertFalse(compare(qualified_value,
+                                 qualified_value.replace("source.Actor", "source.Other")
+                                 .replace("21", "31")))
+
+        function = ("def transform(value):\n    return value\n"
+                    "def build(value):\n    a = transform(value, 17)\n"
+                    "    b = transform(a, 18)\n    return transform(b, 19)\n")
+        function_alias = ("from demo.first import transform as change\n"
+                          "def build(other):\n    x = change(other, 21)\n"
+                          "    y = change(x, 22)\n    return change(y, 23)\n")
+        self.assertTrue(compare(function, function_alias))
+        self.assertFalse(compare(function, function_alias.replace("transform", "different")))
+
+        call = ("def run(value):\n    a = value.read(17)\n"
+                "    b = value.read(a)\n    return value.read(b)\n")
+        self.assertFalse(compare(call, call.replace("read", "write").replace("17", "23")))
+        changed_call = ("def run(other):\n    x = other.read(23)\n"
+                        "    y = other.read(x)\n    return other.read(y)\n")
+        self.assertTrue(compare(call, changed_call))
+
+        repeated = ("def run(value):\n    a = apply(value, value, 17)\n"
+                    "    b = apply(a, a, 18)\n    return apply(b, b, 19)\n")
+        distinct = ("def run(value, peer):\n    a = apply(value, peer, 21)\n"
+                    "    b = apply(a, peer, 22)\n    return apply(b, peer, 23)\n")
+        self.assertFalse(compare(repeated, distinct))
+        unknown = ("def run(value):\n    a = mystery(value, 17)\n"
+                   "    b = mystery(a, 18)\n    return mystery(b, 19)\n")
+        self.assertFalse(compare(unknown, unknown.replace("mystery", "unresolved")))
+        nested = ("value = Outer(\n    Middle(\n        Branch(\n"
+                  "            Leaf(local, 17)\n        )\n    )\n)\n")
+        self.assertFalse(compare(nested, nested.replace("Leaf", "Twig")
+                                 .replace("17", "23")))
+
     def test_real_wheel_nested_calls_do_not_compare_overlapping_subtrees(self) -> None:
         source = self.root / "src/demo/first.py"
         source.write_text("value = Wrap(\n    First(\n        Second(\n"

@@ -1,7 +1,7 @@
 //! Python syntax selection and reversible per-unit line maps.
 use rustpython_ast::{Constant, Expr, Ranged, Stmt, Visitor};
 use rustpython_parser::{ast, Parse};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub struct Unit {
     pub text: String,
@@ -10,6 +10,8 @@ pub struct Unit {
     pub columns: Option<Vec<Vec<usize>>>,
     // A derived call unit covers one complete original subtree, not its tokens.
     pub subtree: Option<(usize, usize)>,
+    // Token starts in prepared text whose callable identity survives renaming.
+    pub identities: HashMap<usize, String>,
 }
 
 pub struct Views {
@@ -19,6 +21,284 @@ pub struct Views {
     pub calls: Vec<Unit>,
 }
 
+// Bind only syntactically established callable names. Unknown calls keep their
+// spelling; a local value binding never becomes a guessed callable identity.
+struct CallIdentities {
+    module: String,
+    owner: String,
+    bindings: HashMap<String, String>,
+    tokens: HashMap<usize, String>,
+}
+
+impl CallIdentities {
+    fn new(path: &str) -> Self {
+        let relative = path
+            .split("/src/")
+            .nth(1)
+            .or_else(|| path.split("/tests/").nth(1));
+        let module = relative
+            .unwrap_or(path)
+            .trim_end_matches(".py")
+            .replace('/', ".");
+        let module = module.trim_end_matches(".__init__").to_owned();
+        Self {
+            module,
+            owner: String::new(),
+            bindings: HashMap::new(),
+            tokens: HashMap::new(),
+        }
+    }
+
+    fn resolved(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Name(name) => self.bindings.get(name.id.as_str()).cloned(),
+            Expr::Attribute(attr) => self
+                .resolved(&attr.value)
+                .map(|owner| format!("{owner}.{}", attr.attr)),
+            _ => None,
+        }
+    }
+
+    fn declared(&self, name: &str) -> String {
+        if self.owner.is_empty() {
+            format!("{}.{}", self.module, name)
+        } else {
+            format!("{}.{}.{}", self.module, self.owner, name)
+        }
+    }
+
+    fn reference(&mut self, expr: &Expr, callable: bool) {
+        match expr {
+            Expr::Name(name) => {
+                if let Some(identity) = self
+                    .resolved(expr)
+                    .or_else(|| callable.then(|| format!("unresolved:{}", name.id)))
+                {
+                    self.tokens.insert(name.range.start().into(), identity);
+                }
+            }
+            Expr::Attribute(attr) if callable || self.resolved(expr).is_some() => {
+                let identity = self
+                    .resolved(expr)
+                    .unwrap_or_else(|| format!("method:{}", attr.attr));
+                let end: usize = attr.range.end().into();
+                self.tokens.insert(end - attr.attr.len(), identity);
+            }
+            _ => {}
+        }
+    }
+
+    fn forget(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Name(name) => {
+                self.bindings.remove(name.id.as_str());
+            }
+            Expr::Tuple(items) => {
+                for item in &items.elts {
+                    self.forget(item);
+                }
+            }
+            Expr::List(items) => {
+                for item in &items.elts {
+                    self.forget(item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn arguments(&mut self, args: &ast::Arguments) {
+        for arg in args
+            .posonlyargs
+            .iter()
+            .chain(&args.args)
+            .chain(&args.kwonlyargs)
+        {
+            self.bindings.remove(arg.def.arg.as_str());
+        }
+        for arg in [&args.vararg, &args.kwarg].into_iter().flatten() {
+            self.bindings.remove(arg.arg.as_str());
+        }
+    }
+
+    fn body(&mut self, body: &[Stmt]) {
+        for stmt in body {
+            self.visit_stmt(stmt.clone());
+        }
+    }
+
+    fn branches(&mut self, paths: &[Vec<Stmt>]) {
+        let before = self.bindings.clone();
+        let mut states = Vec::new();
+        for path in paths {
+            self.bindings = before.clone();
+            self.body(path);
+            states.push(self.bindings.clone());
+        }
+        self.bindings = before;
+        self.bindings
+            .retain(|name, identity| states.iter().all(|state| state.get(name) == Some(identity)));
+        // A binding assigned on every path can also be proven.
+        if let Some(first) = states.first() {
+            for (name, identity) in first {
+                if states.iter().all(|state| state.get(name) == Some(identity)) {
+                    self.bindings.insert(name.clone(), identity.clone());
+                }
+            }
+        }
+    }
+}
+
+impl Visitor for CallIdentities {
+    fn visit_stmt(&mut self, node: Stmt) {
+        match node {
+            Stmt::Import(def) => {
+                for alias in def.names {
+                    let name = alias.asname.as_ref().map_or_else(
+                        || {
+                            alias
+                                .name
+                                .as_str()
+                                .split('.')
+                                .next()
+                                .unwrap_or("")
+                                .to_owned()
+                        },
+                        ToString::to_string,
+                    );
+                    let module = if alias.asname.is_some() {
+                        alias.name.to_string()
+                    } else {
+                        name.clone()
+                    };
+                    self.bindings.insert(name, module);
+                }
+            }
+            Stmt::ImportFrom(def) => {
+                let level = def.level.map_or(0, |value| value.to_u32() as usize);
+                let mut parts: Vec<&str> = self.module.split('.').collect();
+                if level > 0 {
+                    parts.truncate(parts.len().saturating_sub(level));
+                } else {
+                    parts.clear();
+                }
+                let prefix = parts.join(".");
+                let module = def.module.as_ref().map_or("", |value| value.as_str());
+                for alias in def.names {
+                    if alias.name.as_str() == "*" {
+                        continue;
+                    }
+                    let binding = alias.asname.as_ref().unwrap_or(&alias.name).to_string();
+                    let target = [prefix.as_str(), module, alias.name.as_str()]
+                        .into_iter()
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    self.bindings.insert(binding, target);
+                }
+            }
+            Stmt::FunctionDef(def) => {
+                let parent = self.bindings.clone();
+                let declared = self.declared(def.name.as_str());
+                let owner = self.owner.clone();
+                self.owner = declared[self.module.len() + 1..].to_owned();
+                self.arguments(&def.args);
+                self.bindings.insert(def.name.to_string(), declared.clone());
+                self.body(&def.body);
+                self.bindings = parent;
+                self.owner = owner;
+                self.bindings.insert(def.name.to_string(), declared);
+            }
+            Stmt::AsyncFunctionDef(def) => {
+                let parent = self.bindings.clone();
+                let declared = self.declared(def.name.as_str());
+                let owner = self.owner.clone();
+                self.owner = declared[self.module.len() + 1..].to_owned();
+                self.arguments(&def.args);
+                self.bindings.insert(def.name.to_string(), declared.clone());
+                self.body(&def.body);
+                self.bindings = parent;
+                self.owner = owner;
+                self.bindings.insert(def.name.to_string(), declared);
+            }
+            Stmt::ClassDef(def) => {
+                let parent = self.bindings.clone();
+                let declared = self.declared(def.name.as_str());
+                let owner = self.owner.clone();
+                self.owner = declared[self.module.len() + 1..].to_owned();
+                self.body(&def.body);
+                self.bindings = parent;
+                self.owner = owner;
+                self.bindings.insert(def.name.to_string(), declared);
+            }
+            Stmt::Assign(def) => {
+                self.visit_expr(*def.value.clone());
+                let identity = self.resolved(&def.value);
+                for target in &def.targets {
+                    self.forget(target);
+                    if let (Expr::Name(name), Some(identity)) = (target, &identity) {
+                        self.bindings.insert(name.id.to_string(), identity.clone());
+                    }
+                }
+            }
+            Stmt::AnnAssign(def) => {
+                if let Some(value) = &def.value {
+                    self.visit_expr(*value.clone());
+                }
+                let identity = def.value.as_ref().and_then(|value| self.resolved(value));
+                self.forget(&def.target);
+                if let (Expr::Name(name), Some(identity)) = (def.target.as_ref(), identity) {
+                    self.bindings.insert(name.id.to_string(), identity);
+                }
+            }
+            Stmt::If(def) => {
+                self.visit_expr(*def.test);
+                self.branches(&[def.body, def.orelse]);
+            }
+            Stmt::For(def) => {
+                self.visit_expr(*def.iter);
+                self.forget(&def.target);
+                self.branches(&[def.body, def.orelse, Vec::new()]);
+            }
+            Stmt::AsyncFor(def) => {
+                self.visit_expr(*def.iter);
+                self.forget(&def.target);
+                self.branches(&[def.body, def.orelse, Vec::new()]);
+            }
+            Stmt::While(def) => {
+                self.visit_expr(*def.test);
+                self.branches(&[def.body, def.orelse, Vec::new()]);
+            }
+            Stmt::AugAssign(def) => {
+                self.visit_expr(*def.value);
+                self.forget(&def.target);
+            }
+            Stmt::Delete(def) => {
+                for target in def.targets {
+                    self.forget(&target);
+                }
+            }
+            other => {
+                let before = self.bindings.clone();
+                self.generic_visit_stmt(other);
+                // Other compound statements may not execute their whole body.
+                // Keep only identities that survived every possible path.
+                self.bindings
+                    .retain(|name, identity| before.get(name) == Some(identity));
+            }
+        }
+    }
+
+    fn visit_expr(&mut self, node: Expr) {
+        if let Expr::Call(call) = &node {
+            self.reference(&call.func, true);
+        } else {
+            self.reference(&node, false);
+        }
+        self.generic_visit_expr(node);
+    }
+}
+
 // The normalized pass needs a candidate for a nested expression even when
 // each call starts on a different line and the surrounding constructor differs.
 // Make each *complete* three-call subtree a native unit. In particular, do not
@@ -26,9 +306,10 @@ pub struct Views {
 struct NestedCalls<'a> {
     source: &'a str,
     chain_length: usize,
-    path: Vec<(usize, usize, String)>,
+    path: Vec<(usize, usize, String, HashMap<usize, String>)>,
     units: Vec<Unit>,
     literal_continuations: Vec<(usize, usize)>,
+    identities: &'a HashMap<usize, String>,
 }
 
 impl Visitor for NestedCalls<'_> {
@@ -96,23 +377,35 @@ impl Visitor for NestedCalls<'_> {
                     .filter(|arg| matches!(arg, Expr::Call(_)))
                     .collect();
                 let mut row = String::new();
+                let mut identities = HashMap::new();
                 let mut cursor = start;
                 let mut spans: Vec<_> = children.iter().map(|child| child.range()).collect();
                 spans.sort_by_key(|span| span.start());
                 for span in spans {
                     let begin: usize = span.start().into();
                     let finish: usize = span.end().into();
+                    for (&offset, identity) in self.identities {
+                        if (cursor..begin).contains(&offset) {
+                            identities.insert(row.len() + offset - cursor, identity.clone());
+                        }
+                    }
                     row.push_str(&self.source[cursor..begin]);
                     row.push_str("child");
                     cursor = finish;
                 }
+                for (&offset, identity) in self.identities {
+                    if (cursor..end).contains(&offset) {
+                        identities.insert(row.len() + offset - cursor, identity.clone());
+                    }
+                }
                 row.push_str(&self.source[cursor..end]);
-                self.path.push((start, end, row.replace('\n', " ")));
+                self.path
+                    .push((start, end, row.replace('\n', " "), identities));
                 if children.is_empty() && self.path.len() >= self.chain_length {
                     let chain = &self.path[self.path.len() - self.chain_length..];
                     let lines: Vec<usize> = chain
                         .iter()
-                        .map(|(start, _, _)| {
+                        .map(|(start, _, _, _)| {
                             self.source[..*start]
                                 .bytes()
                                 .filter(|byte| *byte == b'\n')
@@ -122,7 +415,11 @@ impl Visitor for NestedCalls<'_> {
                         .collect();
                     if lines.windows(2).all(|pair| pair[0] < pair[1]) {
                         let mut text = String::new();
-                        for (_, _, row) in chain {
+                        let mut protected = HashMap::new();
+                        for (_, _, row, identities) in chain {
+                            for (offset, identity) in identities {
+                                protected.insert(text.len() + offset, identity.clone());
+                            }
                             text.push_str(row);
                             text.push('\n');
                         }
@@ -131,6 +428,7 @@ impl Visitor for NestedCalls<'_> {
                             lines,
                             columns: None,
                             subtree: Some((chain[0].0, chain[0].1)),
+                            identities: protected,
                         });
                     }
                 }
@@ -417,6 +715,7 @@ impl Selection {
                 lines,
                 columns: Some(columns),
                 subtree: None,
+                identities: HashMap::new(),
             });
         }
     }
@@ -646,6 +945,7 @@ impl Selection {
             lines,
             columns: Some(columns),
             subtree: None,
+            identities: HashMap::new(),
         });
     }
 
@@ -912,8 +1212,11 @@ fn compact_units(
     spans: impl Iterator<Item = (Vec<(usize, usize)>, Vec<(usize, usize)>)>,
     normalized: bool,
     extra_remove: &[(usize, usize)],
+    identities: &HashMap<usize, String>,
 ) -> Result<Vec<Unit>, String> {
     let mut result = Vec::new();
+    let mut anchors: Vec<_> = identities.iter().collect();
+    anchors.sort_unstable_by_key(|(offset, _)| **offset);
     for (keep, remove) in spans {
         let mut bytes = vec![b' '; text.len()];
         for (begin, end) in keep {
@@ -929,6 +1232,7 @@ fn compact_units(
         }
         let mut lines = Vec::new();
         let mut compact = String::new();
+        let mut protected = HashMap::new();
         for (index, start) in starts.iter().enumerate() {
             let end = starts.get(index + 1).copied().unwrap_or(text.len());
             let slice = &bytes[*start..end];
@@ -946,6 +1250,17 @@ fn compact_units(
                 }
             }
             if slice.iter().any(|b| !b.is_ascii_whitespace()) {
+                if normalized {
+                    let first = anchors.partition_point(|(offset, _)| **offset < *start);
+                    for (&offset, identity) in &anchors[first..] {
+                        if offset >= end {
+                            break;
+                        }
+                        if bytes[offset] != b' ' {
+                            protected.insert(compact.len() + offset - start, (*identity).clone());
+                        }
+                    }
+                }
                 let masked = std::str::from_utf8(slice)
                     .map_err(|_| format!("{path}: masked syntax split a Unicode character"))?;
                 compact.push_str(masked.trim_end_matches('\n'));
@@ -959,6 +1274,7 @@ fn compact_units(
                 lines,
                 columns: None,
                 subtree: None,
+                identities: protected,
             });
         }
     }
@@ -967,12 +1283,15 @@ fn compact_units(
 
 pub fn prepare(text: &str, path: &str, min_lines: usize) -> Result<Views, String> {
     let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
+    let mut identity = CallIdentities::new(path);
+    identity.body(&suite);
     let mut calls = NestedCalls {
         source: text,
         chain_length: min_lines.max(3),
         path: Vec::new(),
         units: Vec::new(),
         literal_continuations: Vec::new(),
+        identities: &identity.tokens,
     };
     for stmt in &suite {
         calls.visit_stmt(stmt.clone());
@@ -1003,6 +1322,7 @@ pub fn prepare(text: &str, path: &str, min_lines: usize) -> Result<Views, String
                 .zip(selection.remove.iter().cloned()),
             true,
             &calls.literal_continuations,
+            &identity.tokens,
         )?,
         behavior: compact_units(
             text,
@@ -1011,6 +1331,7 @@ pub fn prepare(text: &str, path: &str, min_lines: usize) -> Result<Views, String
             selection.keep.into_iter().zip(selection.remove),
             false,
             &[],
+            &identity.tokens,
         )?,
         schemas: compact_units(
             text,
@@ -1019,6 +1340,7 @@ pub fn prepare(text: &str, path: &str, min_lines: usize) -> Result<Views, String
             selection.schemas.into_iter().map(|run| (run, Vec::new())),
             false,
             &[],
+            &identity.tokens,
         )?
         .into_iter()
         .chain(selection.canonical_schemas)

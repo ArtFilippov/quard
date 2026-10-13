@@ -54,6 +54,11 @@ violations baseline.
    on distinct source lines, without requiring the enclosing constructor to match.
    It excludes literal-only continuations and punctuation-only lines from its
    eligible behavioral view; per-pass source accounting records the resulting lines.
+   Native renamed token hashes preserve proven class/function identities and
+   called method names, including class values passed to composition functions.
+   Import and simple binding aliases resolve to the same identity; unresolved
+   call names keep their spelling. Local identifiers retain repeated/distinct
+   relationships within a prepared unit, while eligible literals still normalize.
    Ordinary standalone `pass`, `...` and bare or literal-argument
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including

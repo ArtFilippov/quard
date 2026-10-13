@@ -248,6 +248,12 @@ constructors need not match. Literal-only and punctuation-only continuation line
 do not count toward that pass's prepared behavioral minimum. Its source accounting
 reflects this view and records additional complete-call candidates separately;
 native kinds and original fragments remain intact.
+Callable and class identities in that pass remain significant, both at call sites
+and when passed into composition calls. Proven import and simple binding aliases
+share the same identity; unresolved calls retain their spelling. Other local names
+retain their within-unit repeated/distinct relationships under renaming, and
+eligible string and numeric literals remain normalized. Exact and similar passes
+continue to use their own independent views.
 
 Set `[duplication] min_lines = 3` in `.quard/config.toml` to choose one positive
 integer minimum for all three Python clone jobs. Fresh installs use 3; existing
