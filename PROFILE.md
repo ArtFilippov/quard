@@ -90,6 +90,12 @@ violations baseline.
    columns and verbatim fragments remain in reports. Different field names and
    types are never normalized in renamed/similar, whose behavior view excludes
    these declarations entirely. Ordinary annotation-only fields remain excluded.
+   Proven NamedTuple classes and functional factories likewise contribute
+   separately to exact-only schemas when each field has its own original line.
+   Field names, annotations and defaults are exact; compact fields are omitted
+   from schema and behavior. Executable methods and neighboring statements
+   retain their normal behavioral eligibility. Schema fragments keep original
+   positions and text.
    The exact view also matches ordered signatures of methods declared in local
    Protocols and abstract interfaces, including exact method names and eligible
    one-line placeholder bodies. Supported multiline signatures contribute each

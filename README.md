@@ -317,7 +317,14 @@ their enclosing calls differ. Literal spellings remain exact; partial call
 suffixes, punctuation-only continuations and partial conditions cannot supply
 the minimum. Declaration-only exact units stay independent. Views with no
 qualifying unit are explicitly skipped with a reason.
-Rust reports retain
+
+The exact view additionally compares proven class-based `typing.NamedTuple`
+and functional `typing.NamedTuple`/`collections.namedtuple` declarations in separate schema
+units. Each eligible field occupies its own original line; names, types and
+defaults must agree exactly. Compact fields have no invented positions and do
+not enter behavioral views. Real methods and surrounding executable statements
+retain their normal clone checks. Original paths, columns and fragments survive
+native and normalized reports. Rust reports retain
 original paths, positions and verbatim fragments, with source digests and
 per-unit accounting.
 Ordinary installs run all three independent jobs through the pinned Rust

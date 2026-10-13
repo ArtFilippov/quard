@@ -35,6 +35,7 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                         focused_scan, prepared_native,
                                         report as prepared_report, versions, wheel)
 from typed_dict_clone_utils import verify_functional_typed_dict_fields, verify_typed_dict_fields
+from named_tuple_clone_utils import verify_named_tuple_schemas
 
 PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
                 "raise NotImplementedError()", 'raise NotImplementedError("pending")')
@@ -319,6 +320,9 @@ import collections
 
     def test_real_wheel_functional_typed_dict_fields(self) -> None:
         verify_functional_typed_dict_fields(self, self.root)
+
+    def test_real_wheel_named_tuple_schemas(self) -> None:
+        verify_named_tuple_schemas(self, self.root)
 
     def test_real_wheel_contract_methods(self) -> None:
         verify_contract_methods(self, self.root)

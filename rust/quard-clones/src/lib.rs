@@ -137,6 +137,8 @@ struct SourceSession {
     texts: HashMap<String, String>,
     files: Vec<SourceFile>,
     prepared: Vec<cpd_core::detect::PreparedSource>,
+    prepared_schema: Vec<cpd_core::detect::PreparedSource>,
+    prepared_namedtuple: Vec<cpd_core::detect::PreparedSource>,
     prepared_similar: Vec<cpd_core::detect::PreparedSource>,
     prepared_renamed: Vec<cpd_core::detect::PreparedSource>,
     prepared_calls: Vec<cpd_core::detect::PreparedSource>,
@@ -188,6 +190,8 @@ impl SourceSession {
         let mut texts = HashMap::new();
         let mut files = Vec::new();
         let mut prepared = Vec::new();
+        let mut prepared_schema = Vec::new();
+        let mut prepared_namedtuple = Vec::new();
         let mut prepared_similar = Vec::new();
         let mut prepared_renamed = Vec::new();
         let mut prepared_calls = Vec::new();
@@ -345,7 +349,15 @@ impl SourceSession {
                         }));
                     }
                     if schema && !renamed {
-                        prepared.extend(detection);
+                        let destination = if unit.text.starts_with('"') {
+                            &mut prepared_namedtuple
+                        } else {
+                            &mut prepared_schema
+                        };
+                        destination.extend(detection.into_iter().map(|mut source| {
+                            anchor_whitespace_spans(&mut source, &unit.text);
+                            source
+                        }));
                     }
                     if schema {
                         exact_scanned_unit_lines
@@ -524,6 +536,8 @@ impl SourceSession {
             texts,
             files,
             prepared,
+            prepared_schema,
+            prepared_namedtuple,
             prepared_similar,
             prepared_renamed,
             prepared_calls,
@@ -740,6 +754,43 @@ impl SourceSession {
                 &PathFilters::default(),
             );
             if kind == KindFilter::Exact {
+                // Schema units are separate from executable units.
+                found.extend(detect_prepared(
+                    vec![self.prepared_schema.clone()],
+                    1,
+                    self.min_lines.saturating_sub(1),
+                    &PathFilters::default(),
+                ));
+                // Only feed native detection pairs with a complete shared
+                // minimum-length schema window. A two-field prefix cannot
+                // qualify by reaching into the next, different field.
+                let mut candidates: HashMap<Vec<u64>, Vec<usize>> = HashMap::new();
+                for (index, unit) in self.prepared_namedtuple.iter().enumerate() {
+                    for window in unit.hashes.windows(self.min_lines) {
+                        candidates.entry(window.to_vec()).or_default().push(index);
+                    }
+                }
+                let mut pairs = BTreeSet::new();
+                for indices in candidates.into_values() {
+                    for (offset, first) in indices.iter().enumerate() {
+                        for second in &indices[offset + 1..] {
+                            if first != second {
+                                pairs.insert((*first.min(second), *first.max(second)));
+                            }
+                        }
+                    }
+                }
+                for (first, second) in pairs {
+                    found.extend(detect_prepared(
+                        vec![vec![
+                            self.prepared_namedtuple[first].clone(),
+                            self.prepared_namedtuple[second].clone(),
+                        ]],
+                        1,
+                        self.min_lines.saturating_sub(1),
+                        &PathFilters::default(),
+                    ));
+                }
                 let mut by_tokens: HashMap<Vec<u64>, Vec<usize>> = HashMap::new();
                 for (index, call) in self.prepared_exact_calls.iter().enumerate() {
                     by_tokens

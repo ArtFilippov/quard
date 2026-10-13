@@ -657,10 +657,14 @@ struct NestedCalls<'a> {
     units: Vec<Unit>,
     literal_continuations: Vec<(usize, usize)>,
     identities: &'a HashMap<usize, String>,
+    schemas: &'a HashSet<usize>,
 }
 
 impl Visitor for NestedCalls<'_> {
     fn visit_stmt(&mut self, node: Stmt) {
+        if self.schemas.contains(&usize::from(node.range().start())) {
+            return;
+        }
         match node {
             Stmt::FunctionDef(def) => {
                 for stmt in def.body {
@@ -806,6 +810,11 @@ struct Selection {
     typing_modules: HashSet<String>,
     typed_dict_names: HashSet<String>,
     typed_dict_modules: HashSet<String>,
+    named_tuple_names: HashSet<String>,
+    named_tuple_modules: HashSet<String>,
+    collection_tuple_names: HashSet<String>,
+    collection_modules: HashSet<String>,
+    schema_spans: HashSet<usize>,
     protocol_names: HashSet<String>,
     protocol_modules: HashSet<String>,
     abc_names: HashSet<String>,
@@ -833,6 +842,10 @@ impl Selection {
         self.typing_modules.remove(binding);
         self.typed_dict_names.remove(binding);
         self.typed_dict_modules.remove(binding);
+        self.named_tuple_names.remove(binding);
+        self.named_tuple_modules.remove(binding);
+        self.collection_tuple_names.remove(binding);
+        self.collection_modules.remove(binding);
         self.protocol_names.remove(binding);
         self.protocol_modules.remove(binding);
         self.abc_names.remove(binding);
@@ -1114,6 +1127,9 @@ impl Selection {
                         self.typing_modules.insert(binding.to_owned());
                         self.typed_dict_modules.insert(binding.to_owned());
                         self.protocol_modules.insert(binding.to_owned());
+                        self.named_tuple_modules.insert(binding.to_owned());
+                    } else if module == "collections" {
+                        self.collection_modules.insert(binding.to_owned());
                     } else if module == "abc" {
                         self.abc_modules.insert(binding.to_owned());
                     }
@@ -1146,6 +1162,12 @@ impl Selection {
                         ) {
                             (Some("typing" | "typing_extensions"), "Protocol") => {
                                 self.protocol_names.insert(binding.to_owned());
+                            }
+                            (Some("typing" | "typing_extensions"), "NamedTuple") => {
+                                self.named_tuple_names.insert(binding.to_owned());
+                            }
+                            (Some("collections"), "namedtuple") => {
+                                self.collection_tuple_names.insert(binding.to_owned());
                             }
                             (Some("abc"), "ABC") => {
                                 self.abc_names.insert(binding.to_owned());
@@ -1209,6 +1231,225 @@ impl Selection {
             }
             _ => false,
         }
+    }
+
+    fn named_tuple(&self, base: &Expr) -> bool {
+        Self::imported_name(
+            base,
+            &self.named_tuple_names,
+            &self.named_tuple_modules,
+            "NamedTuple",
+        )
+    }
+
+    fn collection_tuple(&self, base: &Expr) -> bool {
+        Self::imported_name(
+            base,
+            &self.collection_tuple_names,
+            &self.collection_modules,
+            "namedtuple",
+        )
+    }
+
+    fn named_tuple_field(
+        &self,
+        name: String,
+        span: (usize, usize),
+        annotation: Option<(usize, usize)>,
+        default: Option<(usize, usize)>,
+        detached_default: bool,
+    ) -> Option<(String, usize, usize, usize)> {
+        let start = self.text[..span.0].rfind('\n').map_or(0, |i| i + 1);
+        let end = (if detached_default { None } else { default })
+            .or(annotation)
+            .map_or(span.1, |value| value.1);
+        let line_end = self.text[end..]
+            .find('\n')
+            .map_or(self.text.len(), |i| end + i);
+        if !matches!(self.text[start..span.0].trim(), "" | "(")
+            || self.text[span.0..end].contains('\n')
+            || !matches!(
+                self.text[end..line_end]
+                    .split('#')
+                    .next()
+                    .unwrap_or("")
+                    .trim(),
+                "" | "," | ")" | "),"
+            )
+        {
+            return None;
+        }
+        let annotation = annotation.map_or("<untyped>", |(a, b)| &self.text[a..b]);
+        let default = default.map_or("<required>", |(a, b)| &self.text[a..b]);
+        let signature =
+            serde_json::to_string(&(name, annotation, default)).expect("schema signature is UTF-8");
+        Some((
+            signature,
+            self.text[..start].bytes().filter(|b| *b == b'\n').count() + 1,
+            span.0 - start,
+            end - start,
+        ))
+    }
+
+    fn named_tuple_schema(&mut self, fields: Vec<(String, usize, usize, usize)>) {
+        if fields.is_empty() || fields.windows(2).any(|pair| pair[0].1 >= pair[1].1) {
+            return;
+        }
+        let mut text = String::new();
+        let mut lines = Vec::new();
+        let mut columns = Vec::new();
+        for (signature, line, start, end) in fields {
+            // One opaque token per field: a shared prefix of the next field
+            // must not turn two equal fields into a three-line native clone.
+            let row = serde_json::to_string(&format!("quardnamedtuple:{signature}"))
+                .expect("schema signature is UTF-8");
+            let mut map = vec![start; row.len() + 1];
+            map[row.len()] = end;
+            text.push_str(&row);
+            text.push('\n');
+            lines.push(line);
+            columns.push(map);
+        }
+        self.canonical_schemas.push(Unit {
+            text,
+            lines,
+            columns: Some(columns),
+            subtree: None,
+            identities: HashMap::new(),
+            positions: None,
+        });
+    }
+
+    fn class_named_tuple(&mut self, body: &[Stmt]) {
+        let mut fields = Vec::new();
+        for stmt in body {
+            if let Stmt::AnnAssign(def) = stmt {
+                if let Expr::Name(name) = def.target.as_ref() {
+                    let span = (name.range.start().into(), name.range.end().into());
+                    let annotation = def.annotation.range();
+                    let annotation = Some((annotation.start().into(), annotation.end().into()));
+                    let default = def.value.as_ref().map(|value| {
+                        let range = value.range();
+                        (range.start().into(), range.end().into())
+                    });
+                    self.schema_spans.insert(usize::from(stmt.range().start()));
+                    if let Some(field) = self.named_tuple_field(
+                        name.id.to_string(),
+                        span,
+                        annotation,
+                        default,
+                        false,
+                    ) {
+                        fields.push(field);
+                    } else {
+                        self.named_tuple_schema(std::mem::take(&mut fields));
+                    }
+                    continue;
+                }
+            }
+            self.named_tuple_schema(std::mem::take(&mut fields));
+        }
+        self.named_tuple_schema(fields);
+    }
+
+    fn functional_named_tuple(&mut self, call: &ast::ExprCall, collection: bool) {
+        if call.args.len() != 2
+            || !matches!(&call.args[0], Expr::Constant(value)
+            if matches!(value.value, Constant::Str(_)))
+        {
+            return;
+        }
+        let items = match &call.args[1] {
+            Expr::List(items) => &items.elts,
+            Expr::Tuple(items) => &items.elts,
+            _ => return,
+        };
+        let defaults = if collection {
+            let mut defaults = None;
+            for keyword in &call.keywords {
+                if keyword
+                    .arg
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == "defaults")
+                {
+                    if defaults.is_some() {
+                        return;
+                    }
+                    defaults = Some(match &keyword.value {
+                        Expr::List(values) => &values.elts,
+                        Expr::Tuple(values) => &values.elts,
+                        _ => return,
+                    });
+                } else {
+                    return;
+                }
+            }
+            defaults
+        } else {
+            if !call.keywords.is_empty() {
+                return;
+            }
+            None
+        };
+        let defaults = defaults.map_or(&[][..], Vec::as_slice);
+        if defaults.len() > items.len() {
+            return;
+        }
+        let mut fields = Vec::new();
+        {
+            for (index, item) in items.iter().enumerate() {
+                let default = index
+                    .checked_sub(items.len() - defaults.len())
+                    .and_then(|offset| defaults.get(offset))
+                    .map(|value| value.range());
+                if collection {
+                    let Expr::Constant(value) = item else { return };
+                    let Constant::Str(name) = &value.value else {
+                        return;
+                    };
+                    let span = (item.range().start().into(), item.range().end().into());
+                    if let Some(field) = self.named_tuple_field(
+                        name.clone(),
+                        span,
+                        None,
+                        default.map(|range| (range.start().into(), range.end().into())),
+                        true,
+                    ) {
+                        fields.push(field);
+                    } else {
+                        return;
+                    }
+                } else {
+                    let Expr::Tuple(pair) = item else { return };
+                    if pair.elts.len() != 2 {
+                        return;
+                    }
+                    let Expr::Constant(value) = &pair.elts[0] else {
+                        return;
+                    };
+                    let Constant::Str(name) = &value.value else {
+                        return;
+                    };
+                    let span = (
+                        pair.elts[0].range().start().into(),
+                        pair.elts[0].range().end().into(),
+                    );
+                    let annotation = pair.elts[1].range();
+                    if let Some(field) = self.named_tuple_field(
+                        name.clone(),
+                        span,
+                        Some((annotation.start().into(), annotation.end().into())),
+                        None,
+                        false,
+                    ) {
+                        fields.push(field);
+                    } else {
+                        return;
+                    }
+                }
+            }
+        }
+        self.named_tuple_schema(fields);
     }
 
     fn field(
@@ -1447,6 +1688,10 @@ impl Selection {
         let parent_modules = self.typing_modules.clone();
         let parent_dict_names = self.typed_dict_names.clone();
         let parent_dict_modules = self.typed_dict_modules.clone();
+        let parent_tuple_names = self.named_tuple_names.clone();
+        let parent_tuple_modules = self.named_tuple_modules.clone();
+        let parent_collection_names = self.collection_tuple_names.clone();
+        let parent_collection_modules = self.collection_modules.clone();
         let parent_protocol_names = self.protocol_names.clone();
         let parent_protocol_modules = self.protocol_modules.clone();
         let parent_abc_names = self.abc_names.clone();
@@ -1470,6 +1715,10 @@ impl Selection {
         self.typing_modules = parent_modules;
         self.typed_dict_names = parent_dict_names;
         self.typed_dict_modules = parent_dict_modules;
+        self.named_tuple_names = parent_tuple_names;
+        self.named_tuple_modules = parent_tuple_modules;
+        self.collection_tuple_names = parent_collection_names;
+        self.collection_modules = parent_collection_modules;
         self.protocol_names = parent_protocol_names;
         self.protocol_modules = parent_protocol_modules;
         self.abc_names = parent_abc_names;
@@ -1501,6 +1750,9 @@ impl Visitor for Selection {
                 if def.bases.iter().any(|base| self.is_typed_dict(base)) {
                     self.schema_fields(&def.body);
                 }
+                if def.bases.iter().any(|base| self.named_tuple(base)) {
+                    self.class_named_tuple(&def.body);
+                }
                 self.unit(def.body, span, true, None);
                 self.forget_binding(def.name.as_str());
                 if contract {
@@ -1524,7 +1776,11 @@ impl Visitor for Selection {
                 self.forget_target(&def.target);
             }
             Stmt::AnnAssign(def) => {
-                self.keep[self.current].push(span);
+                if self.schema_spans.contains(&span.0) {
+                    self.remove[self.current].push(span);
+                } else {
+                    self.keep[self.current].push(span);
+                }
                 self.forget_target(&def.target);
             }
             Stmt::Assign(def) => {
@@ -1534,6 +1790,11 @@ impl Visitor for Selection {
                         if self.is_typed_dict(&call.func) {
                             self.functional_schema(call);
                             schema = true;
+                        } else if self.named_tuple(&call.func) || self.collection_tuple(&call.func)
+                        {
+                            self.functional_named_tuple(call, self.collection_tuple(&call.func));
+                            schema = true;
+                            self.schema_spans.insert(span.0);
                         }
                     }
                 }
@@ -1563,6 +1824,7 @@ struct RenamedSelection<'a> {
     remove: Vec<(usize, usize)>,
     headers: HashSet<usize>,
     contexts: HashMap<usize, Vec<(usize, String)>>,
+    schemas: &'a HashSet<usize>,
 }
 
 impl RenamedSelection<'_> {
@@ -1682,6 +1944,9 @@ impl RenamedSelection<'_> {
     }
 
     fn statement(&mut self, stmt: &Stmt) -> bool {
+        if self.schemas.contains(&usize::from(stmt.range().start())) {
+            return false;
+        }
         let simple = match stmt {
             Stmt::Assign(def) => def.targets.iter().all(Self::binding) && self.value(&def.value),
             Stmt::AnnAssign(def) => {
@@ -1899,17 +2164,6 @@ pub fn prepare(
     let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
     let mut identity = CallIdentities::new(path, fields);
     identity.body(&suite);
-    let mut calls = NestedCalls {
-        source: text,
-        chain_length: min_lines.max(3),
-        path: Vec::new(),
-        units: Vec::new(),
-        literal_continuations: Vec::new(),
-        identities: &identity.tokens,
-    };
-    for stmt in &suite {
-        calls.visit_stmt(stmt.clone());
-    }
     let mut selection = Selection {
         keep: vec![Vec::new()],
         remove: vec![Vec::new()],
@@ -1917,6 +2171,22 @@ pub fn prepare(
         text: text.to_owned(),
         ..Selection::default()
     };
+    selection.suite(suite.clone());
+    if let Some(error) = selection.error.take() {
+        return Err(format!("{path}: {error}"));
+    }
+    let mut calls = NestedCalls {
+        source: text,
+        chain_length: min_lines.max(3),
+        path: Vec::new(),
+        units: Vec::new(),
+        literal_continuations: Vec::new(),
+        identities: &identity.tokens,
+        schemas: &selection.schema_spans,
+    };
+    for stmt in &suite {
+        calls.visit_stmt(stmt.clone());
+    }
     let starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
@@ -1926,13 +2196,10 @@ pub fn prepare(
         remove: Vec::new(),
         headers: HashSet::new(),
         contexts: HashMap::new(),
+        schemas: &selection.schema_spans,
     };
     for stmt in &suite {
         renamed.statement(stmt);
-    }
-    selection.suite(suite);
-    if let Some(error) = selection.error.take() {
-        return Err(format!("{path}: {error}"));
     }
     let exact_behavior = exact_constructs(text, &selection, exact_symbols);
     Ok(Views {
