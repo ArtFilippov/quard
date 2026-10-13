@@ -175,7 +175,7 @@ def run_pass(session: Any, kind: str, output: Path, count: int,
     """Archive one independent native pass or an explicit eligible-free skip."""
     if session is not None and (session.exact_scannable() if kind == "exact"
                                 else session.renamed_scannable() if kind == "renamed"
-                                else session.scannable()):
+                                else session.similar_scannable()):
         report = json.loads(getattr(session, kind)())
         if report["statistics"]["total"]["sources"] != count:
             raise RuntimeError("native source count mismatch")
@@ -205,9 +205,13 @@ def run_passes(args: argparse.Namespace, session: Any, count: int,
                               "scannedUnitLines": session.exact_scanned_unit_lines()})
             if kind == "renamed" and session is not None:
                 view.update({"eligibleLines": session.renamed_eligible_lines(),
-                             "unitLines": session.renamed_unit_lines(),
-                             "scannedUnitLines": session.renamed_scanned_unit_lines(),
-                             "candidateUnitLines": session.call_unit_lines()})
+                              "unitLines": session.renamed_unit_lines(),
+                              "scannedUnitLines": session.renamed_scanned_unit_lines(),
+                              "candidateUnitLines": session.call_unit_lines()})
+            if kind == "similar" and session is not None:
+                view.update({"eligibleLines": session.similar_eligible_lines(),
+                              "unitLines": session.similar_unit_lines(),
+                              "scannedUnitLines": session.similar_scanned_unit_lines()})
             statuses[kind] = run_pass(session, kind, output, count, view)
         except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
             statuses[kind] = {"exit_code": 2, "stderr": f"CLONE_ENGINE_ERROR: {exc}"}

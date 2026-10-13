@@ -237,7 +237,7 @@ gap-merged Type 3 (`similar`) Python clones in independent native jobs over the
 same discovered `src/` and `tests/` `.py` files, including cross-profile matches.
 `.pyi` stubs are not a supported jscpd Python extension. Type 2 matches normalize
 identifiers and string/numeric literals. The `similar` job merges detected fragments
-separated by at most **two unmatched lines in each file** (`--max-gap-lines 2`);
+separated by at most **two unmatched executable constructs in each file** (`--max-gap-lines 2`);
 it records native similarity and the `gap` method. Merging cannot detect copies
 whose individual matching parts fall below the configured minimum and
 one token in strict mode. The JavaScript/TypeScript-only AST `--similarity` pass
@@ -253,7 +253,8 @@ and when passed into composition calls. Proven import and simple binding aliases
 share the same identity; unresolved calls retain their spelling. Other local names
 retain their within-unit repeated/distinct relationships under renaming, and
 eligible string and numeric literals remain normalized. Exact and similar passes
-continue to use their own independent views.
+continue to use their own independent views; similar uses exact complete behavioral
+constructs, without schema declarations, nested-call candidates or normalization.
 Keyword labels and proven ordinary stored-field names also retain their
 repeated/distinct relationships when renamed. Field proof uses discovered class
 constructors, known receiver types and safe import/local aliases; property access
@@ -329,14 +330,15 @@ original paths, positions and verbatim fragments, with source digests and
 per-unit accounting.
 Ordinary installs run all three independent jobs through the pinned Rust
 in-memory engine over the same discovered scope. Similar
-merges native fragments separated by at most two unmatched lines in each file;
+merges native fragments separated by at most two unmatched constructs in each file;
 each constituent fragment must clear the same detection minimum (and one token)
 before merging. Gap detection and merging stay inside the same prepared
 module, class or function unit on both sides; independent units in one file
-cannot be joined. Blank lines, comments and excluded scaffolding inside a unit
-do not count toward the minimum or the two unmatched *eligible*-line gap,
+cannot be joined. Blank lines, comments, physical continuations and excluded
+scaffolding inside a unit
+do not count toward the minimum or the two unmatched *eligible-construct* gap,
 but remain in original source ranges when a match spans them. Native
-`unmatchedLines` counts prepared gap lines; `lines`, positions and `fragment`
+`unmatchedLines` counts prepared gap constructs; `lines`, positions and `fragment`
 refer to the original source, which may span more lines than were eligible.
 It reports only native Type 3 `similar` clones with score and `gap` method.
 Renamed uses native strict identifier and string/numeric literal

@@ -52,8 +52,7 @@ def _inspect_schema(test: unittest.TestCase, root: Path, left: str, right: str,
         if skip_behavior:
             test.assertIn("skipped", scans[kind])
         else:
-            test.assertNotIn("skipped", scans[kind])
-            test.assertFalse(scans[kind]["duplicates"])
+            test.assertFalse(scans[kind].get("duplicates", []))
     return scans
 
 

@@ -122,7 +122,7 @@ violations baseline.
   `engine` and `sourcePaths` evidence. The worker and parser verify version,
   accounting and original fragment text/locations; a mismatch fails with
   exit 2 for the affected job without erasing peer results. Similar merges
-  native fragments only after each meets the shared minimum; its original
+  native fragments only after each meets the shared complete-construct minimum; its original
   positions, native matched-token and duplicated-line counts, rounded score
   and `gap` method stay in the archived JSON and diagnostics. See
   [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md).
@@ -137,10 +137,12 @@ violations baseline.
   TypeScript functions, not Python. Empty or incomplete native scans, invalid
   similarity/report data and execution failures are infrastructure errors;
   the native report and streams are archived. In the Rust behavior view, gaps
-  are measured between eligible prepared lines inside one unit on each side;
-  comments, blank lines and omitted declarations do not consume the two-line
-  allowance or supply matching lines. Native `unmatchedLines` refers to that
-  prepared gap, while fragment ranges, `lines` and text refer to original
+  are measured between eligible complete behavioral constructs inside one unit
+  on each side; physical continuations, comments, blank lines and omitted
+  declarations do not consume the two-construct allowance or supply matching
+  constructs. Neither exact-only schemas nor nested-call candidates enter this
+  view; identities and literals stay exact. Native `unmatchedLines` refers to
+  that prepared gap, while fragment ranges, `lines` and text refer to original
   source. Separate functions and classes (including adjacent or nested ones)
   remain separate detection and merge units, even in the same file.
   Set `duplicate_detection = false` under `[checks]` to skip all three jobs; the

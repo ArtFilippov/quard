@@ -121,6 +121,17 @@ fn anchor_whitespace_spans(source: &mut cpd_core::detect::PreparedSource, text: 
     }
 }
 
+// A prepared line is one complete construct. Two fragments of the same unit
+// cannot be independent copies if they share even one construct. Apply this
+// both to native constituents and to the range produced by gap merging.
+fn disjoint_occurrences(clone: &CpdClone) -> bool {
+    let left = &clone.fragment_a;
+    let right = &clone.fragment_b;
+    left.source_id != right.source_id
+        || left.end.line < right.start.line
+        || right.end.line < left.start.line
+}
+
 #[pyfunction]
 fn versions() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -157,6 +168,10 @@ struct SourceSession {
     exact_unit_lines: HashMap<String, Vec<usize>>,
     exact_scanned_unit_lines: HashMap<String, Vec<usize>>,
     exact_scannable: bool,
+    similar_eligible_lines: HashMap<String, usize>,
+    similar_unit_lines: HashMap<String, Vec<usize>>,
+    similar_scanned_unit_lines: HashMap<String, Vec<usize>>,
+    similar_scannable: bool,
     min_lines: usize,
     renamed: bool,
 }
@@ -210,6 +225,10 @@ impl SourceSession {
         let mut exact_unit_lines = HashMap::new();
         let mut exact_scanned_unit_lines = HashMap::new();
         let mut exact_scannable = false;
+        let mut similar_eligible_lines = HashMap::new();
+        let mut similar_unit_lines = HashMap::new();
+        let mut similar_scanned_unit_lines = HashMap::new();
+        let mut similar_scannable = false;
         let mut exact_symbols = HashMap::new();
         let fields = preparation::discover_fields(&sources)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -283,6 +302,23 @@ impl SourceSession {
                     .collect(),
             );
             exact_scanned_unit_lines.insert(path.clone(), Vec::new());
+            similar_eligible_lines.insert(
+                path.clone(),
+                views
+                    .exact_behavior
+                    .iter()
+                    .map(|unit| unit.lines.len())
+                    .sum(),
+            );
+            similar_unit_lines.insert(
+                path.clone(),
+                views
+                    .exact_behavior
+                    .iter()
+                    .map(|unit| unit.lines.len())
+                    .collect(),
+            );
+            similar_scanned_unit_lines.insert(path.clone(), Vec::new());
             let file_index = files.len();
             files.push(SourceFile {
                 id: path.clone(),
@@ -342,12 +378,6 @@ impl SourceSession {
                             files[file_index].tokens.push(token);
                         }
                     }
-                    if !schema {
-                        prepared_similar.extend(detection.iter().cloned().map(|mut source| {
-                            anchor_whitespace_spans(&mut source, &unit.text);
-                            source
-                        }));
-                    }
                     if schema && !renamed {
                         let destination = if unit.text.starts_with('"') {
                             &mut prepared_namedtuple
@@ -380,6 +410,7 @@ impl SourceSession {
             }
             for (number, unit) in views.exact_behavior.into_iter().enumerate() {
                 exact_scannable |= unit.lines.len() >= min_lines;
+                similar_scannable |= unit.lines.len() >= min_lines;
                 let id = format!("{path}#quard-exact-unit-{number}");
                 let map = SourceMap {
                     path: path.clone(),
@@ -426,8 +457,13 @@ impl SourceSession {
                         }
                     }
                     anchor_whitespace_spans(&mut detection[0], &unit.text);
+                    prepared_similar.extend(detection.iter().cloned());
                     prepared.append(&mut detection);
                     exact_scanned_unit_lines
+                        .get_mut(&path)
+                        .expect("discovered source")
+                        .push(unit.lines.len());
+                    similar_scanned_unit_lines
                         .get_mut(&path)
                         .expect("discovered source")
                         .push(unit.lines.len());
@@ -556,6 +592,10 @@ impl SourceSession {
             exact_unit_lines,
             exact_scanned_unit_lines,
             exact_scannable,
+            similar_eligible_lines,
+            similar_unit_lines,
+            similar_scanned_unit_lines,
+            similar_scannable,
             min_lines,
             renamed,
         })
@@ -627,6 +667,22 @@ impl SourceSession {
 
     fn call_unit_lines(&self) -> HashMap<String, Vec<usize>> {
         self.call_unit_lines.clone()
+    }
+
+    fn similar_eligible_lines(&self) -> HashMap<String, usize> {
+        self.similar_eligible_lines.clone()
+    }
+
+    fn similar_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.similar_unit_lines.clone()
+    }
+
+    fn similar_scanned_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.similar_scanned_unit_lines.clone()
+    }
+
+    fn similar_scannable(&self) -> bool {
+        self.similar_scannable
     }
 }
 
@@ -837,7 +893,7 @@ impl SourceSession {
         // particular, two functions in one original file are separate units.
         let clones = if kind == KindFilter::Similar {
             let mut by_units: BTreeMap<(String, String, String), Vec<CpdClone>> = BTreeMap::new();
-            for clone in clones {
+            for clone in clones.into_iter().filter(disjoint_occurrences) {
                 let key = (
                     clone.format.clone(),
                     clone.fragment_a.source_id.clone(),
@@ -848,6 +904,7 @@ impl SourceSession {
             by_units
                 .into_values()
                 .flat_map(|group| merge_gapped_clones(group, 2))
+                .filter(disjoint_occurrences)
                 .collect()
         } else {
             clones

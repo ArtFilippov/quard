@@ -145,16 +145,16 @@ def focused_scan(root: Path) -> dict[str, dict[str, Any]]:
     for kind in ("exact", "renamed", "similar"):
         eligible = (session.exact_eligible_lines() if kind == "exact"
                     else session.renamed_eligible_lines() if kind == "renamed"
-                    else session.eligible_lines())
+                     else session.similar_eligible_lines())
         units = (session.exact_unit_lines() if kind == "exact"
                  else session.renamed_unit_lines() if kind == "renamed"
-                 else session.unit_lines())
+                  else session.similar_unit_lines())
         scanned = (session.exact_scanned_unit_lines() if kind == "exact"
                    else session.renamed_scanned_unit_lines() if kind == "renamed"
-                   else session.scanned_unit_lines())
+                    else session.similar_scanned_unit_lines())
         scannable = (session.exact_scannable() if kind == "exact"
                      else session.renamed_scannable() if kind == "renamed"
-                     else session.scannable())
+                   else session.similar_scannable())
         payload: dict[str, Any] = (json.loads(getattr(session, kind)())
                                    if scannable else {"skipped": True})
         payload.update({"minimum": minimum, "sourcePaths": [path for path, _ in sources],

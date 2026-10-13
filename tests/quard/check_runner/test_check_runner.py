@@ -554,6 +554,81 @@ import collections
         verify_prepared_similar(self, self.root)
         verify_similar_boundaries(self, self.root)
 
+    def test_real_wheel_similar_counts_complete_constructs(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        prefix = ("def calculate(value):\n    first = value + 17\n"
+                  "    second = first * 3\n    third = second - 4\n")
+        suffix = ("    fourth = value + 71\n    fifth = fourth * 8\n"
+                  "    return fifth - 6\n")
+        left_gap = ("    extra = (\n        value + 1\n    )\n"
+                    "    another = value - 1\n")
+        right_gap = ("    extra = (\n        value + 2\n    )\n"
+                     "    another = value - 2\n")
+        first.write_text(prefix + left_gap + suffix, encoding="utf-8")
+        second.write_text(prefix + "    ignored: int\n    # excluded comment\n" +
+                          right_gap + suffix, encoding="utf-8")
+        scans = focused_scan(self.root)
+        self.assertEqual(scans["similar"]["unitLines"][str(first)], [8])
+        self.assertEqual(scans["similar"]["unitLines"][str(second)], [8])
+        self.assertEqual(scans["similar"]["scannedUnitLines"][str(second)], [8])
+        self.assertTrue(scans["similar"]["duplicates"])
+        self.assertTrue(all(item["kind"] == "similar" and item["method"] == "gap" and
+                            item["unmatchedLines"] == [2, 2] and
+                            0 < item["similarity"] < 1
+                            for item in scans["similar"]["duplicates"]))
+        checked = prepared_report(self.root)
+        native = prepared_native(self, self.root, checked, 3, "similar")
+        self.assertEqual(next(job for job in checked["tools"] if job["name"] ==
+                              "jscpd-similar")["status"], "violations")
+        self.assertTrue(any(item["rule"] == "SIMILAR_CLONE" and
+                            item["native_details"]["method"] == "gap"
+                            for item in checked["diagnostics"]))
+        for item in native["duplicates"]:
+            self.assertIn("value + 1" if item["firstFile"]["name"] == str(first)
+                          else "value + 2", item["fragment"])
+            for side in ("firstFile", "secondFile"):
+                part = item[side]
+                text = Path(part["name"]).read_text(encoding="utf-8")
+                self.assertEqual(part["startLoc"]["position"],
+                                 sum(len(line) for line in text.splitlines(keepends=True)[
+                                     :part["start"] - 1]) + part["startLoc"]["column"])
+                self.assertEqual(part["endLoc"]["position"],
+                                 sum(len(line) for line in text.splitlines(keepends=True)[
+                                     :part["end"] - 1]) + part["endLoc"]["column"])
+        second.write_text(prefix + "    ignored: int\n" + right_gap +
+                          "    third_gap = value / 9\n" + suffix, encoding="utf-8")
+        self.assertFalse(focused_scan(self.root)["similar"]["duplicates"])
+        for path in (first, second):
+            path.write_text(prefix.replace("    third = second - 4\n", "") +
+                            left_gap + suffix.replace("    return fifth - 6\n", ""),
+                            encoding="utf-8")
+        self.assertFalse(focused_scan(self.root)["similar"]["duplicates"])
+        # Continuations alone cannot provide a third matching construct.
+        two = ("def calculate(value):\n    first = (\n        value + 17\n    )\n"
+               "    second = (\n        first * 3\n    )\n")
+        first.write_text(two, encoding="utf-8")
+        second.write_text(two, encoding="utf-8")
+        self.assertEqual(focused_scan(self.root)["similar"]["unitLines"][str(first)], [2])
+        self.assertFalse(focused_scan(self.root)["similar"]["duplicates"])
+        second.write_text(two.replace("17", "18"), encoding="utf-8")
+        self.assertFalse(focused_scan(self.root)["similar"]["duplicates"])
+
+    def test_real_wheel_similar_same_file_fragments_are_disjoint(self) -> None:
+        first = self.root / "src/demo/first.py"
+        prefix = "    one = 1\n    two = one + 2\n    three = two * 3\n"
+        suffix = "    four = 4\n    five = four + 5\n    return five * 6\n"
+        first.write_text("def repeated():\n" + prefix + "    gap = 7\n" + suffix +
+                         "\ndef again():\n" + prefix + "    gap = 8\n" + suffix,
+                         encoding="utf-8")
+        similar = focused_scan(self.root)["similar"]
+        self.assertTrue(similar["duplicates"])
+        for clone in similar["duplicates"]:
+            left, right = clone["firstFile"], clone["secondFile"]
+            if left["name"] == right["name"]:
+                self.assertTrue(left["end"] < right["start"] or
+                                right["end"] < left["start"], clone)
+
     def test_real_wheel_similar_failure_keeps_peers(self) -> None:
         verify_similar_failure(self, self.root)
 
@@ -632,7 +707,7 @@ import collections
         self.assertEqual(short["exact"]["minimum"], 3)
         self.assertFalse(short["exact"].get("duplicates", []), short["exact"])
         self.assertEqual(short["exact"]["unitLines"][str(first)], [3])
-        self.assertEqual(short["similar"]["unitLines"][str(first)], [5])
+        self.assertEqual(short["similar"]["unitLines"][str(first)], [3])
 
         assignments = ('def calculate():\n    first = 1\n'
                        '    second = first + 2\n    return second * 3\n')
