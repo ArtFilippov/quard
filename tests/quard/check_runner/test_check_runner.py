@@ -201,6 +201,51 @@ class TestCheckRunner(unittest.TestCase):
                           .replace("value", "source"), encoding="utf-8")
         self.assertFalse(focused_scan(self.root)["renamed"].get("duplicates"))
 
+    def test_real_wheel_empty_control_separates_renamed_units(self) -> None:
+        adjacent = ("def work(value):\n    send(value, 21)\n"
+                    "    send(value, 22)\n    send(value, 23)\n")
+        left, right = "/tmp/separated-calls.py", "/tmp/adjacent-calls.py"
+        calls = ("    send(item, 11)\n", "    send(item, 12)\n",
+                 "    send(item, 13)\n")
+        controls = (
+            "    if predicate(item):\n        temp = item\n",
+            "    while predicate(item):\n        temp = item\n",
+            "    for temp in items:\n        temp = item\n",
+            "    with manager() as temp:\n        temp = item\n",
+            "    match item:\n        case _:\n            temp = item\n",
+            "    if predicate(item):\n        if other(item):\n            temp = item\n",
+        )
+        for control in controls:
+            for before in (1, 2):
+                with self.subTest(control=control, before=before):
+                    separated = "def work(item):\n" + "".join(calls[:before]) + control + "".join(
+                        calls[before:])
+                    session = native_wheel().SourceSession(
+                        [(left, separated), (right, adjacent)], 3)
+                    self.assertEqual(json.loads(session.renamed())["duplicates"], [])
+                    self.assertEqual(session.renamed_unit_lines()[left], [before, 3 - before])
+
+        # The same three calls remain detectable when no empty control separates them.
+        contiguous = "def work(item):\n" + "".join(calls)
+        session = native_wheel().SourceSession([(left, contiguous), (right, adjacent)], 3)
+        clones = json.loads(session.renamed())["duplicates"]
+        self.assertTrue(clones)
+        self.assertTrue(any(clone["matchedUnits"] == [3, 3] for clone in clones))
+        self.assertTrue(any(clone["fragment"] == adjacent.split("\n", 1)[1].rstrip("\n")
+                            for clone in clones))
+
+        # A complete group on one side of the boundary still maps to its
+        # original source positions and fragment.
+        separated = ("def work(item):\n    send(item, 10)\n" + controls[0] +
+                     "".join(calls))
+        session = native_wheel().SourceSession([(left, separated), (right, adjacent)], 3)
+        self.assertEqual(session.renamed_unit_lines()[left], [1, 3])
+        clones = json.loads(session.renamed())["duplicates"]
+        self.assertTrue(any(clone["secondFile"]["startLoc"]["line"] == 5
+                            and clone["secondFile"]["endLoc"]["line"] == 7
+                            and clone["matchedUnits"] == [3, 3]
+                            for clone in clones), clones)
+
     def test_real_wheel_prunes_only_proven_field_bindings(self) -> None:
         first = self.root / "src/demo/domain/api.py"
         second = self.root / "tests/test_value.py"

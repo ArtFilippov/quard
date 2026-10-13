@@ -262,8 +262,9 @@ and unproved attributes retain their spelling. Called method names remain signif
 The renamed behavior view omits simple value bindings (including proven ordinary
 field reads) and simple returns. Empty conditionals, matches, loops and context
 managers are pruned recursively, even when their condition or context calls a
-function. Surviving control headers constrain comparisons but add no eligible line;
-call-containing assignments, operations, indexing, property and unknown attribute
+function. Pruned empty controls separate surviving behavior into distinct renamed
+detection units. Surviving control headers constrain comparisons but add no eligible
+line; call-containing assignments, operations, indexing, property and unknown attribute
 reads remain behavioral. Exact and similar retain their independent source views.
 
 Set `[duplication] min_units = 3` in `.quard/config.toml` to choose one positive

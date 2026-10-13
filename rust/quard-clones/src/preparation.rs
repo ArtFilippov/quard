@@ -1824,6 +1824,7 @@ struct RenamedSelection<'a> {
     remove: Vec<(usize, usize)>,
     headers: HashSet<usize>,
     contexts: HashMap<usize, Vec<(usize, String)>>,
+    empty_controls: Vec<(usize, usize)>,
     schemas: &'a HashSet<usize>,
 }
 
@@ -1927,6 +1928,7 @@ impl RenamedSelection<'_> {
                     .map_or(self.text.len(), |i| row + i + 1);
             }
         } else {
+            self.empty_controls.push((start, end));
             // Mask syntax around children, not a nested definition's independent
             // unit. Its own body can still contain behavioral statements.
             let mut cursor = start;
@@ -2024,11 +2026,25 @@ fn compact_units(
     identities: &HashMap<usize, String>,
     headers: &HashSet<usize>,
     contexts: &HashMap<usize, Vec<(usize, String)>>,
+    empty_controls: &[(usize, usize)],
 ) -> Result<Vec<Unit>, String> {
     let mut result = Vec::new();
     let mut anchors: Vec<_> = identities.iter().collect();
     anchors.sort_unstable_by_key(|(offset, _)| **offset);
     for (keep, remove) in spans {
+        let mut barriers: Vec<_> = empty_controls
+            .iter()
+            .filter(|(begin, _)| {
+                keep.iter()
+                    .any(|(start, end)| start <= begin && begin < end)
+                    && !remove
+                        .iter()
+                        .any(|(start, end)| start <= begin && begin < end)
+            })
+            .copied()
+            .collect();
+        barriers.sort_unstable();
+        let mut next_barrier = 0;
         let mut bytes = vec![b' '; text.len()];
         for (begin, end) in keep {
             bytes[begin..end].copy_from_slice(&text.as_bytes()[begin..end]);
@@ -2063,6 +2079,23 @@ fn compact_units(
                 }
             }
             if slice.iter().any(|b| !b.is_ascii_whitespace()) {
+                if normalized && !lines.is_empty() {
+                    let mut crossed = false;
+                    while next_barrier < barriers.len() && barriers[next_barrier].1 <= *start {
+                        crossed |= barriers[next_barrier].0 >= starts[lines[lines.len() - 1] - 1];
+                        next_barrier += 1;
+                    }
+                    if crossed {
+                        result.push(Unit {
+                            text: std::mem::take(&mut compact),
+                            lines: std::mem::take(&mut lines),
+                            columns: None,
+                            subtree: None,
+                            identities: std::mem::take(&mut protected),
+                            positions: Some(std::mem::take(&mut positions)),
+                        });
+                    }
+                }
                 if normalized && headers.contains(start) {
                     pending.extend((*start..end).filter(|offset| bytes[*offset] != b'\n'));
                     continue;
@@ -2201,6 +2234,7 @@ pub fn prepare(
         remove: Vec::new(),
         headers: HashSet::new(),
         contexts: HashMap::new(),
+        empty_controls: Vec::new(),
         schemas: &selection.schema_spans,
     };
     for stmt in &suite {
@@ -2227,6 +2261,7 @@ pub fn prepare(
             &identity.tokens,
             &renamed.headers,
             &renamed.contexts,
+            &renamed.empty_controls,
         )?,
         behavior: compact_units(
             text,
@@ -2238,6 +2273,7 @@ pub fn prepare(
             &identity.tokens,
             &HashSet::new(),
             &HashMap::new(),
+            &[],
         )?,
         schemas: compact_units(
             text,
@@ -2249,6 +2285,7 @@ pub fn prepare(
             &identity.tokens,
             &HashSet::new(),
             &HashMap::new(),
+            &[],
         )?
         .into_iter()
         .chain(selection.canonical_schemas)

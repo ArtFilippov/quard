@@ -69,7 +69,8 @@ violations baseline.
    Simple value bindings and returns are removed before renamed detection,
    including bindings from proven ordinary fields. Control structures with no
    surviving body are removed recursively; conditions and context expressions
-   alone cannot supply a unit. Surviving control headers are folded into their
+   alone cannot supply a unit or join behavior across the empty structure.
+   Surviving control headers are folded into their
    body lines as comparison context without increasing the prepared line count.
    Calls, operations, indexing, properties and unproved attribute reads survive;
    original source positions and fragments are restored from the prepared map.
