@@ -136,6 +136,14 @@ violations baseline.
   All jobs scan the same discovered `.py` files across production
   and tests, not `.pyi` stubs (unsupported by its Python format), irrespective
   of LCOM4 selection.
+  The consolidated [#148 public real-engine regression](docs/issue-148-clone-verification.md)
+  checks the original NamedTuple, overlapping-literal and partial-call false
+  positives alongside exact, renamed, similar, nested, same-file and
+  cross-profile positive controls. The numeric threshold 3 has different
+  units on the historical CLI (unprepared physical lines) and Rust
+  (eligible prepared constructs, or exact-only declaration lines). The report
+  keeps physical ranges, byte columns and original fragments regardless of
+  eligible-unit count; see [ADR 0007](docs/adr/0007-native-ast-clone-units.md).
   The similar job uses `--max-gap-lines 2` to merge detected fragments with at
   most two unmatched lines in each file; native JSON, diagnostics and raw streams
   retain the `similar` kind, score, `gap` method and both positions. Fragments

@@ -36,12 +36,16 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                         report as prepared_report, versions, wheel)
 from typed_dict_clone_utils import verify_functional_typed_dict_fields, verify_typed_dict_fields
 from named_tuple_clone_utils import verify_named_tuple_schemas
+from clone_redesign_utils import verify_clone_redesign
 
 PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
                 "raise NotImplementedError()", 'raise NotImplementedError("pending")')
 
 
 class TestCheckRunner(unittest.TestCase):
+    def test_real_wheel_consolidated_clone_redesign(self) -> None:
+        verify_clone_redesign(self, self.root)
+
     def test_real_wheel_mixed_schema_and_behavior_accounting_order(self) -> None:
         source = ('from typing import TypedDict\nclass Item(TypedDict):\n'
                   '    a: int\n    b: str\n    c: bool\n'

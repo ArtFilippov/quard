@@ -34,6 +34,14 @@ that older revision's CLI behavior. After upgrading Quard, a check without
    `.quard/reports/latest.json`. Archived raw JSON and stdout/stderr live
    under `.quard/reports/<run-id>/`. Exit 0 means clean; exit 1 means
    unresolved violations; exit 2 means configuration, build or tool failure.
+   Keep the existing positive minimum when migrating explicit `min_lines` to
+   `[duplication] min_units` (reinstall performs this migration). Its numeric
+   value is preserved, but its meaning changes: the CLI counted unprepared
+   physical lines; Rust counts eligible AST-owned constructs, or original
+   eligible declaration lines in its exact schema/contract view. Source spans
+   and fragments in reports still refer to the original files. Review any
+   changed clone findings rather than treating an old CLI baseline as identical
+   coverage; see the [#148 verification](issue-148-clone-verification.md).
 
 If installation fails, inspect `.quard/logs/install.log` and
 `.quard/logs/install-error.json`; packaged exact, renamed, similar and clean

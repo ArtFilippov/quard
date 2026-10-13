@@ -373,6 +373,12 @@ pinned Git source or check exits 2
 with a migration link and three explicit job errors.
 The reproducible same-scope CLI/Rust performance comparison and seven-run
 measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
+The completed-policy [#148 verification](docs/issue-148-clone-verification.md)
+includes all three original false-positive reproducers, positive real-engine
+controls and a fresh same-scope seven-run comparison. The CLI's `--min-lines 3`
+counts original physical lines; Rust's `min_units = 3` counts eligible prepared
+units inside independent AST-owned views. See the [glossary](GLOSSARY.md) and
+[ADR 0007](docs/adr/0007-native-ast-clone-units.md) for these boundaries.
 The source-install and separate-tool wheel-install lifecycle fixtures are
 permanently skipped. They formerly covered uv install, reinstall, locked sync,
 full check and clean tool trees from separate clones and nonstandard submodules.
@@ -533,6 +539,13 @@ and raw stdout/stderr/native JSON: `.quard/reports/<run-id>/`. The report contai
 Schemas: `quard-report/v1` in `report.schema.json`, events: `quard-event/v1`.
 Positions are one-based; unavailable positions are null. Diagnostics retain native
 rule IDs or explicit adapter categories, stable fingerprints and tool/profile identity.
+For clone findings, `native_details` retains `kind`, both original `startLoc` and
+`endLoc` positions, verbatim `fragment`, and `matchedUnits` for each side; source
+`lines` and ranges are physical, not the eligible-unit minimum. Similar also
+records native `unmatchedLines`, score and `gap` method. Inspect each clone job's
+`status`, `exit_code` and archived `raw_output.native_json` independently;
+`skipped` means no qualifying view or an explicitly disabled job, while `error` and infrastructure diagnostics
+require investigation even if another pass found violations.
 
 ## Ownership and fresh clones
 
