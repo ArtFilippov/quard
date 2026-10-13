@@ -32,7 +32,7 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                         verify_prepared_renamed, verify_renamed_failure,
                                         verify_prepared_similar, verify_similar_boundaries,
                                         verify_similar_failure,
-                                        focused_scan, prepared_native,
+                                        focused_scan, native_wheel, prepared_native,
                                         report as prepared_report, versions, wheel)
 from typed_dict_clone_utils import verify_functional_typed_dict_fields, verify_typed_dict_fields
 from named_tuple_clone_utils import verify_named_tuple_schemas
@@ -42,6 +42,41 @@ PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
 
 
 class TestCheckRunner(unittest.TestCase):
+    def test_real_wheel_mixed_schema_and_behavior_accounting_order(self) -> None:
+        source = ('from typing import TypedDict\nclass Item(TypedDict):\n'
+                  '    a: int\n    b: str\n    c: bool\n'
+                  'def work():\n    one = 1\n    two = one + 2\n'
+                  '    three = two * 3\n    four = three / 4\n')
+        path = "/tmp/schema-and-behavior.py"
+        session = native_wheel().SourceSession([(path, source)], 3)
+        sizes = session.exact_unit_lines()[path]
+        self.assertEqual(session.exact_scanned_unit_lines()[path],
+                         [size for size in sizes if size >= 3])
+
+    def test_real_wheel_exact_rejects_overlapping_prepared_constructs(self) -> None:
+        source = ('def check(self, root, value):\n'
+                  '    if value is not None:\n'
+                  '        self.assertEqual((root / "tach.toml").read_bytes(), value)\n'
+                  '    if value is not None:\n'
+                  '        self.assertEqual((root / "tach.toml").read_bytes(), value)\n')
+        session = native_wheel().SourceSession([("/tmp/exact-overlap.py", source)], 3)
+        self.assertEqual(json.loads(session.exact())["duplicates"], [])
+        # The native detector can report a disjoint 3/1 match when the
+        # intervening constructs are different; neither side may be short.
+        first, last = source.rsplit('    if value is not None:\n', 1)
+        source = (first + '    middle = compute(root)\n    other = middle / 2\n'
+                  '    if value is not None:\n' + last)
+        session = native_wheel().SourceSession([("/tmp/exact-short-side.py", source)], 3)
+        self.assertEqual(json.loads(session.exact())["duplicates"], [])
+
+    def test_real_wheel_renamed_folded_context_maps_forward(self) -> None:
+        path = QUARD / "src/quard/folder_analysis/folder_ownership.py"
+        session = native_wheel().SourceSession([(str(path), path.read_text(encoding="utf-8"))], 3)
+        clones = json.loads(session.renamed())["duplicates"]
+        self.assertTrue(clones)
+        self.assertTrue(all(side["start"] <= side["end"] for clone in clones
+                            for side in (clone["firstFile"], clone["secondFile"])))
+
     def test_source_pin_activates_component(self) -> None:
         manifest = read_json(QUARD / "tools.json")
         tool = self.root / "candidate-tool"
@@ -1181,7 +1216,7 @@ import collections
         actual_version = metadata.version
 
         def version(name: str) -> str:
-            return "0.0.0" if name == "jscpd" else actual_version(name)
+            return "0.0.0" if name == "quard-clones" else actual_version(name)
 
         with patch("quard.check_runner.runner_utils.metadata.version", side_effect=version):
             report = NativeCheckRunner().run(self.root, serial=True, timeout=30,

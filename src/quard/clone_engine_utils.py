@@ -26,7 +26,7 @@ SKIP_REASON = "No prepared unit meets the effective minimum"
 
 
 def enabled(root: Path | None = None) -> bool:
-    """Select the source build for consumers; retain CLI in the tool checkout.
+    """Select the source build for the checkout and pinned consumers.
 
     Returns:
         bool: Whether the Rust engine is selected.
@@ -34,7 +34,7 @@ def enabled(root: Path | None = None) -> bool:
     manifest = read_json(tool_dir() / "tools.json")
     if os.environ.get("QUARD_CLONE_ENGINE") == "rust" or manifest.get("native_wheel"):
         return True
-    return bool(manifest.get("native_source") and (root is None or root.resolve() != tool_dir().resolve()))
+    return bool(manifest.get("native_source"))
 
 
 def require_source_pin(root: Path) -> None:

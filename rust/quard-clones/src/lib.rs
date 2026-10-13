@@ -326,6 +326,7 @@ impl SourceSession {
                 tokens: Vec::new(),
                 bytes: text.len() as u64,
             });
+            let mut scanned_schema_sizes = Vec::new();
             for (number, (schema, unit)) in views
                 .behavior
                 .into_iter()
@@ -390,10 +391,7 @@ impl SourceSession {
                         }));
                     }
                     if schema {
-                        exact_scanned_unit_lines
-                            .get_mut(&path)
-                            .expect("discovered source")
-                            .push(unit.lines.len());
+                        scanned_schema_sizes.push(unit.lines.len());
                     }
                     if !schema {
                         scanned_unit_lines
@@ -566,6 +564,10 @@ impl SourceSession {
                     },
                 );
             }
+            exact_scanned_unit_lines
+                .get_mut(&path)
+                .expect("discovered source")
+                .extend(scanned_schema_sizes);
             texts.insert(path, text);
         }
         Ok(Self {
@@ -909,9 +911,12 @@ impl SourceSession {
         } else {
             clones
         };
-        let mut clones: Vec<CpdClone> = clones
+        let clones: Vec<CpdClone> = clones
             .into_iter()
-            .filter(|clone| kind.matches(clone))
+            // Native same-unit windows may overlap at their boundary. They
+            // cannot represent two complete, independent occurrences (and
+            // may leave one side below the configured minimum).
+            .filter(|clone| kind.matches(clone) && disjoint_occurrences(clone))
             .collect();
         // These are prepared-view constructs, before restoring physical source
         // coordinates. Gap counts refer to these same constructs, not source lines.
@@ -926,6 +931,15 @@ impl SourceSession {
                 ]
             })
             .collect();
+        // The native detector's minimum is measured on its first occurrence.
+        // A later occurrence can have fewer complete prepared constructs even
+        // in a disjoint match. Require the same effective minimum on both
+        // original occurrences before counting native matches or statistics.
+        let (mut clones, matched_units): (Vec<_>, Vec<_>) = clones
+            .into_iter()
+            .zip(matched_units)
+            .filter(|(_, counts)| counts.iter().all(|count| *count >= self.min_units as u32))
+            .unzip();
         for clone in &mut clones {
             for fragment in [&mut clone.fragment_a, &mut clone.fragment_b] {
                 let map = self.maps.get(&fragment.source_id).ok_or_else(|| {

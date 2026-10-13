@@ -362,10 +362,14 @@ dependencies, including linked jscpd 5.4.0 crates `cpd-core 0.1.20`,
 Install and check validate the distribution, wheel ABI and linked crate versions;
 install also runs packaged exact/renamed/gap-similar and clean probes with logs
 under `.quard/logs/install-probes/`. Pylint's required duplication analysis
-remains independent. The jscpd CLI is retained in Quard's dev group for the
-historical benchmark and this checkout's full check, not installed or probed
-in consumers. Older Quard gitlinks retain their own CLI behavior; after
-upgrading Quard, reinstall to acquire the pinned Git source or check exits 2
+remains independent. The jscpd CLI is retained in Quard's dev group solely for
+historical benchmark comparisons, not installed or probed in consumers. This
+checkout's locked dev group builds `quard-clones` from `rust/quard-clones`; its
+ordinary full check runs the same three native jobs as consumers. Consumers
+independently pin a Git revision in their own `pyproject.toml` and `uv.lock`;
+the checkout's local path source is not installed into them. Older Quard gitlinks
+retain their own CLI behavior; after upgrading Quard, reinstall to acquire the
+pinned Git source or check exits 2
 with a migration link and three explicit job errors.
 The reproducible same-scope CLI/Rust performance comparison and seven-run
 measurements are in [the #126 benchmark](docs/issue-126-clone-benchmark.md).
@@ -594,6 +598,14 @@ uv sync --locked --group dev
 uv run --locked --group dev python -B -m unittest discover -s tests -v
 uv run --locked --group dev python check.py
 ```
+
+The checkout's dev-only `[tool.uv.sources].quard-clones` points to its local
+Rust directory; `uv sync --locked --group dev` builds that source into the
+checkout environment. The pinned jscpd CLI remains available for the historical
+[CLI/Rust benchmark](docs/issue-126-clone-benchmark.md), not for regular checks.
+After editing Rust sources, use
+`uv sync --locked --group dev --reinstall-package quard-clones` to rebuild the
+local wheel before running checks; uv may otherwise reuse the installed wheel.
 
 For faster local feedback, run the Quard tests incrementally with the pinned
 `pytest-testmon` plugin. The first run covers the whole suite and creates an

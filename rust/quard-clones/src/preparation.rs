@@ -2072,13 +2072,18 @@ fn compact_units(
                     if let Some(context) = contexts.get(start) {
                         let mut context = context.clone();
                         context.sort_unstable_by_key(|(offset, _)| *offset);
-                        for (offset, marker) in &context {
+                        for (_, marker) in &context {
                             let token = "quardcontext";
                             protected.insert(compact.len(), format!("control:{marker}"));
                             compact.push_str(token);
-                            row.extend(std::iter::repeat_n(*offset, token.len()));
+                            // Context belongs to this surviving construct. The
+                            // control header may precede a different matched
+                            // construct; mapping its synthetic token back to
+                            // that earlier header reverses fragment endpoints.
+                            let anchor = pending.first().copied().unwrap_or(*start);
+                            row.extend(std::iter::repeat_n(anchor, token.len()));
                             compact.push(' ');
-                            row.push(*offset);
+                            row.push(anchor);
                         }
                     }
                 }

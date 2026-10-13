@@ -11,19 +11,13 @@ From the Quard checkout on Linux, with Rust available to the developer:
 
 ```bash
 uv sync --locked --group dev
-maturin build --manifest-path rust/quard-clones/Cargo.toml --locked --release \
-  --interpreter .venv/bin/python --out /tmp/opencode
-uv pip install --python .venv/bin/python --reinstall \
-  /tmp/opencode/quard_clones-0.1.0-cp312-abi3-manylinux_2_34_x86_64.whl
 .venv/bin/python scripts/benchmark_clones.py --runs 7
 ```
 
-Use the wheel filename produced by maturin for the current Linux target. If
-`maturin` is not installed, use `uvx --from maturin==1.9.6 maturin build` with
-the same arguments. Keep the wheel installation **after** `uv sync` and invoke
-`.venv/bin/python` directly: `uv run` may remove this opt-in local wheel when
-reconciling the ordinary lockfile. Neither Quard's default engine nor the
-consumer's dependencies are changed by the script.
+The locked dev sync now builds the checkout's native wheel from its local Rust
+source. The script alone runs the historical pinned CLI alongside that wheel;
+ordinary `check.py` uses the wheel for all three jobs. The script does not
+change the consumer's dependencies.
 
 The script copies four tracked public Quard Python sources and creates six
 small public sources under `src/` and `tests/`: executable exact/renamed/gap

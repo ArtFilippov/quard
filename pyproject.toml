@@ -23,6 +23,7 @@ dev = [
   "pytest-durations==1.9.0",
   "pytest-testmon==2.2.0",
   "jscpd==5.4.0",
+  "quard-clones==0.1.0",
   "tomlkit==0.13.3",
   "packaging==25.0",
   "jsonschema==4.26.0",
@@ -30,6 +31,9 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+quard-clones = { path = "rust/quard-clones" }
 
 [tool.uv.dependency-groups.dev]
 requires-python = ">=3.12"

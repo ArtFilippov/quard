@@ -1,7 +1,7 @@
 """Repeat the complete three-job CLI/Rust clone path on a public, fixed scope.
 
-Build and install the locked quard-clones wheel into the invoking uv environment
-before running with .venv/bin/python (uv run may remove the opt-in wheel).
+Run after the checkout's locked dev sync has built its local quard-clones wheel.
+The pinned jscpd CLI is used here for historical comparison, not regular checks.
 Outputs and the generated consumer live in a temporary directory.
 """
 from __future__ import annotations

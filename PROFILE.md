@@ -36,7 +36,8 @@ violations baseline.
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
   extra exact/unused stage. Native detail is retained in reports.
 * **pydoclint 0.9.1**: existing Google docstrings checked against signatures/bodies.
-* **quard-clones 0.1.0** (jscpd 5.4.0 CLI in Quard's dev group): independent
+* **quard-clones 0.1.0** (jscpd 5.4.0 CLI in Quard's dev group for historical
+  comparisons only): independent
   native Type 1 (`exact`), Type 2 (`renamed`) and gap-merged Type 3 (`similar`)
   Python clone jobs in strict mode, blocking each
   fragment. Keeping the exact pass separate preserves Type 1 findings that
@@ -113,8 +114,9 @@ violations baseline.
    length of a reported original range cannot raise the prepared minimum.
    Declarations do not enter renamed/similar. This minimum is
    distinct from Pylint's mandatory `min_similarity_lines` readability limit.
-   With the ordinary source-built first-party `quard-clones==0.1.0` component,
-   all three jobs use the linked `cpd-core==0.1.20`,
+   With the ordinary source-built first-party `quard-clones==0.1.0` component
+   (from a local locked path in the Quard checkout, or the consumer's pinned
+   Git source), all three jobs use the linked `cpd-core==0.1.20`,
   `cpd-finder==0.1.20`, `cpd-tokenizer==0.1.19` and
   `cpd-reporter==0.1.21` crates in memory. Renamed uses strict native
   identifier and string/numeric literal normalization and keeps only native
@@ -123,10 +125,13 @@ violations baseline.
   shared minimum. All three archived native JSON reports add
   `engine` and `sourcePaths` evidence. The worker and parser verify version,
   accounting and original fragment text/locations; a mismatch fails with
-  exit 2 for the affected job without erasing peer results. Similar merges
-  native fragments only after each meets the shared complete-construct minimum; its original
-  positions, native matched-token and duplicated-line counts, rounded score
-  and `gap` method stay in the archived JSON and diagnostics. See
+  exit 2 for the affected job without erasing peer results. Native matches
+  count only when both disjoint occurrences meet the prepared minimum;
+  overlapping same-unit fragments and short second sides do not qualify as
+  complete clones. Similar merges native fragments only after each meets the
+  shared complete-construct minimum; its original positions, native
+  matched-token and duplicated-line counts, rounded score and `gap` method
+  stay in the archived JSON and diagnostics. See
   [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md).
   All jobs scan the same discovered `.py` files across production
   and tests, not `.pyi` stubs (unsupported by its Python format), irrespective
