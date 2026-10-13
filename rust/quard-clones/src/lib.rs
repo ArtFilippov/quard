@@ -18,6 +18,7 @@ struct SourceMap {
     lines: Vec<usize>,
     columns: Option<Vec<Vec<usize>>>,
     offsets: Arc<[usize]>,
+    subtree: Option<(usize, usize)>,
 }
 
 fn original_column(map: &SourceMap, line: usize, column: usize) -> PyResult<usize> {
@@ -87,6 +88,12 @@ struct SourceSession {
     prepared: Vec<cpd_core::detect::PreparedSource>,
     prepared_similar: Vec<cpd_core::detect::PreparedSource>,
     prepared_renamed: Vec<cpd_core::detect::PreparedSource>,
+    prepared_calls: Vec<cpd_core::detect::PreparedSource>,
+    renamed_eligible_lines: HashMap<String, usize>,
+    renamed_unit_lines: HashMap<String, Vec<usize>>,
+    renamed_scanned_unit_lines: HashMap<String, Vec<usize>>,
+    call_unit_lines: HashMap<String, Vec<usize>>,
+    renamed_scannable: bool,
     maps: HashMap<String, SourceMap>,
     eligible_lines: HashMap<String, usize>,
     unit_lines: HashMap<String, Vec<usize>>,
@@ -131,6 +138,12 @@ impl SourceSession {
         let mut prepared = Vec::new();
         let mut prepared_similar = Vec::new();
         let mut prepared_renamed = Vec::new();
+        let mut prepared_calls = Vec::new();
+        let mut renamed_eligible_lines = HashMap::new();
+        let mut renamed_unit_lines = HashMap::new();
+        let mut renamed_scanned_unit_lines = HashMap::new();
+        let mut call_unit_lines = HashMap::new();
+        let mut renamed_scannable = false;
         let mut maps = HashMap::new();
         let mut eligible_lines = HashMap::new();
         let mut unit_lines = HashMap::new();
@@ -146,8 +159,29 @@ impl SourceSession {
                     "unique absolute .py paths required",
                 ));
             }
-            let views = preparation::prepare(&text, &path)
+            let views = preparation::prepare(&text, &path, min_lines)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            renamed_eligible_lines.insert(
+                path.clone(),
+                views
+                    .renamed_behavior
+                    .iter()
+                    .map(|unit| unit.lines.len())
+                    .sum(),
+            );
+            renamed_unit_lines.insert(
+                path.clone(),
+                views
+                    .renamed_behavior
+                    .iter()
+                    .map(|unit| unit.lines.len())
+                    .collect(),
+            );
+            renamed_scanned_unit_lines.insert(path.clone(), Vec::new());
+            call_unit_lines.insert(
+                path.clone(),
+                views.calls.iter().map(|unit| unit.lines.len()).collect(),
+            );
             // Original offsets are shared by every unit from this source. Rewalking
             // all preceding lines for every display token is quadratic in file size.
             let mut offset = 0;
@@ -207,6 +241,7 @@ impl SourceSession {
                     lines: unit.lines.clone(),
                     columns: unit.columns.clone(),
                     offsets: Arc::clone(&offsets),
+                    subtree: unit.subtree,
                 };
                 if !schema {
                     scannable |= unit.lines.len() >= min_lines;
@@ -261,27 +296,70 @@ impl SourceSession {
                             .expect("discovered source")
                             .push(unit.lines.len());
                     }
-                    if !renamed && !schema {
-                        let (_, normalized) = normalized_preparer
-                            .prepare(id.clone(), String::new(), "python", &unit.text)
-                            .ok_or_else(|| {
-                                pyo3::exceptions::PyRuntimeError::new_err(
-                                    "normalized native preparation rejected an eligible unit",
-                                )
-                            })?;
-                        if normalized.len() != 1 {
-                            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                                "incomplete normalized preparation",
-                            ));
-                        }
-                        prepared_renamed.extend(normalized);
-                    }
                     maps.insert(id, map);
                 } else if unit.lines.len() >= min_lines {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "eligible unit rejected by native preparation",
                     ));
                 }
+            }
+            for (number, unit) in views.renamed_behavior.into_iter().enumerate() {
+                renamed_scannable |= unit.lines.len() >= min_lines;
+                let id = format!("{path}#quard-renamed-unit-{number}");
+                if let Some((_, mut detection)) =
+                    normalized_preparer.prepare(id.clone(), String::new(), "python", &unit.text)
+                {
+                    if detection.len() != 1 {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                            "incomplete normalized preparation",
+                        ));
+                    }
+                    prepared_renamed.append(&mut detection);
+                    renamed_scanned_unit_lines
+                        .get_mut(&path)
+                        .expect("discovered source")
+                        .push(unit.lines.len());
+                    maps.insert(
+                        id,
+                        SourceMap {
+                            path: path.clone(),
+                            lines: unit.lines,
+                            columns: None,
+                            offsets: Arc::clone(&offsets),
+                            subtree: None,
+                        },
+                    );
+                } else if unit.lines.len() >= min_lines {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "eligible normalized unit rejected by native preparation",
+                    ));
+                }
+            }
+            for (number, unit) in views.calls.into_iter().enumerate() {
+                let id = format!("{path}#quard-call-{number}");
+                let (_, mut detection) = normalized_preparer
+                    .prepare(id.clone(), String::new(), "python", &unit.text)
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "native preparation rejected a complete call subtree",
+                        )
+                    })?;
+                if detection.len() != 1 {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "incomplete native call preparation",
+                    ));
+                }
+                prepared_calls.append(&mut detection);
+                maps.insert(
+                    id,
+                    SourceMap {
+                        path: path.clone(),
+                        lines: unit.lines,
+                        columns: None,
+                        offsets: Arc::clone(&offsets),
+                        subtree: unit.subtree,
+                    },
+                );
             }
             texts.insert(path, text);
         }
@@ -291,6 +369,12 @@ impl SourceSession {
             prepared,
             prepared_similar,
             prepared_renamed,
+            prepared_calls,
+            renamed_eligible_lines,
+            renamed_unit_lines,
+            renamed_scanned_unit_lines,
+            call_unit_lines,
+            renamed_scannable,
             maps,
             eligible_lines,
             unit_lines,
@@ -352,6 +436,26 @@ impl SourceSession {
     fn exact_scannable(&self) -> bool {
         self.exact_scannable
     }
+
+    fn renamed_eligible_lines(&self) -> HashMap<String, usize> {
+        self.renamed_eligible_lines.clone()
+    }
+
+    fn renamed_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.renamed_unit_lines.clone()
+    }
+
+    fn renamed_scanned_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.renamed_scanned_unit_lines.clone()
+    }
+
+    fn renamed_scannable(&self) -> bool {
+        self.renamed_scannable
+    }
+
+    fn call_unit_lines(&self) -> HashMap<String, Vec<usize>> {
+        self.call_unit_lines.clone()
+    }
 }
 
 impl SourceSession {
@@ -363,7 +467,7 @@ impl SourceSession {
         }
         let source = if kind == KindFilter::Similar {
             &self.prepared_similar
-        } else if renamed && !self.renamed {
+        } else if renamed {
             &self.prepared_renamed
         } else {
             &self.prepared
@@ -424,6 +528,51 @@ impl SourceSession {
                 })
                 .collect();
             found.extend(cross);
+            // Compare complete, non-overlapping call subtrees before native
+            // detection. Never feed overlapping windows of one expression to
+            // the detector; its own exact/renamed classification remains intact.
+            let mut by_tokens: HashMap<Vec<u64>, Vec<usize>> = HashMap::new();
+            for (index, call) in self.prepared_calls.iter().enumerate() {
+                by_tokens
+                    .entry(call.hashes.clone())
+                    .or_default()
+                    .push(index);
+            }
+            let mut call_pairs = Vec::new();
+            for group in by_tokens.into_values() {
+                for (index, first) in group.iter().enumerate() {
+                    call_pairs.extend(group[index + 1..].iter().map(|second| (*first, *second)));
+                }
+            }
+            let call_pairs: Vec<_> = call_pairs
+                .into_iter()
+                .filter(|(first, second)| {
+                    let left = &self.maps[&self.prepared_calls[*first].id];
+                    let right = &self.maps[&self.prepared_calls[*second].id];
+                    left.path != right.path || {
+                        let (a, b) = left.subtree.expect("complete call");
+                        let (c, d) = right.subtree.expect("complete call");
+                        b <= c || d <= a
+                    }
+                })
+                .collect();
+            let nested: Vec<CpdClone> = call_pairs
+                .into_par_iter()
+                .flat_map_iter(|(first, second)| {
+                    detect_prepared(
+                        vec![vec![
+                            self.prepared_calls[first].clone(),
+                            self.prepared_calls[second].clone(),
+                        ]],
+                        1,
+                        self.min_lines.saturating_sub(1),
+                        &PathFilters::default(),
+                    )
+                    .into_iter()
+                    .filter(|clone| clone.fragment_a.source_id != clone.fragment_b.source_id)
+                })
+                .collect();
+            found.extend(nested);
             found
         } else {
             detect_prepared(
@@ -464,6 +613,19 @@ impl SourceSession {
                     pyo3::exceptions::PyRuntimeError::new_err("unknown prepared unit")
                 })?;
                 let text = &self.texts[&map.path];
+                if let Some((start, end)) = map.subtree {
+                    for (location, offset) in
+                        [(&mut fragment.start, start), (&mut fragment.end, end)]
+                    {
+                        let line = map.offsets.partition_point(|begin| *begin <= offset);
+                        let column = offset - map.offsets[line - 1];
+                        location.line = line as u32;
+                        location.column = column as u32;
+                        location.offset = offset as u32;
+                    }
+                    fragment.source_id = map.path.clone();
+                    continue;
+                }
                 for location in [&mut fragment.start, &mut fragment.end] {
                     let column =
                         original_column(map, location.line as usize, location.column as usize)?;

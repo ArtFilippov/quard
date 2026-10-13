@@ -469,6 +469,92 @@ import collections
     def test_real_wheel_renamed_prepared(self) -> None:
         verify_prepared_renamed(self, self.root)
 
+    def test_real_wheel_nested_composition_is_a_complete_renamed_unit(self) -> None:
+        left = ("value = Outside(\n    Middle(\n        Branch(\n"
+                "            Leaf(local, 17)\n        )\n    )\n)\n")
+        right = ("value = Different(\n    Middle(\n        Branch(\n"
+                 "            Leaf(other, 23)\n        )\n    )\n)\n")
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        first.write_text(left, encoding="utf-8")
+        second.write_text(right, encoding="utf-8")
+        result = prepared_report(self.root)
+        exact = prepared_native(self, self.root, result, 3)
+        renamed = prepared_native(self, self.root, result, 3, "renamed")
+        self.assertEqual(exact["statistics"]["total"]["sources"],
+                         renamed["statistics"]["total"]["sources"])
+        matches = [item for item in renamed["duplicates"]
+                   if {item["firstFile"]["name"], item["secondFile"]["name"]}
+                   == {str(first), str(second)}]
+        self.assertTrue(matches, renamed["duplicates"])
+        self.assertEqual(renamed["candidateUnitLines"][str(first)], [3])
+        self.assertEqual(renamed["candidateUnitLines"][str(second)], [3])
+        self.assertTrue(all(item["kind"] == "renamed" for item in matches))
+        self.assertTrue(any(item["firstFile"]["start"] == 2 and
+                            item["firstFile"]["end"] == 6 and
+                            "Leaf(local, 17)" in item["fragment"] for item in matches), matches)
+        self.assertTrue(any(item["firstFile"]["startLoc"]["position"] ==
+                            left.index("Middle(") and
+                            item["firstFile"]["endLoc"]["position"] ==
+                            left.index("    )\n)") + len("    )") and
+                            item["fragment"] == "\n".join(left.splitlines()[1:6])
+                            for item in matches), matches)
+        jobs = {job["name"]: job for job in result["tools"]}
+        self.assertEqual((jobs["jscpd"]["status"], jobs["jscpd-renamed"]["status"],
+                          result["exit_code"]), ("violations", "violations", 1))
+        self.assertTrue(any(d["rule"] == "RENAMED_CLONE" and
+                            d["path"] == "src/demo/first.py" and d["line"] == 2
+                            and d["native_details"] in matches
+                            for d in result["diagnostics"]), result["diagnostics"])
+        second.write_text(right.replace("other, 23", "local, 17"), encoding="utf-8")
+        identical_inner = focused_scan(self.root)["renamed"]
+        self.assertFalse([item for item in identical_inner.get("duplicates", [])
+                          if item["firstFile"]["start"] == 2 and
+                          item["firstFile"]["end"] == 6 and
+                          item["secondFile"]["start"] == 2 and
+                          item["secondFile"]["end"] == 6], identical_inner)
+        second.write_text(right, encoding="utf-8")
+        setting = self.root / ".quard/config.toml"
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "min_lines = 3", "min_lines = 6"), encoding="utf-8")
+        larger_minimum = focused_scan(self.root)["renamed"]
+        self.assertEqual(larger_minimum["minimum"], 6)
+        self.assertFalse(larger_minimum.get("duplicates", []), larger_minimum)
+
+    def test_real_wheel_nested_calls_do_not_compare_overlapping_subtrees(self) -> None:
+        source = self.root / "src/demo/first.py"
+        source.write_text("value = Wrap(\n    First(\n        Second(\n"
+                          "            Third(one, 17)\n        )),\n"
+                          "    First(\n        Second(\n            Third(two, 23)\n"
+                          "        )),\n)\n", encoding="utf-8")
+        native = focused_scan(self.root)["renamed"]
+        self.assertEqual(native["minimum"], 3)
+        self.assertTrue(any(item["firstFile"]["name"] == str(source) and
+                            item["secondFile"]["name"] == str(source) and
+                            item["firstFile"]["end"] < item["secondFile"]["start"]
+                            for item in native["duplicates"]), native["duplicates"])
+        source.write_text("value = Wrap(\n    Same(\n        Same(\n"
+                          "            Same(\n                Same(item, 17)\n"
+                          "            )\n        )\n    )\n)\n", encoding="utf-8")
+        overlapping = focused_scan(self.root)["renamed"]
+        self.assertFalse(overlapping.get("duplicates", []), overlapping)
+
+    def test_real_wheel_renamed_does_not_count_literal_or_punctuation_windows(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        first.write_text("values = {\n    'alpha',\n    'beta',\n    'gamma',\n"
+                         "    'delta',\n    'epsilon',\n    'zeta',\n}\n", encoding="utf-8")
+        second.write_text("unique = 1\n", encoding="utf-8")
+        literal = focused_scan(self.root)["renamed"]
+        self.assertEqual(literal["minimum"], 3)
+        self.assertFalse(literal.get("duplicates", []), literal)
+        first.write_text("value = one(\n    x + y,\n)\nif flag:\n"
+                         "    raise ValueError('left')\n", encoding="utf-8")
+        second.write_text("value = two(\n    a / b,\n)\nif not condition:\n"
+                          "    result = b * a\n", encoding="utf-8")
+        continuation = focused_scan(self.root)["renamed"]
+        self.assertFalse(continuation.get("duplicates", []), continuation)
+
     def test_real_wheel_renamed_failure_keeps_exact(self) -> None:
         verify_renamed_failure(self, self.root)
 

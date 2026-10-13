@@ -8,11 +8,145 @@ pub struct Unit {
     pub lines: Vec<usize>,
     // Canonical schema columns map byte boundaries back to original columns.
     pub columns: Option<Vec<Vec<usize>>>,
+    // A derived call unit covers one complete original subtree, not its tokens.
+    pub subtree: Option<(usize, usize)>,
 }
 
 pub struct Views {
     pub behavior: Vec<Unit>,
+    pub renamed_behavior: Vec<Unit>,
     pub schemas: Vec<Unit>,
+    pub calls: Vec<Unit>,
+}
+
+// The normalized pass needs a candidate for a nested expression even when
+// each call starts on a different line and the surrounding constructor differs.
+// Make each *complete* three-call subtree a native unit. In particular, do not
+// slide a token window over the literal leaves or closing parentheses.
+struct NestedCalls<'a> {
+    source: &'a str,
+    chain_length: usize,
+    path: Vec<(usize, usize, String)>,
+    units: Vec<Unit>,
+    literal_continuations: Vec<(usize, usize)>,
+}
+
+impl Visitor for NestedCalls<'_> {
+    fn visit_stmt(&mut self, node: Stmt) {
+        match node {
+            Stmt::FunctionDef(def) => {
+                for stmt in def.body {
+                    self.visit_stmt(stmt);
+                }
+            }
+            Stmt::AsyncFunctionDef(def) => {
+                for stmt in def.body {
+                    self.visit_stmt(stmt);
+                }
+            }
+            Stmt::ClassDef(def) => {
+                for stmt in def.body {
+                    self.visit_stmt(stmt);
+                }
+            }
+            Stmt::Import(_) | Stmt::ImportFrom(_) | Stmt::TypeAlias(_) => {}
+            Stmt::AnnAssign(def) if def.value.is_none() => {}
+            other => self.generic_visit_stmt(other),
+        }
+    }
+
+    fn visit_expr(&mut self, node: Expr) {
+        let literal = match &node {
+            Expr::Constant(value) => matches!(value.value, Constant::Str(_)),
+            Expr::List(value) => value
+                .elts
+                .iter()
+                .all(|item| matches!(item, Expr::Constant(_))),
+            Expr::Set(value) => value
+                .elts
+                .iter()
+                .all(|item| matches!(item, Expr::Constant(_))),
+            Expr::Tuple(value) => value
+                .elts
+                .iter()
+                .all(|item| matches!(item, Expr::Constant(_))),
+            Expr::Dict(value) => value
+                .keys
+                .iter()
+                .flatten()
+                .chain(&value.values)
+                .all(|item| matches!(item, Expr::Constant(_))),
+            _ => false,
+        };
+        if literal {
+            let start: usize = node.range().start().into();
+            let end: usize = node.range().end().into();
+            if let Some(newline) = self.source[start..end].find('\n') {
+                self.literal_continuations.push((start + newline + 1, end));
+            }
+        }
+        if let Expr::Call(call) = &node {
+            let start: usize = node.range().start().into();
+            let end: usize = node.range().end().into();
+            if matches!(call.func.as_ref(), Expr::Name(_) | Expr::Attribute(_)) {
+                let children: Vec<_> = call
+                    .args
+                    .iter()
+                    .chain(call.keywords.iter().map(|kw| &kw.value))
+                    .filter(|arg| matches!(arg, Expr::Call(_)))
+                    .collect();
+                let mut row = String::new();
+                let mut cursor = start;
+                let mut spans: Vec<_> = children.iter().map(|child| child.range()).collect();
+                spans.sort_by_key(|span| span.start());
+                for span in spans {
+                    let begin: usize = span.start().into();
+                    let finish: usize = span.end().into();
+                    row.push_str(&self.source[cursor..begin]);
+                    row.push_str("child");
+                    cursor = finish;
+                }
+                row.push_str(&self.source[cursor..end]);
+                self.path.push((start, end, row.replace('\n', " ")));
+                if children.is_empty() && self.path.len() >= self.chain_length {
+                    let chain = &self.path[self.path.len() - self.chain_length..];
+                    let lines: Vec<usize> = chain
+                        .iter()
+                        .map(|(start, _, _)| {
+                            self.source[..*start]
+                                .bytes()
+                                .filter(|byte| *byte == b'\n')
+                                .count()
+                                + 1
+                        })
+                        .collect();
+                    if lines.windows(2).all(|pair| pair[0] < pair[1]) {
+                        let mut text = String::new();
+                        for (_, _, row) in chain {
+                            text.push_str(row);
+                            text.push('\n');
+                        }
+                        self.units.push(Unit {
+                            text,
+                            lines,
+                            columns: None,
+                            subtree: Some((chain[0].0, chain[0].1)),
+                        });
+                    }
+                }
+                for child in call
+                    .args
+                    .iter()
+                    .chain(call.keywords.iter().map(|kw| &kw.value))
+                {
+                    self.visit_expr(child.clone());
+                }
+                self.path.pop();
+                return;
+            }
+        }
+        self.generic_visit_expr(node);
+    }
 }
 
 #[derive(Default)]
@@ -282,6 +416,7 @@ impl Selection {
                 text,
                 lines,
                 columns: Some(columns),
+                subtree: None,
             });
         }
     }
@@ -510,6 +645,7 @@ impl Selection {
             text,
             lines,
             columns: Some(columns),
+            subtree: None,
         });
     }
 
@@ -774,6 +910,8 @@ fn compact_units(
     path: &str,
     starts: &[usize],
     spans: impl Iterator<Item = (Vec<(usize, usize)>, Vec<(usize, usize)>)>,
+    normalized: bool,
+    extra_remove: &[(usize, usize)],
 ) -> Result<Vec<Unit>, String> {
     let mut result = Vec::new();
     for (keep, remove) in spans {
@@ -784,11 +922,29 @@ fn compact_units(
         for (begin, end) in remove {
             bytes[begin..end].fill(b' ');
         }
+        if normalized {
+            for &(begin, end) in extra_remove {
+                bytes[begin..end].fill(b' ');
+            }
+        }
         let mut lines = Vec::new();
         let mut compact = String::new();
         for (index, start) in starts.iter().enumerate() {
             let end = starts.get(index + 1).copied().unwrap_or(text.len());
             let slice = &bytes[*start..end];
+            if normalized {
+                let trimmed = slice
+                    .iter()
+                    .copied()
+                    .filter(|byte| !byte.is_ascii_whitespace());
+                if trimmed.clone().next().is_some()
+                    && trimmed
+                        .clone()
+                        .all(|byte| matches!(byte, b')' | b']' | b'}' | b','))
+                {
+                    continue;
+                }
+            }
             if slice.iter().any(|b| !b.is_ascii_whitespace()) {
                 let masked = std::str::from_utf8(slice)
                     .map_err(|_| format!("{path}: masked syntax split a Unicode character"))?;
@@ -802,14 +958,25 @@ fn compact_units(
                 text: compact,
                 lines,
                 columns: None,
+                subtree: None,
             });
         }
     }
     Ok(result)
 }
 
-pub fn prepare(text: &str, path: &str) -> Result<Views, String> {
+pub fn prepare(text: &str, path: &str, min_lines: usize) -> Result<Views, String> {
     let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
+    let mut calls = NestedCalls {
+        source: text,
+        chain_length: min_lines.max(3),
+        path: Vec::new(),
+        units: Vec::new(),
+        literal_continuations: Vec::new(),
+    };
+    for stmt in &suite {
+        calls.visit_stmt(stmt.clone());
+    }
     let mut selection = Selection {
         keep: vec![Vec::new()],
         remove: vec![Vec::new()],
@@ -825,21 +992,38 @@ pub fn prepare(text: &str, path: &str) -> Result<Views, String> {
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
     Ok(Views {
+        renamed_behavior: compact_units(
+            text,
+            path,
+            &starts,
+            selection
+                .keep
+                .iter()
+                .cloned()
+                .zip(selection.remove.iter().cloned()),
+            true,
+            &calls.literal_continuations,
+        )?,
         behavior: compact_units(
             text,
             path,
             &starts,
             selection.keep.into_iter().zip(selection.remove),
+            false,
+            &[],
         )?,
         schemas: compact_units(
             text,
             path,
             &starts,
             selection.schemas.into_iter().map(|run| (run, Vec::new())),
+            false,
+            &[],
         )?
         .into_iter()
         .chain(selection.canonical_schemas)
         .chain(selection.declarations)
         .collect(),
+        calls: calls.units,
     })
 }

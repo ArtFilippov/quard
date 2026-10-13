@@ -97,6 +97,14 @@ def validate_source_evidence(report: dict[str, object], root: Path,
             or any(set(evidence) != set(originals)
                    for evidence in (counts, units, scanned, digests))):
         raise ValueError("Incomplete native source evidence")
+    candidates = report.get("candidateUnitLines")
+    if candidates is not None and (not isinstance(candidates, dict)
+                                   or set(candidates) != set(originals)
+                                   or any(not isinstance(lengths, list)
+                                          or any(type(length) is not int or length < minimum
+                                                 for length in lengths)
+                                          for lengths in candidates.values())):
+        raise ValueError("Invalid prepared call candidate accounting")
     scannable = False
     for original in originals:
         count, lengths, digest = counts[original], units[original], digests[original]
@@ -166,6 +174,7 @@ def run_pass(session: Any, kind: str, output: Path, count: int,
              evidence: dict[str, Any]) -> dict[str, object]:
     """Archive one independent native pass or an explicit eligible-free skip."""
     if session is not None and (session.exact_scannable() if kind == "exact"
+                                else session.renamed_scannable() if kind == "renamed"
                                 else session.scannable()):
         report = json.loads(getattr(session, kind)())
         if report["statistics"]["total"]["sources"] != count:
@@ -192,8 +201,13 @@ def run_passes(args: argparse.Namespace, session: Any, count: int,
             view = evidence.copy()
             if kind == "exact" and session is not None:
                 view.update({"eligibleLines": session.exact_eligible_lines(),
-                             "unitLines": session.exact_unit_lines(),
-                             "scannedUnitLines": session.exact_scanned_unit_lines()})
+                              "unitLines": session.exact_unit_lines(),
+                              "scannedUnitLines": session.exact_scanned_unit_lines()})
+            if kind == "renamed" and session is not None:
+                view.update({"eligibleLines": session.renamed_eligible_lines(),
+                             "unitLines": session.renamed_unit_lines(),
+                             "scannedUnitLines": session.renamed_scanned_unit_lines(),
+                             "candidateUnitLines": session.call_unit_lines()})
             statuses[kind] = run_pass(session, kind, output, count, view)
         except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
             statuses[kind] = {"exit_code": 2, "stderr": f"CLONE_ENGINE_ERROR: {exc}"}

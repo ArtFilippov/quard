@@ -242,6 +242,13 @@ it records native similarity and the `gap` method. Merging cannot detect copies
 whose individual matching parts fall below the configured minimum and
 one token in strict mode. The JavaScript/TypeScript-only AST `--similarity` pass
 does not scan Python. The jobs run on the full scope even with `--lcom_files ""`.
+The renamed pass prepares three nested calls starting on distinct source lines
+as complete subtree candidates, comparing only disjoint subtrees. Surrounding
+constructors need not match. Literal-only and punctuation-only continuation lines
+do not count toward that pass's prepared behavioral minimum. Its source accounting
+reflects this view and records additional complete-call candidates separately;
+native kinds and original fragments remain intact.
+
 Set `[duplication] min_lines = 3` in `.quard/config.toml` to choose one positive
 integer minimum for all three Python clone jobs. Fresh installs use 3; existing
 configs without the section or key also use 3 without migration. An explicit

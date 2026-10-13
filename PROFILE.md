@@ -50,6 +50,10 @@ violations baseline.
    within a prepared module/class/function unit. Ordinary definition headers,
    decorators, annotation-only fields and recognized type aliases are excluded;
    actual assignments, control flow and executable bodies remain eligible.
+   The renamed pass also compares disjoint complete three-call nested subtrees
+   on distinct source lines, without requiring the enclosing constructor to match.
+   It excludes literal-only continuations and punctuation-only lines from its
+   eligible behavioral view; per-pass source accounting records the resulting lines.
    Ordinary standalone `pass`, `...` and bare or literal-argument
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including
