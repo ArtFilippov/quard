@@ -254,6 +254,10 @@ share the same identity; unresolved calls retain their spelling. Other local nam
 retain their within-unit repeated/distinct relationships under renaming, and
 eligible string and numeric literals remain normalized. Exact and similar passes
 continue to use their own independent views.
+Keyword labels and proven ordinary stored-field names also retain their
+repeated/distinct relationships when renamed. Field proof uses discovered class
+constructors, known receiver types and safe import/local aliases; property access
+and unproved attributes retain their spelling. Called method names remain significant.
 
 Set `[duplication] min_lines = 3` in `.quard/config.toml` to choose one positive
 integer minimum for all three Python clone jobs. Fresh installs use 3; existing

@@ -21,17 +21,173 @@ pub struct Views {
     pub calls: Vec<Unit>,
 }
 
+#[derive(Default)]
+pub struct ClassMembers {
+    fields: HashSet<String>,
+    properties: HashSet<String>,
+}
+
+pub type FieldIndex = HashMap<String, ClassMembers>;
+
+struct StoredAssignments<'a> {
+    receiver: &'a str,
+    fields: HashSet<String>,
+    rebound: bool,
+}
+
+impl Visitor for StoredAssignments<'_> {
+    fn visit_stmt(&mut self, node: Stmt) {
+        // Deferred bodies do not initialize this instance.
+        if matches!(
+            node,
+            Stmt::FunctionDef(_) | Stmt::AsyncFunctionDef(_) | Stmt::ClassDef(_)
+        ) {
+            return;
+        }
+        self.generic_visit_stmt(node);
+    }
+
+    fn visit_expr(&mut self, node: Expr) {
+        if let Expr::Name(name) = &node {
+            if name.ctx == ast::ExprContext::Store && name.id.as_str() == self.receiver {
+                self.rebound = true;
+            }
+        }
+        if let Expr::Attribute(attr) = &node {
+            if attr.ctx == ast::ExprContext::Store
+                && matches!(attr.value.as_ref(), Expr::Name(name)
+                    if name.id.as_str() == self.receiver)
+            {
+                self.fields.insert(attr.attr.to_string());
+            }
+        }
+        self.generic_visit_expr(node);
+    }
+}
+
+pub fn discover_fields(sources: &[(String, String)]) -> Result<FieldIndex, String> {
+    let mut index = FieldIndex::new();
+    let mut ambiguous = HashSet::new();
+    for (path, text) in sources {
+        let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
+        let names = CallIdentities::new(path, &index);
+        let mut discovered = Vec::new();
+        for stmt in suite {
+            let Stmt::ClassDef(class) = stmt else {
+                continue;
+            };
+            let mut members = ClassMembers::default();
+            let mut opaque = !class.bases.is_empty() || !class.keywords.is_empty();
+            for stmt in &class.body {
+                match stmt {
+                    Stmt::FunctionDef(method)
+                        if method.name.as_str() == "__init__"
+                            && method.decorator_list.is_empty() =>
+                    {
+                        members.fields.clear(); // Only the last direct constructor can run.
+                        if let Some(receiver) = method
+                            .args
+                            .posonlyargs
+                            .iter()
+                            .chain(&method.args.args)
+                            .next()
+                            .map(|arg| arg.def.arg.as_str())
+                        {
+                            let mut assignments = StoredAssignments {
+                                receiver,
+                                fields: HashSet::new(),
+                                rebound: false,
+                            };
+                            for stmt in &method.body {
+                                assignments.visit_stmt(stmt.clone());
+                            }
+                            if !assignments.rebound {
+                                members.fields.extend(assignments.fields);
+                            }
+                        }
+                    }
+                    Stmt::FunctionDef(method) => {
+                        // A same-named method or opaque decorator can be a descriptor.
+                        members.properties.insert(method.name.to_string());
+                        if matches!(
+                            method.name.as_str(),
+                            "__getattribute__" | "__getattr__" | "__setattr__"
+                        ) {
+                            opaque = true;
+                        }
+                        if method.name.as_str() == "__init__" {
+                            members.fields.clear();
+                        }
+                        for decorator in &method.decorator_list {
+                            if let Expr::Attribute(attr) = decorator {
+                                if matches!(attr.attr.as_str(), "getter" | "setter" | "deleter") {
+                                    if let Expr::Name(name) = attr.value.as_ref() {
+                                        members.properties.insert(name.id.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Stmt::AsyncFunctionDef(method) => {
+                        members.properties.insert(method.name.to_string());
+                        if matches!(
+                            method.name.as_str(),
+                            "__getattribute__" | "__getattr__" | "__setattr__"
+                        ) {
+                            opaque = true;
+                        }
+                    }
+                    Stmt::Assign(assignment) => {
+                        for target in &assignment.targets {
+                            if let Expr::Name(name) = target {
+                                members.properties.insert(name.id.to_string());
+                            }
+                        }
+                    }
+                    Stmt::AnnAssign(assignment) => {
+                        if let Expr::Name(name) = assignment.target.as_ref() {
+                            if assignment.value.is_some() {
+                                members.properties.insert(name.id.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if opaque {
+                members.fields.clear();
+            }
+            let class_name = names.declared(class.name.as_str());
+            discovered.push((class_name, members));
+        }
+        for (name, members) in discovered {
+            if index.contains_key(&name) {
+                ambiguous.insert(name.clone());
+            }
+            index.insert(name, members);
+        }
+    }
+    for name in ambiguous {
+        if let Some(members) = index.get_mut(&name) {
+            members.fields.clear();
+        }
+    }
+    Ok(index)
+}
+
 // Bind only syntactically established callable names. Unknown calls keep their
 // spelling; a local value binding never becomes a guessed callable identity.
-struct CallIdentities {
+struct CallIdentities<'a> {
     module: String,
     owner: String,
     bindings: HashMap<String, String>,
+    receivers: HashMap<String, String>,
+    fields: &'a FieldIndex,
     tokens: HashMap<usize, String>,
 }
 
-impl CallIdentities {
-    fn new(path: &str) -> Self {
+impl<'a> CallIdentities<'a> {
+    fn new(path: &str, fields: &'a FieldIndex) -> Self {
         let relative = path
             .split("/src/")
             .nth(1)
@@ -45,6 +201,8 @@ impl CallIdentities {
             module,
             owner: String::new(),
             bindings: HashMap::new(),
+            receivers: HashMap::new(),
+            fields,
             tokens: HashMap::new(),
         }
     }
@@ -67,6 +225,42 @@ impl CallIdentities {
         }
     }
 
+    fn receiver_type(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Name(name) => self.receivers.get(name.id.as_str()).cloned(),
+            Expr::Call(call) => self
+                .resolved(&call.func)
+                .filter(|name| self.fields.contains_key(name)),
+            _ => None,
+        }
+    }
+
+    fn method_receivers(&mut self, args: &ast::Arguments, owner: &str, implicit: bool) {
+        let first = args.posonlyargs.iter().chain(&args.args).next();
+        for arg in args
+            .posonlyargs
+            .iter()
+            .chain(&args.args)
+            .chain(&args.kwonlyargs)
+        {
+            self.receivers.remove(arg.def.arg.as_str());
+            if let Some(annotation) = &arg.def.annotation {
+                if let Some(name) = self
+                    .resolved(annotation)
+                    .filter(|name| self.fields.contains_key(name))
+                {
+                    self.receivers.insert(arg.def.arg.to_string(), name);
+                }
+            }
+        }
+        let class = format!("{}.{}", self.module, owner);
+        if implicit && self.fields.contains_key(&class) {
+            if let Some(arg) = first {
+                self.receivers.insert(arg.def.arg.to_string(), class);
+            }
+        }
+    }
+
     fn reference(&mut self, expr: &Expr, callable: bool) {
         match expr {
             Expr::Name(name) => {
@@ -84,6 +278,26 @@ impl CallIdentities {
                 let end: usize = attr.range.end().into();
                 self.tokens.insert(end - attr.attr.len(), identity);
             }
+            Expr::Attribute(attr) => {
+                let owner = match attr.value.as_ref() {
+                    Expr::Name(name) => self.receivers.get(name.id.as_str()),
+                    _ => None,
+                };
+                let role = if owner.is_some_and(|name| {
+                    self.fields.get(name).is_some_and(|members| {
+                        members.fields.contains(attr.attr.as_str())
+                            && !members.properties.contains(attr.attr.as_str())
+                    })
+                }) {
+                    "field"
+                } else {
+                    "attribute"
+                };
+                let end: usize = attr.range.end().into();
+                self.tokens
+                    .entry(end - attr.attr.len())
+                    .or_insert_with(|| format!("{role}:{}", attr.attr));
+            }
             _ => {}
         }
     }
@@ -92,6 +306,7 @@ impl CallIdentities {
         match expr {
             Expr::Name(name) => {
                 self.bindings.remove(name.id.as_str());
+                self.receivers.remove(name.id.as_str());
             }
             Expr::Tuple(items) => {
                 for item in &items.elts {
@@ -129,13 +344,18 @@ impl CallIdentities {
 
     fn branches(&mut self, paths: &[Vec<Stmt>]) {
         let before = self.bindings.clone();
+        let before_receivers = self.receivers.clone();
         let mut states = Vec::new();
+        let mut receiver_states = Vec::new();
         for path in paths {
             self.bindings = before.clone();
+            self.receivers = before_receivers.clone();
             self.body(path);
             states.push(self.bindings.clone());
+            receiver_states.push(self.receivers.clone());
         }
         self.bindings = before;
+        self.receivers = before_receivers;
         self.bindings
             .retain(|name, identity| states.iter().all(|state| state.get(name) == Some(identity)));
         // A binding assigned on every path can also be proven.
@@ -146,10 +366,25 @@ impl CallIdentities {
                 }
             }
         }
+        self.receivers.retain(|name, class| {
+            receiver_states
+                .iter()
+                .all(|state| state.get(name) == Some(class))
+        });
+        if let Some(first) = receiver_states.first() {
+            for (name, class) in first {
+                if receiver_states
+                    .iter()
+                    .all(|state| state.get(name) == Some(class))
+                {
+                    self.receivers.insert(name.clone(), class.clone());
+                }
+            }
+        }
     }
 }
 
-impl Visitor for CallIdentities {
+impl Visitor for CallIdentities<'_> {
     fn visit_stmt(&mut self, node: Stmt) {
         match node {
             Stmt::Import(def) => {
@@ -171,6 +406,7 @@ impl Visitor for CallIdentities {
                     } else {
                         name.clone()
                     };
+                    self.receivers.remove(&name);
                     self.bindings.insert(name, module);
                 }
             }
@@ -194,50 +430,67 @@ impl Visitor for CallIdentities {
                         .filter(|part| !part.is_empty())
                         .collect::<Vec<_>>()
                         .join(".");
+                    self.receivers.remove(&binding);
                     self.bindings.insert(binding, target);
                 }
             }
             Stmt::FunctionDef(def) => {
                 let parent = self.bindings.clone();
+                let receivers = self.receivers.clone();
                 let declared = self.declared(def.name.as_str());
                 let owner = self.owner.clone();
                 self.owner = declared[self.module.len() + 1..].to_owned();
                 self.arguments(&def.args);
+                self.method_receivers(&def.args, &owner, def.decorator_list.is_empty());
                 self.bindings.insert(def.name.to_string(), declared.clone());
                 self.body(&def.body);
                 self.bindings = parent;
+                self.receivers = receivers;
                 self.owner = owner;
+                self.receivers.remove(def.name.as_str());
                 self.bindings.insert(def.name.to_string(), declared);
             }
             Stmt::AsyncFunctionDef(def) => {
                 let parent = self.bindings.clone();
+                let receivers = self.receivers.clone();
                 let declared = self.declared(def.name.as_str());
                 let owner = self.owner.clone();
                 self.owner = declared[self.module.len() + 1..].to_owned();
                 self.arguments(&def.args);
+                self.method_receivers(&def.args, &owner, def.decorator_list.is_empty());
                 self.bindings.insert(def.name.to_string(), declared.clone());
                 self.body(&def.body);
                 self.bindings = parent;
+                self.receivers = receivers;
                 self.owner = owner;
+                self.receivers.remove(def.name.as_str());
                 self.bindings.insert(def.name.to_string(), declared);
             }
             Stmt::ClassDef(def) => {
                 let parent = self.bindings.clone();
+                let receivers = self.receivers.clone();
+                self.receivers.clear();
                 let declared = self.declared(def.name.as_str());
                 let owner = self.owner.clone();
                 self.owner = declared[self.module.len() + 1..].to_owned();
                 self.body(&def.body);
                 self.bindings = parent;
+                self.receivers = receivers;
                 self.owner = owner;
+                self.receivers.remove(def.name.as_str());
                 self.bindings.insert(def.name.to_string(), declared);
             }
             Stmt::Assign(def) => {
                 self.visit_expr(*def.value.clone());
                 let identity = self.resolved(&def.value);
+                let receiver = self.receiver_type(&def.value);
                 for target in &def.targets {
                     self.forget(target);
                     if let (Expr::Name(name), Some(identity)) = (target, &identity) {
                         self.bindings.insert(name.id.to_string(), identity.clone());
+                    }
+                    if let (Expr::Name(name), Some(receiver)) = (target, &receiver) {
+                        self.receivers.insert(name.id.to_string(), receiver.clone());
                     }
                 }
             }
@@ -246,9 +499,18 @@ impl Visitor for CallIdentities {
                     self.visit_expr(*value.clone());
                 }
                 let identity = def.value.as_ref().and_then(|value| self.resolved(value));
+                let receiver = if let Some(value) = &def.value {
+                    self.receiver_type(value)
+                } else {
+                    self.resolved(&def.annotation)
+                        .filter(|name| self.fields.contains_key(name))
+                };
                 self.forget(&def.target);
                 if let (Expr::Name(name), Some(identity)) = (def.target.as_ref(), identity) {
                     self.bindings.insert(name.id.to_string(), identity);
+                }
+                if let (Expr::Name(name), Some(receiver)) = (def.target.as_ref(), receiver) {
+                    self.receivers.insert(name.id.to_string(), receiver);
                 }
             }
             Stmt::If(def) => {
@@ -280,18 +542,30 @@ impl Visitor for CallIdentities {
             }
             other => {
                 let before = self.bindings.clone();
+                let before_receivers = self.receivers.clone();
                 self.generic_visit_stmt(other);
                 // Other compound statements may not execute their whole body.
                 // Keep only identities that survived every possible path.
                 self.bindings
                     .retain(|name, identity| before.get(name) == Some(identity));
+                self.receivers
+                    .retain(|name, class| before_receivers.get(name) == Some(class));
             }
         }
     }
 
     fn visit_expr(&mut self, node: Expr) {
+        if let Expr::NamedExpr(binding) = &node {
+            self.forget(&binding.target);
+        }
         if let Expr::Call(call) = &node {
             self.reference(&call.func, true);
+            for keyword in &call.keywords {
+                if let Some(name) = &keyword.arg {
+                    let start: usize = keyword.range.start().into();
+                    self.tokens.insert(start, format!("keyword:{name}"));
+                }
+            }
         } else {
             self.reference(&node, false);
         }
@@ -1281,9 +1555,14 @@ fn compact_units(
     Ok(result)
 }
 
-pub fn prepare(text: &str, path: &str, min_lines: usize) -> Result<Views, String> {
+pub fn prepare(
+    text: &str,
+    path: &str,
+    min_lines: usize,
+    fields: &FieldIndex,
+) -> Result<Views, String> {
     let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
-    let mut identity = CallIdentities::new(path);
+    let mut identity = CallIdentities::new(path, fields);
     identity.body(&suite);
     let mut calls = NestedCalls {
         source: text,

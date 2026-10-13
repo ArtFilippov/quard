@@ -59,6 +59,10 @@ violations baseline.
    Import and simple binding aliases resolve to the same identity; unresolved
    call names keep their spelling. Local identifiers retain repeated/distinct
    relationships within a prepared unit, while eligible literals still normalize.
+   Keyword labels and proven ordinary fields have separate repeated/distinct
+   relationships in each unit. Constructor assignments in discovered classes,
+   typed receivers, proven constructions and simple aliases establish fields;
+   known properties, unknown attributes and called methods keep their names.
    Ordinary standalone `pass`, `...` and bare or literal-argument
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including

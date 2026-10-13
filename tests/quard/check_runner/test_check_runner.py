@@ -629,6 +629,121 @@ import collections
         overlapping = focused_scan(self.root)["renamed"]
         self.assertFalse(overlapping.get("duplicates", []), overlapping)
 
+    def test_real_wheel_renamed_field_and_keyword_roles(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+
+        def compare(left: str, right: str) -> list[dict[str, Any]]:
+            first.write_text(left, encoding="utf-8")
+            second.write_text(right, encoding="utf-8")
+            return focused_scan(self.root)["renamed"].get("duplicates", [])
+
+        owner = ("class Record:\n"
+                 "    def __init__(self):\n"
+                 "        self.first = 1\n"
+                 "        self.second = 2\n")
+        field = ("def run(item: Record):\n"
+                 "    a = item.first + 17\n"
+                 "    b = item.first + a\n"
+                 "    return item.first + b\n")
+        imported = ("from demo.first import Record as Entry\n"
+                    "def run(item: Entry):\n"
+                    "    x = item.second + 23\n"
+                    "    y = item.second + x\n"
+                    "    return item.second + y\n")
+        matches = compare(owner + field, imported)
+        self.assertTrue(any(d["firstFile"]["start"] == 6 and
+                            d["secondFile"]["start"] == 3 and
+                            d["kind"] == "renamed" and
+                            "item.first" in d["fragment"] for d in matches), matches)
+        result = prepared_report(self.root)
+        jobs = {job["name"]: job for job in result["tools"]}
+        self.assertEqual((jobs["jscpd"]["status"], jobs["jscpd-renamed"]["status"],
+                          jobs["jscpd-similar"]["status"]),
+                         ("passed", "violations", "passed"))
+        archived = prepared_native(self, self.root, result, 3, "renamed")
+        self.assertTrue(any(d["fragment"] == "\n".join((owner + field).splitlines()[5:8])
+                            and d["firstFile"]["startLoc"]["line"] == 6
+                            and d["secondFile"]["startLoc"]["line"] == 3
+                            for d in archived["duplicates"]), archived)
+        self.assertFalse([d for d in result["diagnostics"] if d.get("is_infrastructure_error")])
+        self.assertFalse(compare(owner + field, imported.replace(
+            "y = item.second", "y = item.first").replace(
+            "return item.second", "return item.first")))
+        self.assertFalse(compare(owner + field, imported.replace("item.second", "item.unknown")))
+
+        property_owner = ("class Record:\n"
+                          "    @property\n"
+                          "    def first(self):\n"
+                          "        return 1\n"
+                          "    @property\n"
+                          "    def second(self):\n"
+                          "        return 2\n")
+        self.assertFalse(compare(property_owner + field, imported))
+        aliased_property = property_owner.replace("class Record:",
+                                                   "from builtins import property as view\n"
+                                                   "class Record:").replace("@property", "@view")
+        self.assertFalse(compare(aliased_property + field, imported))
+        inherited_property = ("class Base:\n"
+                              "    @property\n"
+                              "    def first(self):\n"
+                              "        return 1\n"
+                              "class Record(Base):\n"
+                              "    def __init__(self):\n"
+                              "        self.first = 1\n"
+                              "        self.second = 2\n")
+        self.assertFalse(compare(inherited_property + field, imported))
+        hooked = owner.replace("class Record:\n", "class Record:\n"
+                               "    def __getattribute__(self, name):\n"
+                               "        return object.__getattribute__(self, name)\n")
+        self.assertFalse(compare(hooked + field, imported))
+        rebound_owner = owner.replace("        self.first = 1\n",
+                                      "        self = unknown\n        self.first = 1\n")
+        self.assertFalse(compare(rebound_owner + field, imported))
+        aliased_field = ("def run(item: Record):\n"
+                         "    alias = item\n"
+                         "    a = alias.first + 17\n"
+                         "    b = alias.first + a\n"
+                         "    return alias.first + b\n")
+        imported_alias = ("from demo.first import Record as Entry\n"
+                          "def run(item: Entry):\n"
+                          "    alias = item\n"
+                          "    x = alias.second + 23\n"
+                          "    y = alias.second + x\n"
+                          "    return alias.second + y\n")
+        self.assertTrue(compare(owner + aliased_field, imported_alias))
+        self.assertFalse(compare(owner + aliased_field,
+                                 imported_alias.replace("alias = item", "alias = unknown")))
+        self.assertFalse(compare(owner + aliased_field,
+                                 imported_alias.replace("alias = item",
+                                                        "alias = item\n    from external import value as alias")))
+        self.assertFalse(compare(owner + field,
+                                 imported.replace("item.second", "item.read")))
+        constructed = ("def run():\n"
+                       "    item = Record()\n"
+                       "    a = item.first + 17\n"
+                       "    b = item.first + a\n"
+                       "    return item.first + b\n")
+        imported_ctor = ("from demo.first import Record as Entry\n"
+                         "def run():\n"
+                         "    item = Entry()\n"
+                         "    x = item.second + 23\n"
+                         "    y = item.second + x\n"
+                         "    return item.second + y\n")
+        self.assertTrue(compare(owner + constructed, imported_ctor))
+
+        keywords = ("def run(value):\n"
+                    "    a = send(value, first=17, first_extra=18)\n"
+                    "    b = send(a, first=19, first_extra=20)\n"
+                    "    return send(b, first=21, first_extra=22)\n")
+        renamed = keywords.replace("first_extra", "later").replace("first=", "second=")
+        self.assertTrue(compare(keywords, renamed.replace("17", "23")))
+        self.assertFalse(compare(keywords, renamed.replace(
+            "second=19", "third=19").replace("second=21", "third=21")
+                                 .replace("17", "23")))
+        self.assertFalse(compare(keywords, renamed.replace("send(", "deliver(")
+                                 .replace("17", "23")))
+
     def test_real_wheel_renamed_does_not_count_literal_or_punctuation_windows(self) -> None:
         first = self.root / "src/demo/first.py"
         second = self.root / "tests/second.py"

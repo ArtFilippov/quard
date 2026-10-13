@@ -18,12 +18,23 @@ mod preparation;
 // handed to detection distinguish callable identities and local alias relations.
 fn rename_hashes(source: &mut cpd_core::detect::PreparedSource, unit: &preparation::Unit) {
     let mut locals: HashMap<&str, usize> = HashMap::new();
+    let mut fields: HashMap<&str, usize> = HashMap::new();
+    let mut keywords: HashMap<&str, usize> = HashMap::new();
     for (index, (start, end)) in source.spans.iter().enumerate() {
         let offset = start.offset as usize;
         if let Some(identity) = unit.identities.get(&offset) {
+            let role = if let Some(name) = identity.strip_prefix("field:") {
+                let next = fields.len();
+                format!("field:{}", fields.entry(name).or_insert(next))
+            } else if let Some(name) = identity.strip_prefix("keyword:") {
+                let next = keywords.len();
+                format!("keyword:{}", keywords.entry(name).or_insert(next))
+            } else {
+                identity.clone()
+            };
             source.hashes[index] = token_hash(
                 TokenKind::Identifier.discriminant(),
-                &format!("callable:{identity}"),
+                &format!("role:{role}"),
             );
         } else if source
             .raw_hashes
@@ -192,13 +203,15 @@ impl SourceSession {
         let mut exact_unit_lines = HashMap::new();
         let mut exact_scanned_unit_lines = HashMap::new();
         let mut exact_scannable = false;
+        let fields = preparation::discover_fields(&sources)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         for (path, text) in sources {
             if !path.starts_with('/') || !path.ends_with(".py") || texts.contains_key(&path) {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "unique absolute .py paths required",
                 ));
             }
-            let views = preparation::prepare(&text, &path, min_lines)
+            let views = preparation::prepare(&text, &path, min_lines, &fields)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
             renamed_eligible_lines.insert(
                 path.clone(),
