@@ -70,7 +70,11 @@ violations baseline.
    body lines as comparison context without increasing the prepared line count.
    Calls, operations, indexing, properties and unproved attribute reads survive;
    original source positions and fragments are restored from the prepared map.
-   Exact and similar use their own unaffected behavior view.
+   Exact and similar use their own independent behavior views. Exact counts
+   complete executable AST constructs, not punctuation-only continuations or
+   token suffixes. Multiline assignments and returns count once and retain
+   literal spelling; disjoint complete nested-call candidates can contribute
+   three calls on distinct source lines. Declaration-only units stay separate.
    Ordinary standalone `pass`, `...` and bare or literal-argument
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including

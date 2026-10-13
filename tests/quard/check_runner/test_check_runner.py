@@ -588,7 +588,7 @@ import collections
                             for item in matches), matches)
         jobs = {job["name"]: job for job in result["tools"]}
         self.assertEqual((jobs["jscpd"]["status"], jobs["jscpd-renamed"]["status"],
-                          result["exit_code"]), ("violations", "violations", 1))
+                          result["exit_code"]), ("passed", "violations", 1))
         self.assertTrue(any(d["rule"] == "RENAMED_CLONE" and
                             d["path"] == "src/demo/first.py" and d["line"] == 2
                             and d["native_details"] in matches
@@ -607,6 +607,83 @@ import collections
         larger_minimum = focused_scan(self.root)["renamed"]
         self.assertEqual(larger_minimum["minimum"], 6)
         self.assertFalse(larger_minimum.get("duplicates", []), larger_minimum)
+
+    def test_real_wheel_exact_requires_complete_constructs(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        left = ('def load(root):\n    records = (\n'
+                '        arrow.dataset(root / "private_images.parquet", '
+                'format="parquet").to_table().to_pylist()\n'
+                '    )\n    if not records or len(records) != 7:\n'
+                '        raise ValueError("private catalogue")\n')
+        right = ('def load(samples):\n    rows = tuple(\n'
+                 '        row for row in arrow.dataset(samples, format="ipc").to_table(\n'
+                 '            columns=["path", "generator"]\n'
+                 '        ).to_pylist()\n    )\n'
+                 '    if any(row != "real" for row in rows):\n'
+                 '        raise ValueError("wrong labels")\n')
+        first.write_text(left, encoding="utf-8")
+        second.write_text(right, encoding="utf-8")
+        short = focused_scan(self.root)
+        self.assertEqual(short["exact"]["minimum"], 3)
+        self.assertFalse(short["exact"].get("duplicates", []), short["exact"])
+        self.assertEqual(short["exact"]["unitLines"][str(first)], [3])
+        self.assertEqual(short["similar"]["unitLines"][str(first)], [5])
+
+        assignments = ('def calculate():\n    first = 1\n'
+                       '    second = first + 2\n    return second * 3\n')
+        first.write_text(assignments, encoding="utf-8")
+        second.write_text(assignments, encoding="utf-8")
+        result = prepared_report(self.root)
+        native = prepared_native(self, self.root, result, 3)
+        matches = [item for item in native["duplicates"] if
+                   {item["firstFile"]["name"], item["secondFile"]["name"]}
+                   == {str(first), str(second)}]
+        self.assertTrue(matches, native)
+        self.assertTrue(any(item["kind"] == "exact" and
+                            item["firstFile"]["start"] == 2 and
+                            item["firstFile"]["end"] == 4 and
+                            item["fragment"] == '\n'.join(assignments.splitlines()[1:])
+                            for item in matches), matches)
+        self.assertEqual(native["eligibleLines"][str(first)], 3)
+        self.assertTrue(any(d["rule"] == "EXACT_CLONE" and d["native_details"] in matches
+                            for d in result["diagnostics"]), result["diagnostics"])
+
+        three_assignments = ('def calculate():\n    first = 1\n'
+                             '    second = first + 2\n    third = second * 3\n')
+        first.write_text(three_assignments, encoding="utf-8")
+        second.write_text(three_assignments, encoding="utf-8")
+        self.assertTrue(focused_scan(self.root)["exact"]["duplicates"])
+        setting = self.root / ".quard/config.toml"
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "min_lines = 3", "min_lines = 4"), encoding="utf-8")
+        self.assertFalse(focused_scan(self.root)["exact"].get("duplicates", []))
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "min_lines = 4", "min_lines = 3"), encoding="utf-8")
+
+        nested = ('def build(item):\n    value = Different(\n'
+                  '        Middle(\n            Branch(\n'
+                  '                Leaf(item, 17)\n            )\n        )\n    )\n')
+        first.write_text(nested.replace("Different", "Outside"), encoding="utf-8")
+        second.write_text(nested, encoding="utf-8")
+        nested_report = prepared_report(self.root)
+        exact_calls = prepared_native(self, self.root, nested_report, 3)
+        calls = [item for item in exact_calls["duplicates"] if
+                 {item["firstFile"]["name"], item["secondFile"]["name"]}
+                 == {str(first), str(second)}]
+        self.assertTrue(any(item["kind"] == "exact" and
+                            item["firstFile"]["startLoc"]["position"] ==
+                            first.read_text(encoding="utf-8").index("Middle(") and
+                            item["fragment"] == '\n'.join(nested.splitlines()[2:7])
+                            for item in calls), calls)
+
+        two = ('def build():\n    first = wrap(\n        value,\n'
+               '    )\n    second = wrap(\n        value,\n    )\n')
+        first.write_text(two, encoding="utf-8")
+        second.write_text(two, encoding="utf-8")
+        short_multiline = focused_scan(self.root)["exact"]
+        self.assertEqual(short_multiline["unitLines"][str(first)], [2])
+        self.assertFalse(short_multiline.get("duplicates", []), short_multiline)
 
     def test_real_wheel_renamed_respects_callable_identity_and_local_relations(self) -> None:
         first = self.root / "src/demo/first.py"

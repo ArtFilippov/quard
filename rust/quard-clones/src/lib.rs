@@ -140,6 +140,7 @@ struct SourceSession {
     prepared_similar: Vec<cpd_core::detect::PreparedSource>,
     prepared_renamed: Vec<cpd_core::detect::PreparedSource>,
     prepared_calls: Vec<cpd_core::detect::PreparedSource>,
+    prepared_exact_calls: Vec<cpd_core::detect::PreparedSource>,
     renamed_eligible_lines: HashMap<String, usize>,
     renamed_unit_lines: HashMap<String, Vec<usize>>,
     renamed_scanned_unit_lines: HashMap<String, Vec<usize>>,
@@ -190,6 +191,7 @@ impl SourceSession {
         let mut prepared_similar = Vec::new();
         let mut prepared_renamed = Vec::new();
         let mut prepared_calls = Vec::new();
+        let mut prepared_exact_calls = Vec::new();
         let mut renamed_eligible_lines = HashMap::new();
         let mut renamed_unit_lines = HashMap::new();
         let mut renamed_scanned_unit_lines = HashMap::new();
@@ -204,6 +206,7 @@ impl SourceSession {
         let mut exact_unit_lines = HashMap::new();
         let mut exact_scanned_unit_lines = HashMap::new();
         let mut exact_scannable = false;
+        let mut exact_symbols = HashMap::new();
         let fields = preparation::discover_fields(&sources)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         for (path, text) in sources {
@@ -212,7 +215,7 @@ impl SourceSession {
                     "unique absolute .py paths required",
                 ));
             }
-            let views = preparation::prepare(&text, &path, min_lines, &fields)
+            let views = preparation::prepare(&text, &path, min_lines, &fields, &mut exact_symbols)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
             renamed_eligible_lines.insert(
                 path.clone(),
@@ -258,8 +261,9 @@ impl SourceSession {
             exact_eligible_lines.insert(
                 path.clone(),
                 views
-                    .behavior
+                    .exact_behavior
                     .iter()
+                    .chain(&views.calls)
                     .chain(&views.schemas)
                     .map(|unit| unit.lines.len())
                     .sum(),
@@ -267,8 +271,9 @@ impl SourceSession {
             exact_unit_lines.insert(
                 path.clone(),
                 views
-                    .behavior
+                    .exact_behavior
                     .iter()
+                    .chain(&views.calls)
                     .chain(&views.schemas)
                     .map(|unit| unit.lines.len())
                     .collect(),
@@ -300,7 +305,9 @@ impl SourceSession {
                 if !schema {
                     scannable |= unit.lines.len() >= min_lines;
                 }
-                exact_scannable |= unit.lines.len() >= min_lines;
+                if schema {
+                    exact_scannable |= unit.lines.len() >= min_lines;
+                }
                 if let Some((display, detection)) =
                     preparer.prepare(id.clone(), String::new(), "python", &unit.text)
                 {
@@ -327,7 +334,7 @@ impl SourceSession {
                             loc.column = column as u32;
                             loc.offset = (offset + column) as u32;
                         }
-                        if !schema || !renamed {
+                        if schema && !renamed {
                             files[file_index].tokens.push(token);
                         }
                     }
@@ -337,13 +344,15 @@ impl SourceSession {
                             source
                         }));
                     }
-                    if !schema || !renamed {
+                    if schema && !renamed {
                         prepared.extend(detection);
                     }
-                    exact_scanned_unit_lines
-                        .get_mut(&path)
-                        .expect("discovered source")
-                        .push(unit.lines.len());
+                    if schema {
+                        exact_scanned_unit_lines
+                            .get_mut(&path)
+                            .expect("discovered source")
+                            .push(unit.lines.len());
+                    }
                     if !schema {
                         scanned_unit_lines
                             .get_mut(&path)
@@ -354,6 +363,66 @@ impl SourceSession {
                 } else if unit.lines.len() >= min_lines {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "eligible unit rejected by native preparation",
+                    ));
+                }
+            }
+            for (number, unit) in views.exact_behavior.into_iter().enumerate() {
+                exact_scannable |= unit.lines.len() >= min_lines;
+                let id = format!("{path}#quard-exact-unit-{number}");
+                let map = SourceMap {
+                    path: path.clone(),
+                    lines: unit.lines.clone(),
+                    columns: None,
+                    offsets: Arc::clone(&offsets),
+                    subtree: None,
+                    positions: unit.positions,
+                };
+                if let Some((display, mut detection)) =
+                    preparer.prepare(id.clone(), String::new(), "python", &unit.text)
+                {
+                    if display.len() != 1 || detection.len() != 1 {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                            "incomplete native exact preparation",
+                        ));
+                    }
+                    for mut token in display.into_iter().flat_map(|source| source.tokens) {
+                        for loc in [&mut token.start, &mut token.end] {
+                            let row = map
+                                .positions
+                                .as_ref()
+                                .unwrap()
+                                .get(loc.line as usize - 1)
+                                .ok_or_else(|| {
+                                    pyo3::exceptions::PyRuntimeError::new_err(
+                                        "unmapped exact display line",
+                                    )
+                                })?;
+                            let offset = *row
+                                .get((loc.column as usize).min(row.len() - 1))
+                                .ok_or_else(|| {
+                                    pyo3::exceptions::PyRuntimeError::new_err(
+                                        "unmapped exact display column",
+                                    )
+                                })?;
+                            let line = offsets.partition_point(|begin| *begin <= offset);
+                            loc.line = line as u32;
+                            loc.column = (offset - offsets[line - 1]) as u32;
+                            loc.offset = offset as u32;
+                        }
+                        if !renamed {
+                            files[file_index].tokens.push(token);
+                        }
+                    }
+                    anchor_whitespace_spans(&mut detection[0], &unit.text);
+                    prepared.append(&mut detection);
+                    exact_scanned_unit_lines
+                        .get_mut(&path)
+                        .expect("discovered source")
+                        .push(unit.lines.len());
+                    maps.insert(id, map);
+                } else if unit.lines.len() >= min_lines {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "eligible exact unit rejected by native preparation",
                     ));
                 }
             }
@@ -393,6 +462,36 @@ impl SourceSession {
             }
             for (number, unit) in views.calls.into_iter().enumerate() {
                 let id = format!("{path}#quard-call-{number}");
+                let exact_id = format!("{path}#quard-exact-call-{number}");
+                let (_, mut exact_detection) = preparer
+                    .prepare(exact_id.clone(), String::new(), "python", &unit.text)
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "native preparation rejected a complete exact call subtree",
+                        )
+                    })?;
+                if exact_detection.len() != 1 {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "incomplete native exact call preparation",
+                    ));
+                }
+                exact_scannable |= unit.lines.len() >= min_lines;
+                exact_scanned_unit_lines
+                    .get_mut(&path)
+                    .expect("discovered source")
+                    .push(unit.lines.len());
+                prepared_exact_calls.append(&mut exact_detection);
+                maps.insert(
+                    exact_id,
+                    SourceMap {
+                        path: path.clone(),
+                        lines: unit.lines.clone(),
+                        columns: None,
+                        offsets: Arc::clone(&offsets),
+                        subtree: unit.subtree,
+                        positions: None,
+                    },
+                );
                 let (_, mut detection) = normalized_preparer
                     .prepare(id.clone(), String::new(), "python", &unit.text)
                     .ok_or_else(|| {
@@ -428,6 +527,7 @@ impl SourceSession {
             prepared_similar,
             prepared_renamed,
             prepared_calls,
+            prepared_exact_calls,
             renamed_eligible_lines,
             renamed_unit_lines,
             renamed_scanned_unit_lines,
@@ -633,12 +733,52 @@ impl SourceSession {
             found.extend(nested);
             found
         } else {
-            detect_prepared(
+            let mut found = detect_prepared(
                 vec![source.clone()],
                 1,
                 self.min_lines.saturating_sub(1),
                 &PathFilters::default(),
-            )
+            );
+            if kind == KindFilter::Exact {
+                let mut by_tokens: HashMap<Vec<u64>, Vec<usize>> = HashMap::new();
+                for (index, call) in self.prepared_exact_calls.iter().enumerate() {
+                    by_tokens
+                        .entry(call.hashes.clone())
+                        .or_default()
+                        .push(index);
+                }
+                for group in by_tokens.into_values() {
+                    for (index, &first) in group.iter().enumerate() {
+                        for &second in &group[index + 1..] {
+                            let left = &self.maps[&self.prepared_exact_calls[first].id];
+                            let right = &self.maps[&self.prepared_exact_calls[second].id];
+                            if left.path == right.path {
+                                let (a, b) = left.subtree.expect("complete exact call");
+                                let (c, d) = right.subtree.expect("complete exact call");
+                                if b > c && d > a {
+                                    continue;
+                                }
+                            }
+                            found.extend(
+                                detect_prepared(
+                                    vec![vec![
+                                        self.prepared_exact_calls[first].clone(),
+                                        self.prepared_exact_calls[second].clone(),
+                                    ]],
+                                    1,
+                                    self.min_lines.saturating_sub(1),
+                                    &PathFilters::default(),
+                                )
+                                .into_iter()
+                                .filter(|clone| {
+                                    clone.fragment_a.source_id != clone.fragment_b.source_id
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+            found
         };
         // Detection has already applied the shared eligible-line minimum to
         // each constituent. Partition before native merging so only fragments

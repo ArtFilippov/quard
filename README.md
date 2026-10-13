@@ -309,8 +309,14 @@ columns, ranges and verbatim multiline fragments, never flattened declarations.
 Contract headers, decorators and documentation do not count, regardless of
 the length of the reported original range. Special `__dunder__` declarations
 are excluded; executable contract, property and special-method bodies remain
-behavioral. Declaration placeholders do not enter renamed/similar. Views with no qualifying
-unit are explicitly skipped with a reason.
+behavioral. Declaration placeholders do not enter renamed/similar. Exact behavior
+compares complete executable AST constructs: each assignment, return or control
+header counts once, even when it spans several physical lines. Three nested
+exact calls on distinct lines may form a separate complete-call candidate when
+their enclosing calls differ. Literal spellings remain exact; partial call
+suffixes, punctuation-only continuations and partial conditions cannot supply
+the minimum. Declaration-only exact units stay independent. Views with no
+qualifying unit are explicitly skipped with a reason.
 Rust reports retain
 original paths, positions and verbatim fragments, with source digests and
 per-unit accounting.

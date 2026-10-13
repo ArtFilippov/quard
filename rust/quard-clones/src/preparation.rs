@@ -18,9 +18,80 @@ pub struct Unit {
 
 pub struct Views {
     pub behavior: Vec<Unit>,
+    pub exact_behavior: Vec<Unit>,
     pub renamed_behavior: Vec<Unit>,
     pub schemas: Vec<Unit>,
     pub calls: Vec<Unit>,
+}
+
+// The exact detector receives one token per complete executable construct. A
+// physical continuation of an expression cannot supply another eligible line,
+// and a token match cannot start or end in the middle of a construct. The
+// interning table is shared across files in a session (see lib.rs).
+fn exact_constructs(
+    text: &str,
+    selection: &Selection,
+    symbols: &mut HashMap<String, usize>,
+) -> Vec<Unit> {
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let mut result = Vec::new();
+    for (kept, removed) in selection.keep.iter().zip(&selection.remove) {
+        let mut constructs = Vec::new();
+        for &(begin, end) in kept {
+            // A compound statement owns its header; nested statements own their
+            // own constructs. Do not count the whole compound a second time.
+            let first_child = kept
+                .iter()
+                .filter(|(start, finish)| *start > begin && *finish <= end)
+                .map(|(start, _)| *start)
+                .min()
+                .unwrap_or(end);
+            let finish = first_child.min(end);
+            if removed
+                .iter()
+                .any(|(start, stop)| *start <= begin && *stop >= finish)
+            {
+                continue;
+            }
+            let code = text[begin..finish].trim();
+            if !code.is_empty() {
+                constructs.push((begin, finish, code.to_owned()));
+            }
+        }
+        constructs.sort_unstable_by_key(|(begin, _, _)| *begin);
+        if constructs.is_empty() {
+            continue;
+        }
+        let mut lines = Vec::new();
+        let mut positions = Vec::new();
+        let mut source = String::new();
+        for (begin, end, code) in constructs {
+            let line = starts.partition_point(|start| *start <= begin);
+            let next = symbols.len();
+            let symbol = *symbols.entry(code).or_insert(next);
+            let row = format!("quardconstruct{symbol}");
+            // The preparer only uses this token's equality. Its start and end
+            // boundaries restore the original AST span, including continuations.
+            let mut offsets = vec![begin; row.len() + 1];
+            offsets[row.len()] = end;
+            source.push_str(&row);
+            source.push('\n');
+            offsets.push(end);
+            positions.push(offsets);
+            lines.push(line);
+        }
+        result.push(Unit {
+            text: source,
+            lines,
+            columns: None,
+            subtree: None,
+            identities: HashMap::new(),
+            positions: Some(positions),
+        });
+    }
+    result
 }
 
 #[derive(Default)]
@@ -1823,6 +1894,7 @@ pub fn prepare(
     path: &str,
     min_lines: usize,
     fields: &FieldIndex,
+    exact_symbols: &mut HashMap<String, usize>,
 ) -> Result<Views, String> {
     let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
     let mut identity = CallIdentities::new(path, fields);
@@ -1862,7 +1934,9 @@ pub fn prepare(
     if let Some(error) = selection.error.take() {
         return Err(format!("{path}: {error}"));
     }
+    let exact_behavior = exact_constructs(text, &selection, exact_symbols);
     Ok(Views {
+        exact_behavior,
         renamed_behavior: compact_units(
             text,
             path,
