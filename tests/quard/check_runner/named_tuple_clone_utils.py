@@ -124,9 +124,9 @@ def verify_named_tuple_schemas(test: unittest.TestCase, root: Path) -> None:
 
     # Compact declarations are excluded without invented field locations.
     for compact in (
-        "from typing import NamedTuple\n"
+        "from typing import NamedTuple\n" +
         "C = NamedTuple('C', [('one', int), ('two', str), ('three', bytes)])\n",
-        "from typing import NamedTuple\n"
+        "from typing import NamedTuple\n" +
         "class C(NamedTuple):\n    one: int; two: str; three: bytes\n",
     ):
         scans = scan(compact, compact.replace("C", "D"))
@@ -168,9 +168,14 @@ def verify_named_tuple_schemas(test: unittest.TestCase, root: Path) -> None:
     test.assertFalse(scans["exact"].get("duplicates"))
     test.assertFalse(scans["similar"].get("duplicates"))
     checked = report(root)
+    jobs = {job["name"]: job for job in checked["tools"]}
+    test.assertEqual(checked["exit_code"], 1)
     test.assertEqual(checked["summary"]["infrastructure_errors"], 0)
     for kind in ("exact", "renamed", "similar"):
         archived = prepared_native(test, root, checked, 3, kind)
         test.assertEqual(bool(archived["duplicates"]), kind == "renamed")
+    test.assertEqual([(jobs[name]["status"], jobs[name]["exit_code"]) for name in
+                      ("jscpd", "jscpd-renamed", "jscpd-similar")],
+                     [("passed", 0), ("violations", 1), ("passed", 0)])
     test.assertEqual({d["rule"] for d in checked["diagnostics"] if d["tool"] == "jscpd"},
                      {"RENAMED_CLONE"})
