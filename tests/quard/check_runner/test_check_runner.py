@@ -638,6 +638,64 @@ import collections
         verify_prepared_similar(self, self.root)
         verify_similar_boundaries(self, self.root)
 
+    def test_real_wheel_similar_ignores_comment_and_wrapping_only(self) -> None:
+        first = self.root / "src/demo/first.py"
+        second = self.root / "tests/second.py"
+        prefix = ("def calculate(value):\n    first = (\n        value + 17\n"
+                  "    )\n    second = first * 3\n    third = second - 4\n")
+        suffix = ("    fourth = (\n        value + 71\n    )\n"
+                  "    fifth = fourth * 8\n    return fifth - 6\n")
+        gap = "    extra = value + {}\n    another = value - {}\n"
+        first.write_text(prefix + gap.format(1, 1) + suffix, encoding="utf-8")
+        for label, changed in (
+            ("same", prefix + gap.format(2, 2) + suffix),
+            ("comment", prefix.replace("value + 17", "value + 17  # different") +
+             gap.format(2, 2) + suffix.replace("value + 71", "value + 71  # note")),
+            ("wrap", prefix.replace("value + 17\n    )", "value\n        + 17\n    )") +
+             gap.format(2, 2) + suffix.replace("value + 71", "value\n        + 71")),
+        ):
+            with self.subTest(label=label):
+                second.write_text(changed, encoding="utf-8")
+                scans = focused_scan(self.root)
+                self.assertEqual(scans["similar"]["unitSizes"][str(second)], [8])
+                self.assertTrue(any(item["kind"] == "similar" and item["method"] == "gap"
+                                    and item["unmatchedLines"] == [2, 2] and
+                                    item["matchedUnits"] == [6, 6]
+                                    for item in scans["similar"]["duplicates"]),
+                                scans["similar"]["duplicates"])
+                if label != "same":
+                    self.assertTrue(scans["exact"]["duplicates"])
+                    matched = next(item for item in scans["similar"]["duplicates"]
+                                   if item["unmatchedLines"] == [2, 2])
+                    evidence = matched["secondFile"]
+                    self.assertIn("value + 17  # different" if label == "comment" else
+                                  "value\n        + 17", changed[
+                                      evidence["startLoc"]["position"]:
+                                      evidence["endLoc"]["position"]])
+        # Exact and similar still distinguish changed code, identifiers and literals.
+        for change in ("value + 18", "other + 17", "value - 17", "value + 17.0"):
+            with self.subTest(change=change):
+                second.write_text(prefix.replace("value + 17", change) +
+                                  gap.format(2, 2) + suffix.replace("value + 71", "value + 72"),
+                                  encoding="utf-8")
+                scans = focused_scan(self.root)
+                self.assertFalse(scans["similar"]["duplicates"])
+        # A complete three-construct exact candidate cannot match changed code.
+        first.write_text("def calculate(value):\n    a = value + 17\n"
+                         "    b = a * 3\n    return b - 4\n", encoding="utf-8")
+        for old, new in (("value", "other"), ("17", "18"), ("+", "-")):
+            with self.subTest(old=old, new=new):
+                second.write_text(first.read_text(encoding="utf-8").replace(old, new),
+                                  encoding="utf-8")
+                self.assertFalse(focused_scan(self.root)["exact"]["duplicates"])
+        for old, new in (("'same'", '"same"'), ("17", "0x11")):
+            with self.subTest(old=old, new=new):
+                first.write_text("def calculate(value):\n    a = 'same' + 17\n"
+                                 "    b = a * 3\n    return b - 4\n", encoding="utf-8")
+                second.write_text(first.read_text(encoding="utf-8").replace(old, new),
+                                  encoding="utf-8")
+                self.assertFalse(focused_scan(self.root)["exact"]["duplicates"])
+
     def test_real_wheel_similar_counts_complete_constructs(self) -> None:
         first = self.root / "src/demo/first.py"
         second = self.root / "tests/second.py"

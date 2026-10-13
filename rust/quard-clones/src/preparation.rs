@@ -1,6 +1,6 @@
 //! Python syntax selection and reversible per-unit line maps.
 use rustpython_ast::{Constant, Expr, Ranged, Stmt, Visitor};
-use rustpython_parser::{ast, Parse};
+use rustpython_parser::{ast, lexer, Mode, Parse, Tok};
 use std::collections::{HashMap, HashSet};
 
 pub struct Unit {
@@ -27,12 +27,13 @@ pub struct Views {
 // The exact detector receives one token per complete executable construct. A
 // physical continuation of an expression cannot supply another eligible line,
 // and a token match cannot start or end in the middle of a construct. The
-// interning table is shared across files in a session (see lib.rs).
+// interning table is shared across files in a session (see lib.rs). Lexical
+// spelling retains exact identifiers and literals while ignoring source trivia.
 fn exact_constructs(
     text: &str,
     selection: &Selection,
-    symbols: &mut HashMap<String, usize>,
-) -> Vec<Unit> {
+    symbols: &mut HashMap<Vec<String>, usize>,
+) -> Result<Vec<Unit>, String> {
     let starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
@@ -57,20 +58,38 @@ fn exact_constructs(
             }
             let code = text[begin..finish].trim();
             if !code.is_empty() {
-                constructs.push((begin, finish, code.to_owned()));
+                constructs.push((begin, finish));
             }
         }
-        constructs.sort_unstable_by_key(|(begin, _, _)| *begin);
+        constructs.sort_unstable_by_key(|(begin, _)| *begin);
         if constructs.is_empty() {
             continue;
         }
         let mut lines = Vec::new();
         let mut positions = Vec::new();
         let mut source = String::new();
-        for (begin, end, code) in constructs {
+        for (begin, end) in constructs {
             let line = starts.partition_point(|start| *start <= begin);
+            let code = &text[begin..end];
+            let spelling: Vec<String> = lexer::lex(code, Mode::Module)
+                .map(|result| {
+                    let (token, range) = result.map_err(|error| format!("{error:?}"))?;
+                    if matches!(
+                        token,
+                        Tok::Newline | Tok::Indent | Tok::Dedent | Tok::EndOfFile
+                    ) {
+                        return Ok(None);
+                    }
+                    Ok(Some(
+                        code[usize::from(range.start())..usize::from(range.end())].to_owned(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .flatten()
+                .collect();
             let next = symbols.len();
-            let symbol = *symbols.entry(code).or_insert(next);
+            let symbol = *symbols.entry(spelling).or_insert(next);
             let row = format!("quardconstruct{symbol}");
             // The preparer only uses this token's equality. Its start and end
             // boundaries restore the original AST span, including continuations.
@@ -91,7 +110,7 @@ fn exact_constructs(
             positions: Some(positions),
         });
     }
-    result
+    Ok(result)
 }
 
 #[derive(Default)]
@@ -2197,7 +2216,7 @@ pub fn prepare(
     path: &str,
     min_lines: usize,
     fields: &FieldIndex,
-    exact_symbols: &mut HashMap<String, usize>,
+    exact_symbols: &mut HashMap<Vec<String>, usize>,
 ) -> Result<Views, String> {
     let suite = ast::Suite::parse(text, path).map_err(|error| format!("{path}: {error}"))?;
     let mut identity = CallIdentities::new(path, fields);
@@ -2240,7 +2259,8 @@ pub fn prepare(
     for stmt in &suite {
         renamed.statement(stmt);
     }
-    let exact_behavior = exact_constructs(text, &selection, exact_symbols);
+    let exact_behavior = exact_constructs(text, &selection, exact_symbols)
+        .map_err(|error| format!("{path}: {error}"))?;
     Ok(Views {
         exact_behavior,
         renamed_behavior: compact_units(
