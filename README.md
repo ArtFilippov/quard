@@ -258,6 +258,12 @@ Keyword labels and proven ordinary stored-field names also retain their
 repeated/distinct relationships when renamed. Field proof uses discovered class
 constructors, known receiver types and safe import/local aliases; property access
 and unproved attributes retain their spelling. Called method names remain significant.
+The renamed behavior view omits simple value bindings (including proven ordinary
+field reads) and simple returns. Empty conditionals, matches, loops and context
+managers are pruned recursively, even when their condition or context calls a
+function. Surviving control headers constrain comparisons but add no eligible line;
+call-containing assignments, operations, indexing, property and unknown attribute
+reads remain behavioral. Exact and similar retain their independent source views.
 
 Set `[duplication] min_lines = 3` in `.quard/config.toml` to choose one positive
 integer minimum for all three Python clone jobs. Fresh installs use 3; existing

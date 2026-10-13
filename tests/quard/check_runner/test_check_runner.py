@@ -100,6 +100,85 @@ class TestCheckRunner(unittest.TestCase):
             job = next(item for item in checked["tools"] if item["name"] == name)
             self.assertEqual((job["status"], job["exit_code"]), ("skipped", None))
 
+    def test_real_wheel_prunes_trivial_renamed_control_before_detection(self) -> None:
+        first = self.root / "src/demo/domain/api.py"
+        second = self.root / "tests/test_value.py"
+        pure = ("def work(value):\n"
+                "    left = value\n    if probe(value):\n"
+                "        middle = left\n    else:\n        middle = 4\n"
+                "    for item in value:\n        middle = item\n"
+                "    with context(value) as handle:\n        middle = handle\n"
+                "    match value:\n        case 1:\n            middle = 3\n"
+                "    return middle\n")
+        first.write_text(pure, encoding="utf-8")
+        second.write_text(pure, encoding="utf-8")
+        views = focused_scan(self.root)
+        self.assertFalse(views["renamed"].get("duplicates"))
+        self.assertEqual(views["renamed"]["eligibleLines"][str(first)], 0)
+        self.assertTrue(views["exact"]["duplicates"])
+
+        left = ("def work(value):\n    if probe(value):\n"
+                "        temp = value\n        result = build(value)\n"
+                "        item = result[0]\n        return item + 1\n")
+        right = left.replace("temp", "unused").replace("result", "output").replace(
+            "item", "element").replace("value", "source")
+        first.write_text(left, encoding="utf-8")
+        second.write_text(right, encoding="utf-8")
+        results = focused_scan(self.root)
+        self.assertTrue(results["renamed"]["duplicates"], results["renamed"])
+        self.assertEqual(results["renamed"]["eligibleLines"][str(first)], 3)
+        self.assertEqual(results["renamed"]["eligibleLines"][str(second)], 3)
+        self.assertTrue(any({entry["firstFile"]["startLoc"]["line"],
+                             entry["secondFile"]["startLoc"]["line"]} == {2}
+                            and entry["firstFile"]["endLoc"]["line"] == 6
+                            and entry["fragment"] == "\n".join(left.splitlines()[1:6])
+                            for entry in results["renamed"]["duplicates"]))
+        checked = prepared_report(self.root)
+        jobs = {job["name"]: job for job in checked["tools"]}
+        self.assertEqual(jobs["jscpd-renamed"]["status"], "violations")
+        self.assertEqual(jobs["jscpd-similar"]["status"], "passed")
+        self.assertFalse(any(d.get("is_infrastructure_error") for d in checked["diagnostics"]))
+
+        for skeleton in ("if probe(value):\n        alias = value\n",
+                         "while probe(value):\n        alias = value\n",
+                         "for alias in iterate(value):\n        alias = value\n",
+                         "with context(value) as alias:\n        alias = value\n",
+                         "match value:\n        case 1:\n            alias = value\n"):
+            with self.subTest(empty=skeleton):
+                source = ("def work(value):\n    first = build(value)\n    " + skeleton +
+                          "    second = first[0]\n    return value\n")
+                first.write_text(source, encoding="utf-8")
+                second.write_text(source.replace("value", "source"), encoding="utf-8")
+                view = focused_scan(self.root)["renamed"]
+                self.assertEqual(view["eligibleLines"][str(first)], 2)
+                self.assertFalse(view.get("duplicates"), view)
+
+        left = ("def work(value):\n    if probe(value):\n"
+                "        one = build(value)\n        two = one[0]\n"
+                "        return two + 1\n")
+        first.write_text(left, encoding="utf-8")
+        second.write_text(left.replace("if probe(value)", "while probe(value)")
+                          .replace("value", "source"), encoding="utf-8")
+        self.assertFalse(focused_scan(self.root)["renamed"].get("duplicates"))
+
+    def test_real_wheel_prunes_only_proven_field_bindings(self) -> None:
+        first = self.root / "src/demo/domain/api.py"
+        second = self.root / "tests/test_value.py"
+        source = ("class Holder:\n    def __init__(self, value):\n"
+                  "        self.field = value\n    @property\n"
+                  "    def property(self):\n        return self.field\n"
+                  "    def work(self, value):\n        local = self.field\n"
+                  "        other = self.property\n        unknown = self.unknown\n"
+                  "        total = value + 1\n        result = total[0]\n"
+                  "        return result * 2\n")
+        first.write_text(source, encoding="utf-8")
+        second.write_text(source, encoding="utf-8")
+        view = focused_scan(self.root)["renamed"]
+        # Constructor write and decorated property body keep their own units;
+        # the proven field extraction disappears from work.
+        self.assertEqual(view["unitLines"][str(first)], [1, 1, 5])
+        self.assertFalse(view.get("duplicates"))  # Identical copies are Type 1.
+
     def test_real_wheel_accepts_supported_python_syntax(self) -> None:
         syntax = ('type Alias[T] = list[T]\n'
                   'def identity[T](value: T) -> T:\n'
@@ -246,7 +325,8 @@ import collections
         verify_contract_properties(self, self.root)
 
     def _inspect_placeholder_source(self, source: str, eligible: int,
-                                    clone: bool, exact_eligible: int | None = None
+                                    clone: bool, exact_eligible: int | None = None,
+                                    renamed_eligible: int | None = None
                                     ) -> dict[str, dict[str, Any]]:
         first = self.root / "src/demo/first.py"
         second = self.root / "tests/second.py"
@@ -255,7 +335,9 @@ import collections
             path.write_text(source, encoding="utf-8")
         result = focused_scan(self.root)
         for kind, native in result.items():
-            count = exact_eligible if kind == "exact" and exact_eligible is not None else eligible
+            count = (exact_eligible if kind == "exact" and exact_eligible is not None else
+                     renamed_eligible if kind == "renamed" and renamed_eligible is not None else
+                     eligible)
             self.assertEqual(native["minimum"], 3)
             self.assertEqual(native["eligibleLines"][str(first)], count)
             self.assertEqual(native["unitLines"][str(first)], [count] if count else [])
@@ -287,11 +369,13 @@ import collections
                          f"    first = 1\n    {form}\n    second = first + 2\n"):
                 with self.subTest(form=form, material="two executable lines"):
                     self._inspect_placeholder_source(
-                        'def action():\n    """Shared documentation."""\n' + body, 2, False)
+                        'def action():\n    """Shared documentation."""\n' + body,
+                        2, False, renamed_eligible=1)
             with self.subTest(form=form, material="three executable lines"):
                 result = self._inspect_placeholder_source(
                     'def action():\n    first = 1\n    second = first + 2\n' +
-                    f"    {form}\n    third = second * 3\n", 3, True)
+                    f"    {form}\n    third = second * 3\n", 3, True,
+                    renamed_eligible=2)
                 native = result["exact"]
                 self.assertTrue(any(form in item["fragment"] and
                                     "third = second * 3" in item["fragment"]
@@ -314,7 +398,8 @@ import collections
             with self.subTest(wrapper=wrapper, material="real body"):
                 self._inspect_placeholder_source(
                     wrapper + "        first = 1\n        ...\n" +
-                    "        second = first + 2\n        third = second * 3\n", 3, True)
+                    "        second = first + 2\n        third = second * 3\n", 3, True,
+                    renamed_eligible=2)
 
         for form in PLACEHOLDERS:
             with self.subTest(form=form, material="one-line stub"):
@@ -328,7 +413,9 @@ import collections
             with self.subTest(real=real):
                 self._inspect_placeholder_source(
                     "def action():\n    first = 1\n    second = first + 2\n" +
-                    f"    {real}\n", 3, True)
+                    f"    {real}\n", 3, True,
+                    renamed_eligible=1 if real in ("return None", "return ...", "value = ...")
+                    else 2)
 
     def _verify_excluded_declarations(self) -> None:
         first = self.root / "src/demo/first.py"

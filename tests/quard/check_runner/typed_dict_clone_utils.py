@@ -73,7 +73,8 @@ def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
         for kind in ("renamed", "similar"):
             behavior = result[kind]
             test.assertEqual(behavior["eligibleLines"][str(first)],
-                               int("TD = object" in left or "value = 1" in left))
+                                int(kind == "similar" and
+                                    ("TD = object" in left or "value = 1" in left)))
         test.assertEqual(exact["minimum"], minimum)
         test.assertEqual(exact["sourcePaths"], [str(root / path) for path in (
             "src/demo/__init__.py", "src/demo/domain/api.py", "src/demo/first.py",

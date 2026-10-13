@@ -69,6 +69,7 @@ struct SourceMap {
     columns: Option<Vec<Vec<usize>>>,
     offsets: Arc<[usize]>,
     subtree: Option<(usize, usize)>,
+    positions: Option<Vec<Vec<usize>>>,
 }
 
 fn original_column(map: &SourceMap, line: usize, column: usize) -> PyResult<usize> {
@@ -294,6 +295,7 @@ impl SourceSession {
                     columns: unit.columns.clone(),
                     offsets: Arc::clone(&offsets),
                     subtree: unit.subtree,
+                    positions: unit.positions,
                 };
                 if !schema {
                     scannable |= unit.lines.len() >= min_lines;
@@ -380,6 +382,7 @@ impl SourceSession {
                             columns: None,
                             offsets: Arc::clone(&offsets),
                             subtree: None,
+                            positions: unit.positions,
                         },
                     );
                 } else if unit.lines.len() >= min_lines {
@@ -412,6 +415,7 @@ impl SourceSession {
                         columns: None,
                         offsets: Arc::clone(&offsets),
                         subtree: unit.subtree,
+                        positions: unit.positions,
                     },
                 );
             }
@@ -681,6 +685,21 @@ impl SourceSession {
                     continue;
                 }
                 for location in [&mut fragment.start, &mut fragment.end] {
+                    if let Some(positions) = &map.positions {
+                        let row = positions.get(location.line as usize - 1).ok_or_else(|| {
+                            pyo3::exceptions::PyRuntimeError::new_err("unmapped folded line")
+                        })?;
+                        let offset = *row
+                            .get((location.column as usize).min(row.len() - 1))
+                            .ok_or_else(|| {
+                                pyo3::exceptions::PyRuntimeError::new_err("unmapped folded column")
+                            })?;
+                        let line = map.offsets.partition_point(|begin| *begin <= offset);
+                        location.line = line as u32;
+                        location.column = (offset - map.offsets[line - 1]) as u32;
+                        location.offset = offset as u32;
+                        continue;
+                    }
                     let column =
                         original_column(map, location.line as usize, location.column as usize)?;
                     let line = *map.lines.get(location.line as usize - 1).ok_or_else(|| {

@@ -12,6 +12,8 @@ pub struct Unit {
     pub subtree: Option<(usize, usize)>,
     // Token starts in prepared text whose callable identity survives renaming.
     pub identities: HashMap<usize, String>,
+    // Prepared byte boundaries to original source offsets for folded control headers.
+    pub positions: Option<Vec<Vec<usize>>>,
 }
 
 pub struct Views {
@@ -703,6 +705,7 @@ impl Visitor for NestedCalls<'_> {
                             columns: None,
                             subtree: Some((chain[0].0, chain[0].1)),
                             identities: protected,
+                            positions: None,
                         });
                     }
                 }
@@ -990,6 +993,7 @@ impl Selection {
                 columns: Some(columns),
                 subtree: None,
                 identities: HashMap::new(),
+                positions: None,
             });
         }
     }
@@ -1220,6 +1224,7 @@ impl Selection {
             columns: Some(columns),
             subtree: None,
             identities: HashMap::new(),
+            positions: None,
         });
     }
 
@@ -1479,6 +1484,200 @@ impl Visitor for Selection {
     }
 }
 
+// Decide what survives before building the normalized native candidates. Headers
+// are comparison context for a surviving body, never behavioral lines on their own.
+struct RenamedSelection<'a> {
+    text: &'a str,
+    identities: &'a HashMap<usize, String>,
+    remove: Vec<(usize, usize)>,
+    headers: HashSet<usize>,
+    contexts: HashMap<usize, Vec<(usize, String)>>,
+}
+
+impl RenamedSelection<'_> {
+    fn value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(_) | Expr::Constant(_) => true,
+            Expr::Attribute(attr) => {
+                let end: usize = attr.range.end().into();
+                self.value(&attr.value)
+                    && self
+                        .identities
+                        .get(&(end - attr.attr.len()))
+                        .is_some_and(|role| role.starts_with("field:"))
+            }
+            Expr::Tuple(items) => items.elts.iter().all(|item| self.value(item)),
+            Expr::List(items) => items.elts.iter().all(|item| self.value(item)),
+            Expr::Set(items) => items.elts.iter().all(|item| self.value(item)),
+            Expr::Dict(items) => items.keys.iter().zip(&items.values).all(|(key, value)| {
+                key.as_ref().is_some_and(|key| self.value(key)) && self.value(value)
+            }),
+            _ => false,
+        }
+    }
+
+    fn binding(expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(_) => true,
+            Expr::Tuple(items) => items.elts.iter().all(Self::binding),
+            Expr::List(items) => items.elts.iter().all(Self::binding),
+            Expr::Starred(item) => Self::binding(&item.value),
+            _ => false,
+        }
+    }
+
+    fn body(&mut self, body: &[Stmt]) -> bool {
+        let mut surviving = false;
+        for stmt in body {
+            surviving |= self.statement(stmt);
+        }
+        surviving
+    }
+
+    fn control(&mut self, stmt: &Stmt, bodies: &[&[Stmt]]) -> bool {
+        // Do not short-circuit: every branch must be pruned before selection.
+        let mut surviving = false;
+        for body in bodies {
+            surviving |= self.body(body);
+        }
+        let range = stmt.range();
+        let start: usize = range.start().into();
+        let end: usize = range.end().into();
+        let mut children: Vec<(usize, usize)> = bodies
+            .iter()
+            .flat_map(|body| body.iter())
+            .map(|child| (child.range().start().into(), child.range().end().into()))
+            .collect();
+        children.sort_unstable();
+        if surviving {
+            let mut cursor = self.text[..start].rfind('\n').map_or(0, |i| i + 1);
+            while cursor < end {
+                let finish = self.text[cursor..]
+                    .find('\n')
+                    .map_or(self.text.len(), |i| cursor + i);
+                let row = &self.text[cursor..finish];
+                let header = row.split('#').next().unwrap_or("").trim_end();
+                if header.ends_with(':')
+                    && !children.iter().any(|(begin, finish)| {
+                        *begin < cursor + row.len()
+                            && *finish > cursor
+                            && self.text[..*begin].rfind('\n') == self.text[..cursor].rfind('\n')
+                    })
+                {
+                    self.headers.insert(cursor);
+                }
+                cursor = finish + 1;
+            }
+            let header = self
+                .headers
+                .iter()
+                .filter(|row| **row >= start && **row < end)
+                .min()
+                .copied()
+                .unwrap_or(start);
+            let marker = self.text[header..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches(':')
+                .to_owned();
+            let mut row = self.text[..start].rfind('\n').map_or(0, |i| i + 1);
+            while row < end {
+                if row > header {
+                    self.contexts
+                        .entry(row)
+                        .or_default()
+                        .push((header, marker.clone()));
+                }
+                row = self.text[row..]
+                    .find('\n')
+                    .map_or(self.text.len(), |i| row + i + 1);
+            }
+        } else {
+            // Mask syntax around children, not a nested definition's independent
+            // unit. Its own body can still contain behavioral statements.
+            let mut cursor = start;
+            for (begin, finish) in children {
+                if begin > cursor {
+                    self.remove.push((cursor, begin));
+                }
+                cursor = cursor.max(finish);
+            }
+            if cursor < end {
+                self.remove.push((cursor, end));
+            }
+        }
+        surviving
+    }
+
+    fn statement(&mut self, stmt: &Stmt) -> bool {
+        let simple = match stmt {
+            Stmt::Assign(def) => def.targets.iter().all(Self::binding) && self.value(&def.value),
+            Stmt::AnnAssign(def) => {
+                Self::binding(&def.target)
+                    && def.value.as_ref().is_none_or(|value| self.value(value))
+            }
+            Stmt::Return(def) => def.value.as_ref().is_none_or(|value| self.value(value)),
+            Stmt::Expr(def) => matches!(def.value.as_ref(), Expr::Constant(value)
+                if matches!(value.value, Constant::Str(_) | Constant::Ellipsis)),
+            Stmt::Pass(_) => true,
+            Stmt::FunctionDef(def) => {
+                self.body(&def.body);
+                return false;
+            }
+            Stmt::AsyncFunctionDef(def) => {
+                self.body(&def.body);
+                return false;
+            }
+            Stmt::ClassDef(def) => {
+                self.body(&def.body);
+                return false;
+            }
+            Stmt::If(def) => return self.control(stmt, &[&def.body, &def.orelse]),
+            Stmt::For(def) => return self.control(stmt, &[&def.body, &def.orelse]),
+            Stmt::AsyncFor(def) => return self.control(stmt, &[&def.body, &def.orelse]),
+            Stmt::While(def) => return self.control(stmt, &[&def.body, &def.orelse]),
+            Stmt::With(def) => return self.control(stmt, &[&def.body]),
+            Stmt::AsyncWith(def) => return self.control(stmt, &[&def.body]),
+            Stmt::Match(def) => {
+                let bodies: Vec<&[Stmt]> =
+                    def.cases.iter().map(|case| case.body.as_slice()).collect();
+                return self.control(stmt, &bodies);
+            }
+            Stmt::Try(def) => {
+                let mut bodies = vec![
+                    def.body.as_slice(),
+                    def.orelse.as_slice(),
+                    def.finalbody.as_slice(),
+                ];
+                for handler in &def.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    bodies.push(&handler.body);
+                }
+                return self.control(stmt, &bodies);
+            }
+            Stmt::TryStar(def) => {
+                let mut bodies = vec![
+                    def.body.as_slice(),
+                    def.orelse.as_slice(),
+                    def.finalbody.as_slice(),
+                ];
+                for handler in &def.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    bodies.push(&handler.body);
+                }
+                return self.control(stmt, &bodies);
+            }
+            _ => false,
+        };
+        if simple {
+            let range = stmt.range();
+            self.remove.push((range.start().into(), range.end().into()));
+        }
+        !simple
+    }
+}
+
 fn compact_units(
     text: &str,
     path: &str,
@@ -1487,6 +1686,8 @@ fn compact_units(
     normalized: bool,
     extra_remove: &[(usize, usize)],
     identities: &HashMap<usize, String>,
+    headers: &HashSet<usize>,
+    contexts: &HashMap<usize, Vec<(usize, String)>>,
 ) -> Result<Vec<Unit>, String> {
     let mut result = Vec::new();
     let mut anchors: Vec<_> = identities.iter().collect();
@@ -1507,6 +1708,8 @@ fn compact_units(
         let mut lines = Vec::new();
         let mut compact = String::new();
         let mut protected = HashMap::new();
+        let mut positions = Vec::new();
+        let mut pending = Vec::new();
         for (index, start) in starts.iter().enumerate() {
             let end = starts.get(index + 1).copied().unwrap_or(text.len());
             let slice = &bytes[*start..end];
@@ -1524,6 +1727,60 @@ fn compact_units(
                 }
             }
             if slice.iter().any(|b| !b.is_ascii_whitespace()) {
+                if normalized && headers.contains(start) {
+                    pending.extend((*start..end).filter(|offset| bytes[*offset] != b'\n'));
+                    continue;
+                }
+                let mut row = Vec::new();
+                if normalized {
+                    if let Some(context) = contexts.get(start) {
+                        let mut context = context.clone();
+                        context.sort_unstable_by_key(|(offset, _)| *offset);
+                        for (offset, marker) in &context {
+                            let token = "quardcontext";
+                            protected.insert(compact.len(), format!("control:{marker}"));
+                            compact.push_str(token);
+                            row.extend(std::iter::repeat_n(*offset, token.len()));
+                            compact.push(' ');
+                            row.push(*offset);
+                        }
+                    }
+                }
+                if normalized && !pending.is_empty() {
+                    let prefix: Vec<u8> = pending.iter().map(|offset| bytes[*offset]).collect();
+                    for (index, offset) in pending.iter().enumerate() {
+                        if headers.contains(offset) {
+                            let keyword_start = prefix[index..]
+                                .iter()
+                                .position(|byte| !byte.is_ascii_whitespace())
+                                .map(|shift| index + shift);
+                            if let Some(begin) = keyword_start {
+                                let end = begin
+                                    + prefix[begin..]
+                                        .iter()
+                                        .take_while(|byte| byte.is_ascii_alphabetic())
+                                        .count();
+                                if end > begin {
+                                    protected.insert(
+                                        compact.len() + begin,
+                                        format!(
+                                            "control:{}",
+                                            String::from_utf8_lossy(&prefix[begin..end])
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    compact.push_str(
+                        std::str::from_utf8(&prefix).map_err(|_| {
+                            format!("{path}: folded header split a Unicode character")
+                        })?,
+                    );
+                    row.append(&mut pending);
+                    compact.push(' ');
+                    row.push(*start);
+                }
                 if normalized {
                     let first = anchors.partition_point(|(offset, _)| **offset < *start);
                     for (&offset, identity) in &anchors[first..] {
@@ -1539,6 +1796,11 @@ fn compact_units(
                     .map_err(|_| format!("{path}: masked syntax split a Unicode character"))?;
                 compact.push_str(masked.trim_end_matches('\n'));
                 compact.push('\n');
+                if normalized {
+                    row.extend((*start..end).filter(|offset| bytes[*offset] != b'\n'));
+                    row.push(end.saturating_sub(1));
+                    positions.push(row);
+                }
                 lines.push(index + 1);
             }
         }
@@ -1549,6 +1811,7 @@ fn compact_units(
                 columns: None,
                 subtree: None,
                 identities: protected,
+                positions: normalized.then_some(positions),
             });
         }
     }
@@ -1582,13 +1845,23 @@ pub fn prepare(
         text: text.to_owned(),
         ..Selection::default()
     };
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let mut renamed = RenamedSelection {
+        text,
+        identities: &identity.tokens,
+        remove: Vec::new(),
+        headers: HashSet::new(),
+        contexts: HashMap::new(),
+    };
+    for stmt in &suite {
+        renamed.statement(stmt);
+    }
     selection.suite(suite);
     if let Some(error) = selection.error.take() {
         return Err(format!("{path}: {error}"));
     }
-    let starts: Vec<usize> = std::iter::once(0)
-        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-        .collect();
     Ok(Views {
         renamed_behavior: compact_units(
             text,
@@ -1600,8 +1873,14 @@ pub fn prepare(
                 .cloned()
                 .zip(selection.remove.iter().cloned()),
             true,
-            &calls.literal_continuations,
+            &[
+                calls.literal_continuations.as_slice(),
+                renamed.remove.as_slice(),
+            ]
+            .concat(),
             &identity.tokens,
+            &renamed.headers,
+            &renamed.contexts,
         )?,
         behavior: compact_units(
             text,
@@ -1611,6 +1890,8 @@ pub fn prepare(
             false,
             &[],
             &identity.tokens,
+            &HashSet::new(),
+            &HashMap::new(),
         )?,
         schemas: compact_units(
             text,
@@ -1620,6 +1901,8 @@ pub fn prepare(
             false,
             &[],
             &identity.tokens,
+            &HashSet::new(),
+            &HashMap::new(),
         )?
         .into_iter()
         .chain(selection.canonical_schemas)

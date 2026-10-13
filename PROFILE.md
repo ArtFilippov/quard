@@ -63,10 +63,19 @@ violations baseline.
    relationships in each unit. Constructor assignments in discovered classes,
    typed receivers, proven constructions and simple aliases establish fields;
    known properties, unknown attributes and called methods keep their names.
+   Simple value bindings and returns are removed before renamed detection,
+   including bindings from proven ordinary fields. Control structures with no
+   surviving body are removed recursively; conditions and context expressions
+   alone cannot supply a unit. Surviving control headers are folded into their
+   body lines as comparison context without increasing the prepared line count.
+   Calls, operations, indexing, properties and unproved attribute reads survive;
+   original source positions and fragments are restored from the prepared map.
+   Exact and similar use their own unaffected behavior view.
    Ordinary standalone `pass`, `...` and bare or literal-argument
    `raise NotImplementedError` do not count in this shared behavior view,
    including when a stub has a docstring. Other real statements (including
-   `return None`) do count. The exact Rust view additionally includes consecutive
+   `return None`) count in exact/similar; renamed excludes simple returns. The
+   exact Rust view additionally includes consecutive
    class-based and supported functional `typing`/`typing_extensions.TypedDict`
    fields, with a separate unit per uninterrupted run in each schema. Functional
    dictionary or keyword fields must each occupy a distinct original line, with

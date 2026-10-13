@@ -201,12 +201,12 @@ def verify_contract_exclusions_and_bodies(
     real = (prefix + "class First(Port):\n" +
             "    def __len__(self) -> int:\n" +
             "        one = 1\n        two = one + 2\n" +
-            "        three = two * 3\n        return three\n")
+            "        three = two * 3\n        four = three - 4\n        return four\n")
     first.write_text(real, encoding="utf-8")
     second.write_text(real.replace("First", "Second"), encoding="utf-8")
     scans = focused_scan(root)
     test.assertTrue(scans["exact"]["duplicates"])
-    test.assertFalse(scans["renamed"]["duplicates"])
+    test.assertFalse(scans["renamed"].get("duplicates"))
     test.assertFalse(scans["similar"]["duplicates"])
     test.assertTrue(any(d["firstFile"]["start"] >= 3
                         for d in scans["exact"]["duplicates"]))
@@ -395,17 +395,19 @@ def verify_property_behavior(test: unittest.TestCase, root: Path, prefix: str) -
         "min_lines = 7", "min_lines = 3"), encoding="utf-8")
     real = (prefix + "class First(Protocol):\n    @property\n" +
             "    def value(self) -> str:\n        a = 'x'\n        b = a + 'y'\n" +
-            "        return b\n    def __len__(self) -> int:\n" +
-            "        a = 1\n        b = a + 2\n        return b\n")
+            "        c = b + 'z'\n        d = c + 'q'\n        return d\n    def __len__(self) -> int:\n" +
+            "        a = 1\n        b = a + 2\n        c = b * 3\n        return c\n")
     first.write_text(real, encoding="utf-8")
     second.write_text(real.replace("First", "Second"), encoding="utf-8")
     behavioral = focused_scan(root)
     test.assertTrue(behavioral["exact"]["duplicates"])
-    test.assertFalse(behavioral["renamed"]["duplicates"])
+    test.assertFalse(behavioral["renamed"].get("duplicates"))
     test.assertFalse(behavioral["similar"]["duplicates"])
     second.write_text(real.replace("First", "Second").replace("a = 'x'", "first = 'x'")
                       .replace("b = a + 'y'", "second = first + 'y'")
-                      .replace("return b\n    def", "return second\n    def"), encoding="utf-8")
+                      .replace("c = b + 'z'", "third = second + 'z'")
+                      .replace("d = c + 'q'", "fourth = third + 'q'")
+                      .replace("return d\n    def", "return fourth\n    def"), encoding="utf-8")
     test.assertTrue(focused_scan(root)["renamed"]["duplicates"])
 
     # One contract can have both declaration-only and implemented accessors.
