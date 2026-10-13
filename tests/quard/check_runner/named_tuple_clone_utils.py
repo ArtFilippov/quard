@@ -40,8 +40,8 @@ def verify_named_tuple_schemas(test: unittest.TestCase, root: Path) -> None:
     result = scan(plain, right)
     native = result["exact"]
     test.assertTrue(native["duplicates"], native)
-    test.assertEqual(native["eligibleLines"][str(first)], 4)
-    test.assertEqual(native["eligibleLines"][str(second)], 3)
+    test.assertEqual(native["eligibleUnits"][str(first)], 4)
+    test.assertEqual(native["eligibleUnits"][str(second)], 3)
     test.assertTrue(any(item["firstFile"]["start"] == 4 and
                         item["firstFile"]["startLoc"]["position"] ==
                         plain.index("one: int") and
@@ -119,8 +119,8 @@ def verify_named_tuple_schemas(test: unittest.TestCase, root: Path) -> None:
                         for item in scans["exact"]["duplicates"]))
     surrounding = "before = make(1)\n" + plain + "after = make(2)\nlater = make(3)\n"
     scans = scan(surrounding, surrounding.replace("Alpha", "Gamma"))
-    test.assertGreaterEqual(scans["similar"]["eligibleLines"][str(first)], 3)
-    test.assertGreaterEqual(scans["renamed"]["eligibleLines"][str(first)], 3)
+    test.assertGreaterEqual(scans["similar"]["eligibleUnits"][str(first)], 3)
+    test.assertGreaterEqual(scans["renamed"]["eligibleUnits"][str(first)], 3)
 
     # Compact declarations are excluded without invented field locations.
     for compact in (
@@ -155,8 +155,8 @@ def verify_named_tuple_schemas(test: unittest.TestCase, root: Path) -> None:
     scans = scan(provenance, context)
     for kind in ("exact", "renamed", "similar"):
         test.assertFalse(scans[kind].get("duplicates"), scans[kind])
-    test.assertEqual(scans["renamed"]["eligibleLines"][str(first)], 0)
-    test.assertEqual(scans["similar"]["eligibleLines"][str(second)], 0)
+    test.assertEqual(scans["renamed"]["eligibleUnits"][str(first)], 0)
+    test.assertEqual(scans["similar"]["eligibleUnits"][str(second)], 0)
 
     # The same batch must still detect actual executable renamed behavior.
     behavior = ("def work(value):\n    first = make(value)\n"

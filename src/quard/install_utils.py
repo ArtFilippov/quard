@@ -117,6 +117,22 @@ def migrate_settings(root: Path, tool: Path) -> None:
                     _ = validate_checks(data)
                 document[section] = tomlkit.parse(old.read_text(encoding="utf-8"))
         atomic_write(destination, tomlkit.dumps(document), root)
+    # Only installation upgrades the old public name. Never silently choose between
+    # two configured values, even when their numbers happen to agree.
+    existing_duplication = load_toml(destination).get("duplication", {})
+    if isinstance(existing_duplication, dict) and "min_lines" in existing_duplication:
+        if set(existing_duplication) - {"min_lines"}:
+            raise QuardError("INVALID_DUPLICATION",
+                             "[duplication] min_lines cannot be combined with min_units or other keys.")
+        minimum = existing_duplication["min_lines"]
+        if type(minimum) is not int or minimum < 1:
+            raise QuardError("INVALID_DUPLICATION",
+                             "[duplication] min_lines must be a positive integer to migrate.")
+        document = tomlkit.parse(destination.read_text(encoding="utf-8"))
+        duplication = cast(Any, document["duplication"])
+        duplication["min_units"] = minimum
+        del duplication["min_lines"]
+        atomic_write(destination, tomlkit.dumps(document), root)
     validate_settings(root)
     # Upgrade old unified and legacy configurations without replacing explicit choices.
     document = tomlkit.parse(destination.read_text(encoding="utf-8"))

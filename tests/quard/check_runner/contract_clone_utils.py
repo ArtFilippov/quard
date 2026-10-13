@@ -33,7 +33,7 @@ def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
 
     def inspect(left: str, right: str, minimum: int = 3) -> dict[str, Any]:
         config = root / ".quard/config.toml"
-        config.write_text(re.sub(r"(?m)^min_lines = \d+$", f"min_lines = {minimum}",
+        config.write_text(re.sub(r"(?m)^min_units = \d+$", f"min_units = {minimum}",
                                  config.read_text(encoding="utf-8")), encoding="utf-8")
         first.write_text(left, encoding="utf-8")
         second.write_text(right, encoding="utf-8")
@@ -46,8 +46,8 @@ def verify_contract_methods(test: unittest.TestCase, root: Path) -> None:
     right = prefix + "class Second(Port):\n" + methods
     native = inspect(left, right)
     test.assertTrue(native["duplicates"])
-    test.assertEqual(native["eligibleLines"][str(first)], 6)
-    test.assertEqual(native["unitLines"][str(first)], [6])
+    test.assertEqual(native["eligibleUnits"][str(first)], 6)
+    test.assertEqual(native["unitSizes"][str(first)], [6])
     test.assertEqual(set(native["sourcePaths"]),
                      {str(root / p) for p in ("src/demo/__init__.py",
                                               "src/demo/domain/api.py", "src/demo/first.py",
@@ -134,7 +134,7 @@ def verify_multiline_methods(test: unittest.TestCase, root: Path, inspect: Inspe
               "    def gamma(self) -> None: raise NotImplementedError\n")
     native = inspect(prefix + "class First(Port):\n" + inline,
                      prefix + "class Second(Port):\n" + inline, 3)
-    test.assertEqual(native["unitLines"][str(first)], [3])
+    test.assertEqual(native["unitSizes"][str(first)], [3])
     test.assertTrue(native["duplicates"])
     test.assertTrue(any(d["fragment"] == inline.rstrip("\n") and
                         d["firstFile"]["start"] == 3 and
@@ -146,7 +146,7 @@ def verify_multiline_methods(test: unittest.TestCase, root: Path, inspect: Inspe
     native = inspect(prefix + "class First(Port):\n" + multiline,
                      prefix + "class Second(Port):\n" + multiline, 6)
     test.assertTrue(native["duplicates"])
-    test.assertEqual(native["unitLines"][str(first)], [7])
+    test.assertEqual(native["unitSizes"][str(first)], [7])
     test.assertTrue(any("\n        self, value: int,\n" in d["fragment"] and
                         "async def beta" in d["fragment"] for d in native["duplicates"]), native)
     long_signature = ("    def alpha(\n        self,\n        value: int,\n"
@@ -234,7 +234,7 @@ def inspect_property_declarations(test: unittest.TestCase, root: Path, left: str
     first = root / "src/demo/first.py"
     second = root / "tests/second.py"
     config = root / ".quard/config.toml"
-    config.write_text(re.sub(r"(?m)^min_lines = \d+$", f"min_lines = {minimum}",
+    config.write_text(re.sub(r"(?m)^min_units = \d+$", f"min_units = {minimum}",
                               config.read_text(encoding="utf-8")), encoding="utf-8")
     first.write_text(left, encoding="utf-8")
     second.write_text(right, encoding="utf-8")
@@ -255,7 +255,7 @@ def verify_contract_properties(test: unittest.TestCase, root: Path) -> None:
     (root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
     config = root / ".quard/config.toml"
     config.write_text(config.read_text(encoding="utf-8").replace(
-        "min_lines = 3", "min_lines = 7"), encoding="utf-8")
+        "min_units = 3", "min_units = 7"), encoding="utf-8")
     prefix = "from typing import Protocol\n"
     declarations = ("    @property\n    def value(\n        self,\n    ) -> str:\n        ...\n"
                     "    @value.setter\n    def value(\n        self, item: str,\n"
@@ -268,7 +268,7 @@ def verify_contract_properties(test: unittest.TestCase, root: Path) -> None:
     right = prefix + "class Second(Protocol):\n" + declarations
     native = inspect(left, right)
     test.assertTrue(native["duplicates"])
-    test.assertEqual(native["unitLines"][str(first)], [10])
+    test.assertEqual(native["unitSizes"][str(first)], [10])
     test.assertTrue(any(d["firstFile"]["startLoc"]["position"] ==
                         left.index("def value") and d["firstFile"]["endLoc"]["position"] ==
                         left.index("raise NotImplementedError") +
@@ -392,7 +392,7 @@ def verify_property_behavior(test: unittest.TestCase, root: Path, prefix: str) -
     first = root / "src/demo/first.py"
     second = root / "tests/second.py"
     config.write_text(config.read_text(encoding="utf-8").replace(
-        "min_lines = 7", "min_lines = 3"), encoding="utf-8")
+        "min_units = 7", "min_units = 3"), encoding="utf-8")
     real = (prefix + "class First(Protocol):\n    @property\n" +
             "    def value(self) -> str:\n        a = 'x'\n        b = a + 'y'\n" +
             "        c = b + 'z'\n        d = c + 'q'\n        return d\n    def __len__(self) -> int:\n" +
@@ -421,6 +421,6 @@ def verify_property_behavior(test: unittest.TestCase, root: Path, prefix: str) -
     second.write_text(mixed.replace("First", "Second"), encoding="utf-8")
     payload = focused_scan(root)["exact"]
     test.assertTrue(payload["duplicates"])
-    test.assertEqual(payload["unitLines"][str(first)], [3, 4])
+    test.assertEqual(payload["unitSizes"][str(first)], [3, 4])
     test.assertTrue(any("first = item + 'a'" in d["fragment"] for d in payload["duplicates"]))
     test.assertTrue(any("@value.deleter" in d["fragment"] for d in payload["duplicates"]))

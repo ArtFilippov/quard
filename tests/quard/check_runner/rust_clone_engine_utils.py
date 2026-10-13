@@ -23,7 +23,7 @@ from offline_fixtures import fake_tools
 from quard._common import capture, read_json
 from quard.check_runner.native_check_runner import NativeCheckRunner
 from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
-from quard.duplication_utils import read_duplication_min_lines
+from quard.duplication_utils import read_duplication_min_units
 from quard.report_utils import normalize
 
 QUARD = Path(__file__).resolve().parents[3]
@@ -137,7 +137,7 @@ def focused_scan(root: Path) -> dict[str, dict[str, Any]]:
                    for path in scope[profile] if path.endswith(".py"))
     sources = [(str(root / path), (root / path).read_text(encoding="utf-8"))
                for path in paths]
-    minimum = read_duplication_min_lines(root)
+    minimum = read_duplication_min_units(root)
     session = native_wheel().SourceSession(sources, minimum)
     if session.source_count() != len(sources):
         raise AssertionError("Native wheel did not scan the complete discovered scope")
@@ -157,9 +157,9 @@ def focused_scan(root: Path) -> dict[str, dict[str, Any]]:
                    else session.similar_scannable())
         payload: dict[str, Any] = (json.loads(getattr(session, kind)())
                                    if scannable else {"skipped": True})
-        payload.update({"minimum": minimum, "sourcePaths": [path for path, _ in sources],
-                        "eligibleLines": eligible, "unitLines": units,
-                        "scannedUnitLines": scanned})
+        payload.update({"minimumUnits": minimum, "sourcePaths": [path for path, _ in sources],
+                        "eligibleUnits": eligible, "unitSizes": units,
+                        "scannedUnitSizes": scanned})
         results[kind] = payload
     return results
 
@@ -234,11 +234,18 @@ def prepared_native(test: unittest.TestCase, root: Path, result: dict[str, Any],
     job = next(item for item in result["tools"] if item["name"] == name)
     native = read_json(root / job["raw_output"]["native_json"])
     manifest = read_json((root / result["report_path"]).parent / "clone-engine-files.json")
-    test.assertEqual(manifest["min_lines"], minimum)
+    test.assertEqual(manifest["min_units"], minimum)
     test.assertEqual(native["sourcePaths"], [str(root / path) for path in manifest["paths"]])
     test.assertEqual(native["statistics"]["total"]["sources"], len(manifest["paths"]))
     test.assertEqual(native["statistics"]["total"]["clones"], len(native["duplicates"]))
     test.assertEqual(job["exit_code"], int(bool(native["duplicates"])))
+    test.assertEqual(native["pass"], kind)
+    test.assertEqual(native["minimumUnits"], minimum)
+    for path in native["sourcePaths"]:
+        test.assertEqual(native["eligibleUnits"][path], sum(native["unitSizes"][path]))
+        test.assertEqual(native["unitCount"][path], len(native["unitSizes"][path]))
+        test.assertEqual(native["scannedUnitCount"][path],
+                         len(native["scannedUnitSizes"][path]))
     return native
 
 
@@ -265,7 +272,7 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
                               bottom + "    return adjusted\n",
                               encoding="utf-8")
             native = focused_scan(root)["similar"]
-            test.assertEqual(native["minimum"], 3)
+            test.assertEqual(native["minimumUnits"], 3)
             scope = ConfiguredConsumerPolicy(root).files()
             test.assertEqual(native["sourcePaths"], [str(root / path) for path in
                              sorted(path for profile in ("production", "tests")
@@ -291,14 +298,14 @@ def verify_prepared_similar(test: unittest.TestCase, root: Path) -> None:
                         for item in native["duplicates"]), native["duplicates"])
     setting = root / ".quard/config.toml"
     setting.write_text(setting.read_text(encoding="utf-8").replace(
-        "min_lines = 3", "min_lines = 6"), encoding="utf-8")
+        "min_units = 3", "min_units = 6"), encoding="utf-8")
     second.write_text("def calculate(value):\n" + top + "    inserted = 91\n" +
                       bottom + "    return adjusted\n", encoding="utf-8")
     insufficient = focused_scan(root)["similar"]
-    test.assertEqual(insufficient["minimum"], 6)
+    test.assertEqual(insufficient["minimumUnits"], 6)
     test.assertFalse(insufficient["duplicates"])
     setting.write_text(setting.read_text(encoding="utf-8").replace(
-        "min_lines = 6", "min_lines = 3"), encoding="utf-8")
+        "min_units = 6", "min_units = 3"), encoding="utf-8")
     second.unlink()
     first.write_text("def unique(value):\n    return value + 53\n", encoding="utf-8")
     clean = focused_scan(root)["similar"]
@@ -361,8 +368,8 @@ def verify_similar_boundaries(test: unittest.TestCase, root: Path) -> None:
             if "skipped" not in native:
                 test.assertFalse(native["duplicates"])
                 if label == "short_mixed":
-                    test.assertEqual(native["scannedUnitLines"][str(first)], [])
-                    test.assertEqual(native["scannedUnitLines"][str(second)], [])
+                    test.assertEqual(native["scannedUnitSizes"][str(first)], [])
+                    test.assertEqual(native["scannedUnitSizes"][str(second)], [])
             else:
                 test.assertEqual(label, "short_mixed")
     # Same-file fragments belong to distinct functions even if the other side
@@ -463,7 +470,7 @@ def verify_prepared_scope(test: unittest.TestCase, root: Path) -> None:
     """
     setting = root / ".quard/config.toml"
     setting.write_text(setting.read_text(encoding="utf-8").replace(
-        "min_lines = 3", "min_lines = 5"), encoding="utf-8")
+        "min_units = 3", "min_units = 5"), encoding="utf-8")
     (root / "src/demo/first.py").write_text(SAMPLE, encoding="utf-8")
     (root / "tests/second.py").write_text(SAMPLE, encoding="utf-8")
     (root / "src/demo/companion.pyi").write_text(SAMPLE, encoding="utf-8")
@@ -538,7 +545,7 @@ def verify_missing_wheel(test: unittest.TestCase, root: Path) -> None:
     (root / "src/demo/first.py").write_text("one = 1\ntwo = one + 2\nthree = two * 3\n",
                                              encoding="utf-8")
     manifest = root / ".quard/clone-manifest.json"
-    manifest.write_text(json.dumps({"paths": ["src/demo/first.py"], "min_lines": 3}),
+    manifest.write_text(json.dumps({"paths": ["src/demo/first.py"], "min_units": 3}),
                         encoding="utf-8")
     for kind in ("exact", "renamed"):
         result = capture([str(clean / "bin/python"), str(QUARD / "_clone_engine_worker.py"),
@@ -558,7 +565,7 @@ def verify_mismatched_engine(test: unittest.TestCase, root: Path) -> None:
     """
     (root / "src/demo/first.py").write_text(SAMPLE, encoding="utf-8")
     manifest = root / ".quard/clone-manifest.json"
-    manifest.write_text(json.dumps({"paths": ["src/demo/first.py"], "min_lines": 3}),
+    manifest.write_text(json.dumps({"paths": ["src/demo/first.py"], "min_units": 3}),
                         encoding="utf-8")
     output = root / ".quard/native.json"
     python, _ = wheel()
@@ -598,6 +605,12 @@ def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
                      {"src/demo/first.py"})
     native = prepared_native(test, root, result, 3)
     test.assertEqual(native["statistics"]["total"]["clones"], len(native["duplicates"]))
+    test.assertEqual(len(native["duplicates"][0]["matchedUnits"]), 2)
+    test.assertTrue(all(value >= 3 for value in native["duplicates"][0]["matchedUnits"]))
+    test.assertIn("source lines", next(d["message"] for d in result["diagnostics"]
+                                       if d["rule"] == "EXACT_CLONE"))
+    test.assertIn("matched units", next(d["message"] for d in result["diagnostics"]
+                                        if d["rule"] == "EXACT_CLONE"))
     native["duplicates"][0]["fragment"] = "invented source"
     bad = root / "altered.json"
     bad.write_text(json.dumps(native), encoding="utf-8")
@@ -613,7 +626,7 @@ def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
     wrong_location = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
                                           "error": None}, root, bad, paths, True)
     test.assertEqual(wrong_location["status"], "error")
-    for field in ("unitLines", "scannedUnitLines", "sourceDigests"):
+    for field in ("unitSizes", "scannedUnitSizes", "unitCount", "scannedUnitCount", "sourceDigests"):
         with test.subTest(field=field):
             altered = read_json(root / exact["raw_output"]["native_json"])
             altered[field][str(root / "src/demo/first.py")] = (
@@ -623,6 +636,27 @@ def verify_same_file_and_mapping(test: unittest.TestCase, root: Path) -> None:
                                            "error": None}, root, bad, paths, True)
             test.assertEqual(invalid["status"], "error")
             test.assertTrue(any(d["is_infrastructure_error"] for d in invalid["diagnostics"]))
+    for field, replacement in (("pass", "similar"), ("matchedUnits", [0, 0])):
+        altered = read_json(root / exact["raw_output"]["native_json"])
+        if field == "matchedUnits":
+            altered["duplicates"][0][field] = replacement
+        else:
+            altered[field] = replacement
+        bad.write_text(json.dumps(altered), encoding="utf-8")
+        invalid = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
+                                        "error": None}, root, bad, paths, True)
+        test.assertEqual(invalid["status"], "error")
+    source = root / "src/demo/first.py"
+    original = source.read_text(encoding="utf-8")
+    try:
+        source.write_text(original + "\n# changed after scan\n", encoding="utf-8")
+        invalid = normalize("jscpd", {"exit_code": 1, "stdout": "", "stderr": "",
+                                        "error": None}, root,
+                            root / exact["raw_output"]["native_json"], paths, True)
+        test.assertEqual(invalid["status"], "error")
+        test.assertTrue(any(d["is_infrastructure_error"] for d in invalid["diagnostics"]))
+    finally:
+        source.write_text(original, encoding="utf-8")
 
 
 def verify_prepared_renamed(test: unittest.TestCase, root: Path) -> None:
@@ -873,7 +907,7 @@ def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
     adoption_consumer(consumer)
     settings = consumer / ".quard/config.toml"
     settings.write_text(settings.read_text(encoding="utf-8").replace(
-        "min_lines = 3", "min_lines = 5"), encoding="utf-8")
+        "min_units = 3", "min_units = 5"), encoding="utf-8")
     environment = os.environ.copy()
     environment["UV_FIND_LINKS"] = str(artifact.parent)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -900,7 +934,7 @@ def verify_real_wheel_install(test: unittest.TestCase, root: Path) -> None:
     test.assertEqual(invoke(tool / "apply.py")["exit_code"], 0)
     test.assertEqual(invoke(tool / "check.py")["exit_code"], 0)
     test.assertEqual((consumer / ".quard/config.toml").read_text().count(
-        "min_lines = 5"), 1)
+        "min_units = 5"), 1)
     logs = consumer / ".quard/logs/install-probes"
     test.assertTrue((logs / "clone-wheel-smoke.stdout.log").is_file())
     lock = (consumer / "uv.lock").read_text(encoding="utf-8")

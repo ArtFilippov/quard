@@ -172,22 +172,22 @@ struct SourceSession {
     similar_unit_lines: HashMap<String, Vec<usize>>,
     similar_scanned_unit_lines: HashMap<String, Vec<usize>>,
     similar_scannable: bool,
-    min_lines: usize,
+    min_units: usize,
     renamed: bool,
 }
 
 #[pymethods]
 impl SourceSession {
     #[new]
-    #[pyo3(signature = (sources, min_lines, renamed=false))]
-    fn new(sources: Vec<(String, String)>, min_lines: usize, renamed: bool) -> PyResult<Self> {
-        if sources.is_empty() || min_lines == 0 {
+    #[pyo3(signature = (sources, min_units, renamed=false))]
+    fn new(sources: Vec<(String, String)>, min_units: usize, renamed: bool) -> PyResult<Self> {
+        if sources.is_empty() || min_units == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "nonempty sources and positive min_lines required",
+                "nonempty sources and positive min_units required",
             ));
         }
         let config = RunConfig {
-            min_lines,
+            min_lines: min_units,
             min_tokens: 1,
             mode: Mode::Strict,
             no_gitignore: true,
@@ -238,7 +238,7 @@ impl SourceSession {
                     "unique absolute .py paths required",
                 ));
             }
-            let views = preparation::prepare(&text, &path, min_lines, &fields, &mut exact_symbols)
+            let views = preparation::prepare(&text, &path, min_units, &fields, &mut exact_symbols)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
             renamed_eligible_lines.insert(
                 path.clone(),
@@ -343,10 +343,10 @@ impl SourceSession {
                     positions: unit.positions,
                 };
                 if !schema {
-                    scannable |= unit.lines.len() >= min_lines;
+                    scannable |= unit.lines.len() >= min_units;
                 }
                 if schema {
-                    exact_scannable |= unit.lines.len() >= min_lines;
+                    exact_scannable |= unit.lines.len() >= min_units;
                 }
                 if let Some((display, detection)) =
                     preparer.prepare(id.clone(), String::new(), "python", &unit.text)
@@ -402,15 +402,15 @@ impl SourceSession {
                             .push(unit.lines.len());
                     }
                     maps.insert(id, map);
-                } else if unit.lines.len() >= min_lines {
+                } else if unit.lines.len() >= min_units {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "eligible unit rejected by native preparation",
                     ));
                 }
             }
             for (number, unit) in views.exact_behavior.into_iter().enumerate() {
-                exact_scannable |= unit.lines.len() >= min_lines;
-                similar_scannable |= unit.lines.len() >= min_lines;
+                exact_scannable |= unit.lines.len() >= min_units;
+                similar_scannable |= unit.lines.len() >= min_units;
                 let id = format!("{path}#quard-exact-unit-{number}");
                 let map = SourceMap {
                     path: path.clone(),
@@ -468,14 +468,14 @@ impl SourceSession {
                         .expect("discovered source")
                         .push(unit.lines.len());
                     maps.insert(id, map);
-                } else if unit.lines.len() >= min_lines {
+                } else if unit.lines.len() >= min_units {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "eligible exact unit rejected by native preparation",
                     ));
                 }
             }
             for (number, unit) in views.renamed_behavior.into_iter().enumerate() {
-                renamed_scannable |= unit.lines.len() >= min_lines;
+                renamed_scannable |= unit.lines.len() >= min_units;
                 let id = format!("{path}#quard-renamed-unit-{number}");
                 if let Some((_, mut detection)) =
                     normalized_preparer.prepare(id.clone(), String::new(), "python", &unit.text)
@@ -502,7 +502,7 @@ impl SourceSession {
                             positions: unit.positions,
                         },
                     );
-                } else if unit.lines.len() >= min_lines {
+                } else if unit.lines.len() >= min_units {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "eligible normalized unit rejected by native preparation",
                     ));
@@ -523,7 +523,7 @@ impl SourceSession {
                         "incomplete native exact call preparation",
                     ));
                 }
-                exact_scannable |= unit.lines.len() >= min_lines;
+                exact_scannable |= unit.lines.len() >= min_units;
                 exact_scanned_unit_lines
                     .get_mut(&path)
                     .expect("discovered source")
@@ -596,7 +596,7 @@ impl SourceSession {
             similar_unit_lines,
             similar_scanned_unit_lines,
             similar_scannable,
-            min_lines,
+            min_units,
             renamed,
         })
     }
@@ -714,7 +714,7 @@ impl SourceSession {
                         if width < 3
                             && ((unit.spans[start + width - 1].1.line - unit.spans[start].0.line)
                                 as usize)
-                                < self.min_lines.saturating_sub(1)
+                                < self.min_units.saturating_sub(1)
                         {
                             continue;
                         }
@@ -734,7 +734,7 @@ impl SourceSession {
                     detect_prepared(
                         vec![vec![unit.clone()]],
                         1,
-                        self.min_lines.saturating_sub(1),
+                        self.min_units.saturating_sub(1),
                         &PathFilters::default(),
                     )
                 })
@@ -748,7 +748,7 @@ impl SourceSession {
                     detect_prepared(
                         vec![vec![source[first].clone(), source[second].clone()]],
                         1,
-                        self.min_lines.saturating_sub(1),
+                        self.min_units.saturating_sub(1),
                         &PathFilters::default(),
                     )
                     .into_iter()
@@ -793,7 +793,7 @@ impl SourceSession {
                             self.prepared_calls[second].clone(),
                         ]],
                         1,
-                        self.min_lines.saturating_sub(1),
+                        self.min_units.saturating_sub(1),
                         &PathFilters::default(),
                     )
                     .into_iter()
@@ -806,7 +806,7 @@ impl SourceSession {
             let mut found = detect_prepared(
                 vec![source.clone()],
                 1,
-                self.min_lines.saturating_sub(1),
+                self.min_units.saturating_sub(1),
                 &PathFilters::default(),
             );
             if kind == KindFilter::Exact {
@@ -814,7 +814,7 @@ impl SourceSession {
                 found.extend(detect_prepared(
                     vec![self.prepared_schema.clone()],
                     1,
-                    self.min_lines.saturating_sub(1),
+                    self.min_units.saturating_sub(1),
                     &PathFilters::default(),
                 ));
                 // Only feed native detection pairs with a complete shared
@@ -822,7 +822,7 @@ impl SourceSession {
                 // qualify by reaching into the next, different field.
                 let mut candidates: HashMap<Vec<u64>, Vec<usize>> = HashMap::new();
                 for (index, unit) in self.prepared_namedtuple.iter().enumerate() {
-                    for window in unit.hashes.windows(self.min_lines) {
+                    for window in unit.hashes.windows(self.min_units) {
                         candidates.entry(window.to_vec()).or_default().push(index);
                     }
                 }
@@ -843,7 +843,7 @@ impl SourceSession {
                             self.prepared_namedtuple[second].clone(),
                         ]],
                         1,
-                        self.min_lines.saturating_sub(1),
+                        self.min_units.saturating_sub(1),
                         &PathFilters::default(),
                     ));
                 }
@@ -873,7 +873,7 @@ impl SourceSession {
                                         self.prepared_exact_calls[second].clone(),
                                     ]],
                                     1,
-                                    self.min_lines.saturating_sub(1),
+                                    self.min_units.saturating_sub(1),
                                     &PathFilters::default(),
                                 )
                                 .into_iter()
@@ -912,6 +912,19 @@ impl SourceSession {
         let mut clones: Vec<CpdClone> = clones
             .into_iter()
             .filter(|clone| kind.matches(clone))
+            .collect();
+        // These are prepared-view constructs, before restoring physical source
+        // coordinates. Gap counts refer to these same constructs, not source lines.
+        let matched_units: Vec<[u32; 2]> = clones
+            .iter()
+            .map(|clone| {
+                [
+                    clone.fragment_a.end.line - clone.fragment_a.start.line + 1
+                        - clone.unmatched_lines[0],
+                    clone.fragment_b.end.line - clone.fragment_b.start.line + 1
+                        - clone.unmatched_lines[1],
+                ]
+            })
             .collect();
         for clone in &mut clones {
             for fragment in [&mut clone.fragment_a, &mut clone.fragment_b] {
@@ -966,8 +979,15 @@ impl SourceSession {
             }
         }
         let stats = statistics::compute(&self.files, &clones);
-        let duplicates: PyResult<Vec<Value>> =
-            clones.iter().map(|clone| self.duplicate(clone)).collect();
+        let duplicates: PyResult<Vec<Value>> = clones
+            .iter()
+            .zip(matched_units)
+            .map(|(clone, units)| {
+                let mut entry = self.duplicate(clone)?;
+                entry["matchedUnits"] = json!(units);
+                Ok(entry)
+            })
+            .collect();
         Ok(json!({"statistics": stats, "duplicates": duplicates?}).to_string())
     }
 

@@ -16,7 +16,7 @@ from quard.check_job.captured_check_job import CapturedCheckJob
 from quard.clone_engine_utils import (EXPECTED, enabled as clone_engine_enabled,
                                       installed_engine, require_source_pin)
 from quard.check_selection_utils import architecture_defaults
-from quard.duplication_utils import read_duplication_min_lines
+from quard.duplication_utils import read_duplication_min_units
 
 
 def inactive_job(name: str, status: str, error: str | None = None) -> dict[str, Any]:
@@ -156,12 +156,12 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     if lcom_files is None or source_files:
         add_worker("lcom4", "lcom4", source_files)
     if enabled["duplicate_detection"]:
-        min_lines = read_duplication_min_lines(root)
+        min_units = read_duplication_min_units(root)
         clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]
                               if path.endswith(".py"))
         engine = clone_engine_enabled(root)
         eligible = clone_files if engine else [path for path in clone_files if len(
-            (root / path).read_text(encoding="utf-8").splitlines()) >= min_lines]
+            (root / path).read_text(encoding="utf-8").splitlines()) >= min_units]
         # An explicit empty config prevents consumer-owned jscpd settings from changing scope.
         config = run_dir / "jscpd-config.json"
         write_json(config, {}, root)
@@ -175,12 +175,12 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
             output_dir.mkdir(parents=True, exist_ok=True)
             argv = [binary("jscpd"), "--config", str(config), "--no-gitignore",
                     "--absolute", "--kind", kind, *flags, "--mode", "strict",
-                    "--min-lines", str(min_lines), "--min-tokens", "1", "--fail-on-empty",
+                    "--min-lines", str(min_units), "--min-tokens", "1", "--fail-on-empty",
                     "--reporters", "json", "--output", str(output_dir), "--exit-code",
                     "1", *clone_files]
             if engine:
                 manifest = run_dir / "clone-engine-files.json"
-                write_json(manifest, {"paths": clone_files, "min_lines": min_lines}, root)
+                write_json(manifest, {"paths": clone_files, "min_units": min_units}, root)
                 argv = [sys.executable, str(tool_dir() / "_clone_engine_worker.py"),
                         "--manifest", str(manifest), "--output",
                         str(output_dir / "jscpd-report.json"), "--kind", kind]

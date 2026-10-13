@@ -126,7 +126,7 @@ class Tracker:
         paths.append(path)
     paths.sort()
     (root / ".quard").mkdir()
-    (root / ".quard/config.toml").write_text("[duplication]\nmin_lines = 3\n", encoding="utf-8")
+    (root / ".quard/config.toml").write_text("[duplication]\nmin_units = 3\n", encoding="utf-8")
     return paths
 
 
@@ -144,7 +144,7 @@ def measure(engine: str, root: Path, paths: list[str], directory: Path
     config = directory / "config.json"
     config.write_text("{}\n", encoding="utf-8")
     manifest = directory / "manifest.json"
-    manifest.write_text(json.dumps({"paths": paths, "min_lines": 3}), encoding="utf-8")
+    manifest.write_text(json.dumps({"paths": paths, "min_units": 3}), encoding="utf-8")
     start = time.perf_counter()
     process_seconds = 0.0
     statuses = {}

@@ -525,17 +525,17 @@ class TestNativeCheckRunner(unittest.TestCase):
                 first.write_text(source, encoding="utf-8")
                 second.write_text(counterpart, encoding="utf-8")
                 settings = [(default, "violations"),
-                            (default.replace("min_lines = 3", f"min_lines = {alternative}"),
+                            (default.replace("min_units = 3", f"min_units = {alternative}"),
                              "passed")]
                 if label == "exact":
-                    settings.extend(((default.replace("[duplication]\nmin_lines = 3\n", ""),
+                    settings.extend(((default.replace("[duplication]\nmin_units = 3\n", ""),
                                       "violations"),
-                                     (default.replace("min_lines = 3\n", ""), "violations")))
+                                      (default.replace("min_units = 3\n", ""), "violations")))
                 for configured, expected_status in settings:
                     setting.write_text(configured, encoding="utf-8")
                     report = self.run_report(dispatch, "")
                     jobs = {job["name"]: job for job in report["tools"]}
-                    minimum = alternative if f"min_lines = {alternative}" in configured else 3
+                    minimum = alternative if f"min_units = {alternative}" in configured else 3
                     for name in ("jscpd", "jscpd-renamed", "jscpd-similar"):
                         self.assertEqual(jobs[name]["argv"][jobs[name]["argv"].index(
                             "--min-lines") + 1], str(minimum))

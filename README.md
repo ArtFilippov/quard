@@ -266,10 +266,13 @@ function. Surviving control headers constrain comparisons but add no eligible li
 call-containing assignments, operations, indexing, property and unknown attribute
 reads remain behavioral. Exact and similar retain their independent source views.
 
-Set `[duplication] min_lines = 3` in `.quard/config.toml` to choose one positive
+Set `[duplication] min_units = 3` in `.quard/config.toml` to choose one positive
 integer minimum for all three Python clone jobs. Fresh installs use 3; existing
-configs without the section or key also use 3 without migration. An explicit
-value is retained by install, reinstall and apply. This setting is independent of
+configs without the section or key also use 3. Reinstall migrates an explicit
+positive `min_lines` value to `min_units` without changing its number. Check and
+apply require reinstall until that migration is done. Both names together, unknown
+keys and invalid numbers fail with exit 2. An explicit `min_units` choice survives
+install, reinstall and apply. This setting is independent of
 Pylint's required `[readability.production] min_similarity_lines` limit and
 `[checks] duplicate_detection`, which selects the three jscpd jobs together.
 The historical native CLI scans unprepared `.py` files and counts physical source
@@ -294,7 +297,7 @@ Functional dictionary keys or keyword fields must each occupy a separate
 original line, with the name and type on that line and no opening/closing
 syntax there. Compact forms are outside this policy and receive no invented
 positions. Each schema is its own unit: class and factory names do not count,
-but an identical trailing run of at least `min_lines` eligible field lines
+but an identical trailing run of at least `min_units` eligible field units
 does, even after different leading fields and across syntax forms. Different
 names or types are not normalized; schema declarations do not enter renamed or
 similar behavior views. Native reports retain original columns and fragments.
@@ -343,7 +346,12 @@ refer to the original source, which may span more lines than were eligible.
 It reports only native Type 3 `similar` clones with score and `gap` method.
 Renamed uses native strict identifier and string/numeric literal
 normalization and reports only native Type 2 clones; the exact job retains its
-Type 1 findings. Each job has its own archived native JSON and streams. A
+Type 1 findings. Each job has its own archived native JSON and streams. Each native
+JSON identifies its pass and `minimumUnits`, `eligibleUnits`, `unitSizes`,
+`unitCount`, `scannedUnitSizes` and `scannedUnitCount` per original path; renamed
+also records separate complete-call `candidateUnitSizes`. A clone records
+`matchedUnits` for both sides, while `lines`, ranges and fragments remain physical
+source evidence. Similar `unmatchedLines` counts unmatched prepared constructs. A
 missing or mismatched built component is an infrastructure error for the affected
 jobs. See [ADR 0005](docs/adr/0005-in-memory-native-clone-engine.md).
 On Linux x86-64 glibc, source builds and CPython 3.12/3.13 have been exercised;

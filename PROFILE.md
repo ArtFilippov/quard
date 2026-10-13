@@ -42,11 +42,13 @@ violations baseline.
   fragment. Keeping the exact pass separate preserves Type 1 findings that
   native normalization can miss on a combined scan. Type 2 normalizes identifiers
   and string/numeric literals.
-  `[duplication] min_lines` in `.quard/config.toml` sets a shared positive integer
-  minimum (default 3, also for older configs without the section or key). It is
-    passed to every job and used in each job's expected-source count. The historical
-     dev-only CLI scans physical `.py` lines; the installed Rust path counts
-    eligible lines
+  `[duplication] min_units` in `.quard/config.toml` sets a shared positive integer
+  minimum (default 3, also for older configs without the section or key). Reinstall
+  migrates explicitly configured positive `min_lines` values without changing the
+  number; check/apply require reinstall first. Ambiguous or invalid values fail
+  with exit 2. It is passed to every job and used in each job's expected-source
+  count. The historical dev-only CLI scans physical `.py` lines; the installed
+  Rust path counts eligible units
    within a prepared module/class/function unit. Ordinary definition headers,
    decorators, annotation-only fields and recognized type aliases are excluded;
    actual assignments, control flow and executable bodies remain eligible.

@@ -15,7 +15,7 @@ from typing import Any, cast
 from packaging.tags import Tag, parse_tag, sys_tags
 
 from quard._common import QuardError, load_toml, read_json, tool_dir
-from quard.duplication_utils import read_duplication_min_lines
+from quard.duplication_utils import read_duplication_min_units
 
 EXPECTED = read_json(tool_dir() / "tools.json")["native_components"]
 PARENT = ".."
@@ -82,38 +82,47 @@ def installed_engine() -> dict[str, str]:
 
 
 def validate_source_evidence(report: dict[str, object], root: Path,
-                             paths: list[str], *, skipped: bool) -> None:
-    """Verify the original file set, line accounting and intentional empty view."""
+                             paths: list[str], *, skipped: bool,
+                             minimum: int | None = None) -> None:
+    """Verify each pass's prepared units and the unchanged original source set."""
     originals = [str(root / path) for path in paths]
-    counts = report.get("eligibleLines")
-    units = report.get("unitLines")
-    scanned = report.get("scannedUnitLines")
+    counts = report.get("eligibleUnits")
+    units = report.get("unitSizes")
+    scanned = report.get("scannedUnitSizes")
+    unit_counts = report.get("unitCount")
+    scanned_counts = report.get("scannedUnitCount")
     digests = report.get("sourceDigests")
-    minimum = read_duplication_min_lines(root)
-    if (report.get("sourcePaths") != originals or report.get("minimum") != minimum
-            or not isinstance(counts, dict) or not isinstance(units, dict)
-            or not isinstance(scanned, dict)
-            or not isinstance(digests, dict)
-            or any(set(evidence) != set(originals)
-                   for evidence in (counts, units, scanned, digests))):
+    minimum = read_duplication_min_units(root) if minimum is None else minimum
+    if (report.get("sourcePaths") != originals or report.get("minimumUnits") != minimum
+             or not isinstance(counts, dict) or not isinstance(units, dict)
+             or not isinstance(scanned, dict) or not isinstance(unit_counts, dict)
+             or not isinstance(scanned_counts, dict)
+             or not isinstance(digests, dict)
+             or any(set(evidence) != set(originals)
+                    for evidence in (counts, units, scanned, unit_counts, scanned_counts, digests))):
         raise ValueError("Incomplete native source evidence")
-    candidates = report.get("candidateUnitLines")
+    candidates = report.get("candidateUnitSizes")
     if candidates is not None and (not isinstance(candidates, dict)
-                                   or set(candidates) != set(originals)
-                                   or any(not isinstance(lengths, list)
-                                          or any(type(length) is not int or length < minimum
-                                                 for length in lengths)
-                                          for lengths in candidates.values())):
+                                    or set(candidates) != set(originals)
+                                    or any(not isinstance(lengths, list)
+                                           or any(type(length) is not int or length < minimum
+                                                  for length in lengths)
+                                           for lengths in candidates.values())):
         raise ValueError("Invalid prepared call candidate accounting")
+    if report.get("pass") not in KINDS or (report["pass"] == "renamed") != (candidates is not None):
+        raise ValueError("Invalid native pass accounting")
     scannable = False
     for original in originals:
         count, lengths, digest = counts[original], units[original], digests[original]
         if (type(count) is not int or count < 0 or not isinstance(lengths, list)
-                or any(type(length) is not int or length < 1 for length in lengths)
-                or sum(lengths) != count
-                or scanned[original] != [length for length in lengths if length >= minimum]
-                or not isinstance(digest, str)
-                or hashlib.sha256(Path(original).read_bytes()).hexdigest() != digest):
+                 or any(type(length) is not int or length < 1 for length in lengths)
+                 or sum(lengths) != count
+                 or type(unit_counts[original]) is not int or unit_counts[original] != len(lengths)
+                 or type(scanned_counts[original]) is not int
+                 or scanned_counts[original] != len(scanned[original])
+                 or scanned[original] != [length for length in lengths if length >= minimum]
+                 or not isinstance(digest, str)
+                 or hashlib.sha256(Path(original).read_bytes()).hexdigest() != digest):
             raise ValueError("Invalid prepared source accounting or changed original")
         scannable |= any(length >= minimum for length in lengths)
     if scannable == skipped:
@@ -128,7 +137,8 @@ def skipped_clone_job(job: dict[str, Any], root: Path, result: dict[str, Any],
     try:
         payload = json.loads(job["json_file"].read_text(encoding="utf-8"))
         validate_source_evidence(payload, root, job["expected_paths"], skipped=True)
-        if payload["engine"] != EXPECTED or payload["skipped"] != SKIP_REASON:
+        if (payload["engine"] != EXPECTED or payload["skipped"] != SKIP_REASON
+                or payload["pass"] != job["kind"]):
             return None
     except (ValueError, KeyError, TypeError, OSError, QuardError):
         return None
@@ -154,9 +164,10 @@ def load_sources(manifest_path: Path) -> tuple[list[tuple[str, str]], int]:
     if not isinstance(loaded, dict):
         raise RuntimeError("invalid clone source manifest")
     manifest = cast(dict[str, object], loaded)
-    minimum = manifest.get("min_lines")
+    minimum = manifest.get("min_units")
     source_paths = manifest.get("paths")
-    if (not isinstance(source_paths, list) or not isinstance(minimum, int)
+    if (set(manifest) != {"paths", "min_units"} or not isinstance(source_paths, list)
+            or not isinstance(minimum, int)
             or isinstance(minimum, bool) or minimum < 1):
         raise RuntimeError("invalid clone source manifest")
     paths = cast(list[object], source_paths)
@@ -199,19 +210,22 @@ def run_passes(args: argparse.Namespace, session: Any, count: int,
             "jscpd-report.json")
         try:
             view = evidence.copy()
-            if kind == "exact" and session is not None:
-                view.update({"eligibleLines": session.exact_eligible_lines(),
-                              "unitLines": session.exact_unit_lines(),
-                              "scannedUnitLines": session.exact_scanned_unit_lines()})
-            if kind == "renamed" and session is not None:
-                view.update({"eligibleLines": session.renamed_eligible_lines(),
-                              "unitLines": session.renamed_unit_lines(),
-                              "scannedUnitLines": session.renamed_scanned_unit_lines(),
-                              "candidateUnitLines": session.call_unit_lines()})
-            if kind == "similar" and session is not None:
-                view.update({"eligibleLines": session.similar_eligible_lines(),
-                              "unitLines": session.similar_unit_lines(),
-                              "scannedUnitLines": session.similar_scanned_unit_lines()})
+            if session is not None:
+                view.update({"eligibleUnits": getattr(session, kind + "_eligible_lines")(),
+                             "unitSizes": getattr(session, kind + "_unit_lines")(),
+                             "scannedUnitSizes": getattr(session, kind + "_scanned_unit_lines")()})
+                if kind == "renamed":
+                    view["candidateUnitSizes"] = session.call_unit_lines()
+            elif kind == "renamed":
+                view["candidateUnitSizes"] = {}
+            view["unitCount"] = {path: len(sizes) for path, sizes in view["unitSizes"].items()}
+            view["scannedUnitCount"] = {path: len(sizes) for path, sizes in
+                                        view["scannedUnitSizes"].items()}
+            view["pass"] = kind
+            validate_source_evidence(view, Path.cwd(), view["sourcePaths"],
+                                     skipped=not (session is not None and getattr(
+                                         session, kind + "_scannable")()),
+                                     minimum=view["minimumUnits"])
             statuses[kind] = run_pass(session, kind, output, count, view)
         except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
             statuses[kind] = {"exit_code": 2, "stderr": f"CLONE_ENGINE_ERROR: {exc}"}
@@ -233,10 +247,8 @@ def main() -> int:
         raise RuntimeError("incomplete in-memory clone scan")
     evidence = {"engine": dict(native.versions()),
                 "sourcePaths": [path for path, _ in sources],
-                "eligibleLines": session.eligible_lines() if session else {},
-                "unitLines": session.unit_lines() if session else {},
-                "scannedUnitLines": session.scanned_unit_lines() if session else {},
-                "minimum": minimum,
+                 "eligibleUnits": {}, "unitSizes": {}, "scannedUnitSizes": {},
+                 "minimumUnits": minimum,
                 "sourceDigests": {path: hashlib.sha256(text.encode("utf-8")).hexdigest()
                                   for path, text in sources}}
     statuses = run_passes(args, session, len(sources), evidence)

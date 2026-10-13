@@ -23,7 +23,7 @@ from installation_fixture_utils import fake_uv, run_command
 from offline_fixtures import create_repo, managed_bytes, native_result
 from quard import install as entry
 from quard import _policy
-from quard.duplication_utils import read_duplication_min_lines
+from quard.duplication_utils import read_duplication_min_units
 from quard.check_selection_utils import CHECK_DEFAULTS, OPTIONAL_JOBS
 from quard.architecture_draft.generated_architecture_utils import IDENTITY
 from quard._audit import smoke_tests, tool_binary
@@ -225,7 +225,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         root = self.configured_project()
         setting = root / ".quard/config.toml"
         setting.write_text(setting.read_text(encoding="utf-8").replace(
-            "min_lines = 3", "min_lines = 6\n# Consumer clone preference"), encoding="utf-8")
+            "min_units = 3", "min_units = 6\n# Consumer clone preference"), encoding="utf-8")
         expected = setting.read_bytes()
         original_pylint = load_toml(root / "pyproject.toml")["tool"]["pylint"][
             "similarities"]["min-similarity-lines"]
@@ -236,7 +236,7 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertEqual(json.loads(run_command([sys.executable, str(QUARD / "apply.py"),
                                                  "--project", str(root), "--json"], root))[
             "status"], "applied")
-        self.assertEqual((setting.read_bytes(), read_duplication_min_lines(root)),
+        self.assertEqual((setting.read_bytes(), read_duplication_min_units(root)),
                          (expected, 6))
         native = load_toml(root / "pyproject.toml")
         self.assertEqual(native["tool"]["pylint"]["similarities"]["min-similarity-lines"],
@@ -247,35 +247,82 @@ class TestTransactionalInstallation(unittest.TestCase):
         root = self.configured_project()
         setting = root / ".quard/config.toml"
         for old in (setting.read_text(encoding="utf-8").replace(
-                "[duplication]\nmin_lines = 3\n", ""),
-                setting.read_text(encoding="utf-8").replace("min_lines = 3\n", "")):
+                "[duplication]\nmin_units = 3\n", ""),
+                setting.read_text(encoding="utf-8").replace("min_units = 3\n", "")):
             with self.subTest(old=old):
                 setting.write_text(old, encoding="utf-8")
-                self.assertEqual(read_duplication_min_lines(root), 3)
+                self.assertEqual(read_duplication_min_units(root), 3)
                 with patch.object(entry, "capture", fake_uv), patch.object(sys, "argv", [
                         str(QUARD / "install.py"), "--project", str(root), "--json"]):
                     self.assertEqual(entry.main(), 0)
-                self.assertEqual(read_duplication_min_lines(root), 3)
+                self.assertEqual(read_duplication_min_units(root), 3)
+
+    def test_explicit_legacy_minimum_requires_install_and_migrates_once(self):
+        root = self.configured_project()
+        setting = root / ".quard/config.toml"
+        original = setting.read_text(encoding="utf-8")
+        setting.write_text(original.replace("min_units = 3",
+                                            "# Keep consumer choice\nmin_lines = 6"),
+                           encoding="utf-8")
+        for command in ("apply.py", "check.py"):
+            output = json.loads(run_command([sys.executable, str(QUARD / command),
+                                             "--project", str(root), "--json"], root,
+                                            expected=2))
+            self.assertEqual(output["exit_code"], 2)
+            self.assertIn("reinstall Quard", json.dumps(output))
+        with patch.object(entry, "capture", fake_uv), patch.object(sys, "argv", [
+                str(QUARD / "install.py"), "--project", str(root), "--json"]):
+            self.assertEqual(entry.main(), 0)
+            migrated = setting.read_bytes()
+            self.assertEqual(entry.main(), 0)
+        self.assertEqual(setting.read_bytes(), migrated)
+        self.assertIn(b"# Keep consumer choice", migrated)
+        self.assertIn(b"min_units = 6", migrated)
+        self.assertNotIn(b"min_lines", migrated)
+        self.assertEqual(read_duplication_min_units(root), 6)
+        self.assertEqual(json.loads(run_command([sys.executable, str(QUARD / "apply.py"),
+                                                "--project", str(root), "--json"], root))[
+            "status"], "applied")
+        self.assertEqual(setting.read_bytes(), migrated)
+
+    def test_ambiguous_or_invalid_legacy_minimum_does_not_modify_config(self):
+        root = self.configured_project()
+        setting = root / ".quard/config.toml"
+        original = setting.read_text(encoding="utf-8")
+        for value in ("min_lines = 6\nmin_units = 3", "min_lines = true",
+                      "min_lines = 0", "min_lines = 2\nother = 3"):
+            with self.subTest(value=value):
+                setting.write_text(original.replace("min_units = 3", value),
+                                   encoding="utf-8")
+                before = setting.read_bytes()
+                with patch.object(entry, "capture", wraps=fake_uv) as captured, patch.object(
+                        sys, "argv", [str(QUARD / "install.py"), "--project", str(root),
+                                      "--json"]), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertEqual(entry.main(), 2)
+                    self.assertEqual(json.loads(stdout.getvalue())["code"],
+                                     "INVALID_DUPLICATION")
+                captured.assert_not_called()
+                self.assertEqual(setting.read_bytes(), before)
 
     def test_invalid_duplication_settings_are_configuration_errors_at_public_commands(self):
         root = self.configured_project()
         setting = root / ".quard/config.toml"
         original = setting.read_text(encoding="utf-8")
-        for replacement, rule in (("min_lines = true", "INVALID_DUPLICATION"),
-                                  ("min_lines = 0", "INVALID_DUPLICATION"),
-                                  ("min_lines = -1", "INVALID_DUPLICATION"),
-                                  ("min_lines = 2.5", "INVALID_DUPLICATION"),
-                                  ('min_lines = "3"', "INVALID_DUPLICATION"),
+        for replacement, rule in (("min_units = true", "INVALID_DUPLICATION"),
+                                  ("min_units = 0", "INVALID_DUPLICATION"),
+                                  ("min_units = -1", "INVALID_DUPLICATION"),
+                                  ("min_units = 2.5", "INVALID_DUPLICATION"),
+                                  ('min_units = "3"', "INVALID_DUPLICATION"),
                                   ("other = 3", "INVALID_DUPLICATION"),
                                   ("[duplication", "INVALID_CONFIG")):
             with self.subTest(value=replacement):
-                setting.write_text(original.replace("[duplication]\nmin_lines = 3",
+                setting.write_text(original.replace("[duplication]\nmin_units = 3",
                                                      "[duplication]\n" + replacement),
                                    encoding="utf-8")
                 with self.assertRaises(QuardError) as invalid:
-                    read_duplication_min_lines(root)
+                    read_duplication_min_units(root)
                 self.assertEqual(invalid.exception.code, rule)
-                if replacement not in {"min_lines = true", "[duplication"}:
+                if replacement not in {"min_units = true", "[duplication"}:
                     continue
                 for command in ("apply.py", "check.py"):
                     output = run_command([sys.executable, str(QUARD / command),
@@ -295,7 +342,7 @@ class TestTransactionalInstallation(unittest.TestCase):
                     self.assertEqual(json.loads(stdout.getvalue())["code"], rule)
                 captured.assert_not_called()
         setting.write_text("duplication = 3\n" + original.replace(
-            "[duplication]\nmin_lines = 3\n", ""), encoding="utf-8")
+            "[duplication]\nmin_units = 3\n", ""), encoding="utf-8")
         output = json.loads(run_command([sys.executable, str(QUARD / "apply.py"),
                                          "--project", str(root), "--json"], root, expected=2))
         self.assertEqual(output["code"], "INVALID_DUPLICATION")

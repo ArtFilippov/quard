@@ -115,7 +115,7 @@ class TestCheckRunner(unittest.TestCase):
         second.write_text(pure, encoding="utf-8")
         views = focused_scan(self.root)
         self.assertFalse(views["renamed"].get("duplicates"))
-        self.assertEqual(views["renamed"]["eligibleLines"][str(first)], 0)
+        self.assertEqual(views["renamed"]["eligibleUnits"][str(first)], 0)
         self.assertTrue(views["exact"]["duplicates"])
 
         left = ("def work(value):\n    if probe(value):\n"
@@ -127,8 +127,8 @@ class TestCheckRunner(unittest.TestCase):
         second.write_text(right, encoding="utf-8")
         results = focused_scan(self.root)
         self.assertTrue(results["renamed"]["duplicates"], results["renamed"])
-        self.assertEqual(results["renamed"]["eligibleLines"][str(first)], 3)
-        self.assertEqual(results["renamed"]["eligibleLines"][str(second)], 3)
+        self.assertEqual(results["renamed"]["eligibleUnits"][str(first)], 3)
+        self.assertEqual(results["renamed"]["eligibleUnits"][str(second)], 3)
         self.assertTrue(any({entry["firstFile"]["startLoc"]["line"],
                              entry["secondFile"]["startLoc"]["line"]} == {2}
                             and entry["firstFile"]["endLoc"]["line"] == 6
@@ -151,7 +151,7 @@ class TestCheckRunner(unittest.TestCase):
                 first.write_text(source, encoding="utf-8")
                 second.write_text(source.replace("value", "source"), encoding="utf-8")
                 view = focused_scan(self.root)["renamed"]
-                self.assertEqual(view["eligibleLines"][str(first)], 2)
+                self.assertEqual(view["eligibleUnits"][str(first)], 2)
                 self.assertFalse(view.get("duplicates"), view)
 
         left = ("def work(value):\n    if probe(value):\n"
@@ -177,7 +177,7 @@ class TestCheckRunner(unittest.TestCase):
         view = focused_scan(self.root)["renamed"]
         # Constructor write and decorated property body keep their own units;
         # the proven field extraction disappears from work.
-        self.assertEqual(view["unitLines"][str(first)], [1, 1, 5])
+        self.assertEqual(view["unitSizes"][str(first)], [1, 1, 5])
         self.assertFalse(view.get("duplicates"))  # Identical copies are Type 1.
 
     def test_real_wheel_accepts_supported_python_syntax(self) -> None:
@@ -193,7 +193,7 @@ class TestCheckRunner(unittest.TestCase):
         source.write_text(syntax, encoding="utf-8")
         scans = focused_scan(self.root)
         self.assertTrue(all(str(source) in payload["sourcePaths"]
-                            and payload["eligibleLines"][str(source)] >= 3
+                            and payload["eligibleUnits"][str(source)] >= 3
                             for payload in scans.values()))
 
     def test_real_wheel_prepared_imports_and_docstrings(self) -> None:
@@ -212,7 +212,7 @@ class TestCheckRunner(unittest.TestCase):
         native = read_json(self.root / jobs["jscpd"]["raw_output"]["native_json"])
         self.assertTrue(native["duplicates"])
         self.assertTrue(all(item["firstFile"]["start"] >= 7 for item in native["duplicates"]))
-        self.assertTrue({str(first), str(second)} <= set(native["eligibleLines"]))
+        self.assertTrue({str(first), str(second)} <= set(native["eligibleUnits"]))
         (self.root / "src/demo/domain/api.py").write_text("", encoding="utf-8")
         # Three imports at file scope are ineligible even though they are long
         # enough for an unprepared native scan.
@@ -342,9 +342,9 @@ import collections
             count = (exact_eligible if kind == "exact" and exact_eligible is not None else
                      renamed_eligible if kind == "renamed" and renamed_eligible is not None else
                      eligible)
-            self.assertEqual(native["minimum"], 3)
-            self.assertEqual(native["eligibleLines"][str(first)], count)
-            self.assertEqual(native["unitLines"][str(first)], [count] if count else [])
+            self.assertEqual(native["minimumUnits"], 3)
+            self.assertEqual(native["eligibleUnits"][str(first)], count)
+            self.assertEqual(native["unitSizes"][str(first)], [count] if count else [])
             self.assertEqual(native["sourcePaths"],
                              [str(self.root / path) for path in sorted((
                                  "src/demo/__init__.py", "src/demo/domain/api.py",
@@ -481,7 +481,7 @@ import collections
             with self.subTest(kind=kind, material="declarations plus two assignments"):
                 native = short[kind]
                 self.assertIn("skipped", native)
-                self.assertEqual(native["unitLines"][str(first)][-1], 2)
+                self.assertEqual(native["unitSizes"][str(first)][-1], 2)
         for path in (first, second):
             path.write_text(declarations + "        third = second * 3\n", encoding="utf-8")
         long = focused_scan(self.root)
@@ -569,9 +569,9 @@ import collections
         second.write_text(prefix + "    ignored: int\n    # excluded comment\n" +
                           right_gap + suffix, encoding="utf-8")
         scans = focused_scan(self.root)
-        self.assertEqual(scans["similar"]["unitLines"][str(first)], [8])
-        self.assertEqual(scans["similar"]["unitLines"][str(second)], [8])
-        self.assertEqual(scans["similar"]["scannedUnitLines"][str(second)], [8])
+        self.assertEqual(scans["similar"]["unitSizes"][str(first)], [8])
+        self.assertEqual(scans["similar"]["unitSizes"][str(second)], [8])
+        self.assertEqual(scans["similar"]["scannedUnitSizes"][str(second)], [8])
         self.assertTrue(scans["similar"]["duplicates"])
         self.assertTrue(all(item["kind"] == "similar" and item["method"] == "gap" and
                             item["unmatchedLines"] == [2, 2] and
@@ -609,7 +609,7 @@ import collections
                "    second = (\n        first * 3\n    )\n")
         first.write_text(two, encoding="utf-8")
         second.write_text(two, encoding="utf-8")
-        self.assertEqual(focused_scan(self.root)["similar"]["unitLines"][str(first)], [2])
+        self.assertEqual(focused_scan(self.root)["similar"]["unitSizes"][str(first)], [2])
         self.assertFalse(focused_scan(self.root)["similar"]["duplicates"])
         second.write_text(two.replace("17", "18"), encoding="utf-8")
         self.assertFalse(focused_scan(self.root)["similar"]["duplicates"])
@@ -653,8 +653,8 @@ import collections
                    if {item["firstFile"]["name"], item["secondFile"]["name"]}
                    == {str(first), str(second)}]
         self.assertTrue(matches, renamed["duplicates"])
-        self.assertEqual(renamed["candidateUnitLines"][str(first)], [3])
-        self.assertEqual(renamed["candidateUnitLines"][str(second)], [3])
+        self.assertEqual(renamed["candidateUnitSizes"][str(first)], [3])
+        self.assertEqual(renamed["candidateUnitSizes"][str(second)], [3])
         self.assertTrue(all(item["kind"] == "renamed" for item in matches))
         self.assertTrue(any(item["firstFile"]["start"] == 2 and
                             item["firstFile"]["end"] == 6 and
@@ -682,9 +682,9 @@ import collections
         second.write_text(right, encoding="utf-8")
         setting = self.root / ".quard/config.toml"
         setting.write_text(setting.read_text(encoding="utf-8").replace(
-            "min_lines = 3", "min_lines = 6"), encoding="utf-8")
+            "min_units = 3", "min_units = 6"), encoding="utf-8")
         larger_minimum = focused_scan(self.root)["renamed"]
-        self.assertEqual(larger_minimum["minimum"], 6)
+        self.assertEqual(larger_minimum["minimumUnits"], 6)
         self.assertFalse(larger_minimum.get("duplicates", []), larger_minimum)
 
     def test_real_wheel_exact_requires_complete_constructs(self) -> None:
@@ -704,10 +704,10 @@ import collections
         first.write_text(left, encoding="utf-8")
         second.write_text(right, encoding="utf-8")
         short = focused_scan(self.root)
-        self.assertEqual(short["exact"]["minimum"], 3)
+        self.assertEqual(short["exact"]["minimumUnits"], 3)
         self.assertFalse(short["exact"].get("duplicates", []), short["exact"])
-        self.assertEqual(short["exact"]["unitLines"][str(first)], [3])
-        self.assertEqual(short["similar"]["unitLines"][str(first)], [3])
+        self.assertEqual(short["exact"]["unitSizes"][str(first)], [3])
+        self.assertEqual(short["similar"]["unitSizes"][str(first)], [3])
 
         assignments = ('def calculate():\n    first = 1\n'
                        '    second = first + 2\n    return second * 3\n')
@@ -724,7 +724,7 @@ import collections
                             item["firstFile"]["end"] == 4 and
                             item["fragment"] == '\n'.join(assignments.splitlines()[1:])
                             for item in matches), matches)
-        self.assertEqual(native["eligibleLines"][str(first)], 3)
+        self.assertEqual(native["eligibleUnits"][str(first)], 3)
         self.assertTrue(any(d["rule"] == "EXACT_CLONE" and d["native_details"] in matches
                             for d in result["diagnostics"]), result["diagnostics"])
 
@@ -735,10 +735,10 @@ import collections
         self.assertTrue(focused_scan(self.root)["exact"]["duplicates"])
         setting = self.root / ".quard/config.toml"
         setting.write_text(setting.read_text(encoding="utf-8").replace(
-            "min_lines = 3", "min_lines = 4"), encoding="utf-8")
+            "min_units = 3", "min_units = 4"), encoding="utf-8")
         self.assertFalse(focused_scan(self.root)["exact"].get("duplicates", []))
         setting.write_text(setting.read_text(encoding="utf-8").replace(
-            "min_lines = 4", "min_lines = 3"), encoding="utf-8")
+            "min_units = 4", "min_units = 3"), encoding="utf-8")
 
         nested = ('def build(item):\n    value = Different(\n'
                   '        Middle(\n            Branch(\n'
@@ -761,7 +761,7 @@ import collections
         first.write_text(two, encoding="utf-8")
         second.write_text(two, encoding="utf-8")
         short_multiline = focused_scan(self.root)["exact"]
-        self.assertEqual(short_multiline["unitLines"][str(first)], [2])
+        self.assertEqual(short_multiline["unitSizes"][str(first)], [2])
         self.assertFalse(short_multiline.get("duplicates", []), short_multiline)
 
     def test_real_wheel_renamed_respects_callable_identity_and_local_relations(self) -> None:
@@ -861,7 +861,7 @@ import collections
                           "    First(\n        Second(\n            Third(two, 23)\n"
                           "        )),\n)\n", encoding="utf-8")
         native = focused_scan(self.root)["renamed"]
-        self.assertEqual(native["minimum"], 3)
+        self.assertEqual(native["minimumUnits"], 3)
         self.assertTrue(any(item["firstFile"]["name"] == str(source) and
                             item["secondFile"]["name"] == str(source) and
                             item["firstFile"]["end"] < item["secondFile"]["start"]
@@ -994,7 +994,7 @@ import collections
                          "    'delta',\n    'epsilon',\n    'zeta',\n}\n", encoding="utf-8")
         second.write_text("unique = 1\n", encoding="utf-8")
         literal = focused_scan(self.root)["renamed"]
-        self.assertEqual(literal["minimum"], 3)
+        self.assertEqual(literal["minimumUnits"], 3)
         self.assertFalse(literal.get("duplicates", []), literal)
         first.write_text("value = one(\n    x + y,\n)\nif flag:\n"
                          "    raise ValueError('left')\n", encoding="utf-8")

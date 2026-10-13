@@ -43,8 +43,8 @@ def _inspect_schema(test: unittest.TestCase, root: Path, left: str, right: str,
                     minimum: int, skip_behavior: bool = True) -> dict[str, dict[str, Any]]:
     config = root / ".quard/config.toml"
     config.write_text(config.read_text(encoding="utf-8").replace(
-        "min_lines = 3", f"min_lines = {minimum}").replace(
-        "min_lines = 4", f"min_lines = {minimum}"), encoding="utf-8")
+        "min_units = 3", f"min_units = {minimum}").replace(
+        "min_units = 4", f"min_units = {minimum}"), encoding="utf-8")
     (root / "src/demo/first.py").write_text(left, encoding="utf-8")
     (root / "tests/second.py").write_text(right, encoding="utf-8")
     scans = focused_scan(root)
@@ -71,10 +71,10 @@ def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
         exact = result["exact"]
         for kind in ("renamed", "similar"):
             behavior = result[kind]
-            test.assertEqual(behavior["eligibleLines"][str(first)],
+            test.assertEqual(behavior["eligibleUnits"][str(first)],
                                 int(kind == "similar" and
                                     ("TD = object" in left or "value = 1" in left)))
-        test.assertEqual(exact["minimum"], minimum)
+        test.assertEqual(exact["minimumUnits"], minimum)
         test.assertEqual(exact["sourcePaths"], [str(root / path) for path in (
             "src/demo/__init__.py", "src/demo/domain/api.py", "src/demo/first.py",
             "tests/second.py", "tests/test_value.py")])
@@ -85,7 +85,7 @@ def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
     left = prefix + "class GroupCounts(TD):\n    distinct: float\n" + fields
     right = prefix + "class MicroCounts(TD):\n    different: bool\n" + fields
     native = inspect(left, right)
-    test.assertEqual(native["unitLines"][str(first)], [5])
+    test.assertEqual(native["unitSizes"][str(first)], [5])
     test.assertTrue(native["duplicates"], native)
     test.assertTrue(any(item["firstFile"]["start"] == 4 and
                         item["secondFile"]["start"] == 4 and
@@ -111,11 +111,11 @@ def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
     split = prefix + "class First(TD):\n" + short + "class Second(TD):\n    three: bytes\n"
     native = inspect(split, split)
     test.assertIn("skipped", native)
-    test.assertEqual(native["unitLines"][str(first)], [2, 1])
+    test.assertEqual(native["unitSizes"][str(first)], [2, 1])
     mixed = prefix + "class First(TD):\n" + short + "def calculate():\n    value = 1\n"
     native = inspect(mixed, mixed)
     test.assertIn("skipped", native)
-    test.assertEqual(native["unitLines"][str(first)], [1, 2])
+    test.assertEqual(native["unitSizes"][str(first)], [1, 2])
 
     # Exactly three matching trailing fields clear the configured minimum.
     native = inspect(prefix + "class First(TD):\n    initial: float\n" + fields,
@@ -129,7 +129,7 @@ def verify_typed_dict_fields(test: unittest.TestCase, root: Path) -> None:
             native = inspect(prefix + "class First(TD):\n" + fields,
                              prefix + "class Second(TD):\n" + changed, 4)
             test.assertFalse(native["duplicates"])
-            test.assertEqual(native["unitLines"][str(first)], [4])
+            test.assertEqual(native["unitSizes"][str(first)], [4])
 
     _verify_standalone_renamed(test, root, prefix, fields)
 
@@ -166,9 +166,9 @@ def verify_functional_typed_dict_fields(test: unittest.TestCase, root: Path) -> 
         with test.subTest(right=right):
             native = inspect(functional, right)
             test.assertTrue(native["duplicates"], native)
-            test.assertEqual(native["minimum"], 3)
-            test.assertEqual(native["eligibleLines"][str(first)], 3)
-            test.assertEqual(native["unitLines"][str(first)], [3])
+            test.assertEqual(native["minimumUnits"], 3)
+            test.assertEqual(native["eligibleUnits"][str(first)], 3)
+            test.assertEqual(native["unitSizes"][str(first)], [3])
             test.assertTrue(any(item["firstFile"]["start"] == 5 and
                                 item["firstFile"]["startLoc"]["column"] == 4 and
                                 item["firstFile"]["startLoc"]["position"] ==
@@ -236,7 +236,7 @@ def verify_functional_typed_dict_fields(test: unittest.TestCase, root: Path) -> 
     for left in (compact, mixed, opening):
         with test.subTest(left=left):
             native = inspect(left, other, 3)
-            test.assertEqual(native["eligibleLines"][str(first)], 0)
+            test.assertEqual(native["eligibleUnits"][str(first)], 0)
             test.assertFalse(native["duplicates"])
     shadowed = prefix + "TD = object\n" + functional[len(prefix):]
     native = inspect(shadowed, other, skip_behavior=False)

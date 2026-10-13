@@ -672,6 +672,8 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
             or not _jscpd_integer(clone.get("tokens"))):
         raise ValueError("Malformed jscpd clone")
     detail = _jscpd_similarity(clone) if kind == JSCPD_SIMILAR else ""
+    if "matchedUnits" in clone:
+        detail += f", {clone['matchedUnits'][0]} / {clone['matchedUnits'][1]} matched units"
     locations = (_jscpd_fragment(clone.get("firstFile"), root, allowed),
                  _jscpd_fragment(clone.get("secondFile"), root, allowed))
     items: list[dict[str, Any]] = []
@@ -679,7 +681,7 @@ def _jscpd_clone(entry: object, root: Path, allowed: set[str]) -> list[dict[str,
         items.append(diagnostic(
             "jscpd", f"{kind.upper()}_CLONE",
             f"{JSCPD_KINDS[kind]} clone of {other[0]}:{other[1]}:{other[2]} " +
-            f"({clone['lines']} lines, {clone['tokens']} tokens{detail})", path=current[0],
+            f"({clone['lines']} source lines, {clone['tokens']} tokens{detail})", path=current[0],
             line=current[1], column=current[2], native_details=clone,
             rule_is_adapter_category=True,
             documentation_url="https://jscpd.dev/reporters/json"))
@@ -694,6 +696,8 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
                                                                   for path in expected_paths]:
         raise ValueError("Missing or mismatched native engine/source evidence")
     validate_source_evidence(raw, root, expected_paths, skipped=False)
+    if raw.get("pass") != expected_kind:
+        raise ValueError("Mismatched native clone pass")
     statistics = raw.get("statistics")
     if not isinstance(statistics, dict) or not isinstance(raw.get("duplicates"), list):
         raise ValueError("Missing native engine statistics or clones")
@@ -718,6 +722,11 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
     for clone in raw["duplicates"]:
         if not isinstance(clone, dict) or clone.get("kind") != expected_kind:
             raise ValueError("Unexpected native engine clone kind")
+        matched = clone.get("matchedUnits")
+        if (not isinstance(matched, list) or len(matched) != 2
+                or any(not _jscpd_integer(n, minimum=raw["minimumUnits"])
+                       for n in matched)):
+            raise ValueError("Invalid native matched-unit accounting")
         if expected_kind == JSCPD_SIMILAR:
             _ = _jscpd_similarity(clone)
             unmatched = clone.get("unmatchedLines")
@@ -733,6 +742,9 @@ def _validate_clone_engine(raw: dict[str, Any], root: Path, expected_paths: list
             path = relative_path(side.get("name"), root)
             if path not in expected_paths:
                 raise ValueError("Native fragment outside source scope")
+            if matched[0 if key == "firstFile" else 1] > max(raw["unitSizes"][str(root / path)],
+                                                               default=0):
+                raise ValueError("Native match exceeds a prepared unit")
             start = side.get("startLoc")
             end = side.get("endLoc")
             original = (root / path).read_text(encoding="utf-8")
