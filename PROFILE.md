@@ -518,9 +518,14 @@ Resolvable customer bases use conservative C3 dispatch order; an opaque or unres
 base preceding the candidate prevents a guessed target. Source declarations establish
 ancestry and members when a companion stub exists; separate source/stub marker
 evidence remains available. Explicitly inherited marked Protocol or abstract contract
-members constrain implementations without requiring a redeclaration of inherited
-concrete methods. Structural resemblance alone does not propagate Protocol marking;
-calls through a marked Protocol-typed receiver still use the Protocol declaration.
+members constrain calls through implementing and combined receiver types without
+requiring a matching implementation marker or redeclaration. An implementation-only
+marker restricts its concrete receiver but not an unrelated unmarked contract type.
+Conflicting inherited contracts do not cause declaration findings: a known receiver
+with a marked contract ancestor remains restricted, including when an unmarked
+contract supplies the dispatched member. Calls through the unmarked contract alone
+remain unrestricted. Structural resemblance alone does not propagate Protocol
+marking; calls through a marked Protocol-typed receiver use its declaration.
 Mutable objects returned by ordinary properties remain subject to the independent
 field and contract policies.
 
@@ -629,15 +634,14 @@ operand are checked independently. No claim is made about unknown runtime
 results, dynamic slot replacement, external operator implementations or
 arbitrary expression/type inference. Other implicit protocols remain later
 slices of [ADR 0003](docs/adr/0003-encapsulated-only-members.md).
-`ENCAPSULATED_ONLY_DECLARATION` reports inconsistent marking on newly declared
-implementations of explicitly inherited Protocol or abstract contracts, conflicting
-inherited contract requirements, companion source/stub members and overload groups.
-The implementation's own member or class marker must match each contract; inheriting
-a marked requirement does not count as marking a new declaration. Inherited concrete
-members need no redeclaration, and structural Protocol resemblance creates no
-obligation. Class and member markers (including resolved aliases) are equivalent;
-any marked property accessor restricts the entire property, including cached
-properties. Agreement violations do not weaken established access restrictions.
+`ENCAPSULATED_ONLY_DECLARATION` reports inconsistent marking among companion
+source/stub members and overload groups of the same owner. It also compares
+source/stub class marks on inherited members. Contract and implementation markers
+need not agree, and conflicting inherited contracts are not declaration violations,
+whether a member is redeclared or inherited. Class and member markers (including
+resolved aliases) are equivalent for same-owner agreement; any marked property
+accessor restricts the entire property, including cached properties. Agreement
+violations do not weaken established access restrictions.
 This does not claim universal runtime coverage. Source read/parse errors, execution failures,
 timeouts and invalid/inconsistent reports are infrastructure errors (exit 2);
 valid clean output exits 0 and forbidden calls exit 1. Other jobs finish and retain

@@ -273,7 +273,7 @@ class Owner:
             (24, "example.Base.__index__"), (26, "example.Base.__index__"),
             (29, "example.Base.__repr__")])
 
-    def test_agreement_contracts_conflicts_and_access_survive_mismatch(self):
+    def test_contract_and_implementation_marks_are_independent(self):
         self.put("src/example.py", '''\
 from typing import Protocol
 from abc import ABC, abstractmethod
@@ -311,16 +311,78 @@ Missing().run()
 Extra().run()
 ''')
         result, _, _ = self.run_worker()
-        agreements = [d for d in result["diagnostics"]
-                      if d["rule"] == "ENCAPSULATED_ONLY_DECLARATION"]
-        self.assertEqual([(d["line"], d["symbol"]) for d in agreements], [
-            (15, "example.Missing.run"), (18, "example.Extra.run"),
-            (24, "example.Conflict.run")])
-        self.assertTrue(all("example." in d["message"] and not d["is_infrastructure_error"]
-                            for d in agreements))
-        self.assertIn((33, "example.Missing.run"),
-                      [(d["line"], d["symbol"]) for d in result["diagnostics"]
-                       if d["rule"] == "ENCAPSULATED_ONLY_CALL"])
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("ENCAPSULATED_ONLY_CALL", 33, "example.Missing.run"),
+            ("ENCAPSULATED_ONLY_CALL", 34, "example.Extra.run")],
+            "Contract-relative markers were not respected independently")
+
+    def test_receiver_contracts_and_combined_types_restrict_independently(self):
+        self.put("src/example.py", '''\
+from typing import Protocol
+def encapsulated_only(value): return value
+class Marked(Protocol):
+    @encapsulated_only
+    def run(self): ...
+class Plain(Protocol):
+    def run(self): ...
+class Combined(Plain, Marked): ...
+class Repeated(Plain, Marked):
+    def run(self): pass
+class Implementation(Marked, Plain):
+    def run(self): pass
+class Extra(Plain):
+    @encapsulated_only
+    def run(self): pass
+class Client:
+    def check(self, marked: Marked, plain: Plain, combined: Combined,
+              repeated: Repeated, implementation: Implementation, extra: Extra):
+        marked.run()
+        plain.run()
+        combined.run()
+        repeated.run()
+        implementation.run()
+        extra.run()
+''')
+        result, _, _ = self.run_worker(selected=[])
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("ENCAPSULATED_ONLY_CALL", 19, "example.Marked.run"),
+            ("ENCAPSULATED_ONLY_CALL", 21, "example.Plain.run"),
+            ("ENCAPSULATED_ONLY_CALL", 22, "example.Repeated.run"),
+            ("ENCAPSULATED_ONLY_CALL", 23, "example.Implementation.run"),
+            ("ENCAPSULATED_ONLY_CALL", 24, "example.Extra.run")],
+            "Known receiver types did not retain their contract-relative restriction")
+
+    def test_abstract_property_contract_marks_constrain_implementation(self):
+        self.put("src/example.py", '''\
+from abc import ABC, abstractmethod
+def encapsulated_only(value): return value
+class Marked(ABC):
+    @property
+    @encapsulated_only
+    @abstractmethod
+    def value(self) -> int: ...
+class Plain(ABC):
+    @property
+    @abstractmethod
+    def value(self) -> int: ...
+class Combined(Plain, Marked): ...
+class Implementation(Plain, Marked):
+    @property
+    def value(self) -> int: return 1
+class Client:
+    def check(self, marked: Marked, plain: Plain, combined: Combined,
+              implementation: Implementation):
+        marked.value
+        plain.value
+        combined.value
+        implementation.value
+''')
+        result, _, _ = self.run_worker(selected=[])
+        self.assertEqual([(d["rule"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("ENCAPSULATED_ONLY_PROPERTY", 19, "example.Marked.value"),
+            ("ENCAPSULATED_ONLY_PROPERTY", 21, "example.Plain.value"),
+            ("ENCAPSULATED_ONLY_PROPERTY", 22, "example.Implementation.value")],
+            "Inherited marked properties did not follow the known receiver type")
 
     def test_agreement_source_stub_overloads_properties_and_class_equivalence(self):
         self.put("src/marker.py", "def encapsulated_only(value): return value\n")
@@ -403,8 +465,8 @@ class Mismatch(Contract):
     def cached(self) -> int: return 1
 ''')
         result, _, _ = self.run_worker()
-        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
-            (21, "example.Mismatch.item"), (23, "example.Mismatch.cached")])
+        self.assertEqual(result["diagnostics"], [],
+                         "Implementation property markers were compared with contract markers")
 
     def test_agreement_transitive_contracts_stubs_and_conflict_without_implementation(self):
         self.put("src/marker.py", "def encapsulated_only(value): return value\n")
@@ -427,10 +489,38 @@ class StubImpl(StubOnly):
     def act(self) -> None: ...
 ''')
         result, raw, _ = self.run_worker(selected=[])
-        self.assertEqual([(d["line"], d["symbol"]) for d in result["diagnostics"]], [
-            (10, "example.Missing.run"), (11, "example.Conflict.run"),
-            (16, "example.StubImpl.act")])
-        self.assertEqual(raw["execution_error"], None)
+        self.assertEqual((result["diagnostics"], raw["execution_error"]), ([], None),
+                         "Stub contracts were required to agree with their implementations")
+
+    def test_stub_only_contracts_restrict_combined_receivers_without_redeclaration(self):
+        self.put("src/marker.py", "def encapsulated_only(value): return value\n")
+        self.put("src/example.pyi", '''\
+from typing import Protocol
+from marker import encapsulated_only
+class Marked(Protocol):
+    @encapsulated_only
+    def run(self) -> None: ...
+class Plain(Protocol):
+    def run(self) -> None: ...
+class Combined(Plain, Marked): ...
+class Implementation(Plain, Marked):
+    def run(self) -> None: ...
+''')
+        self.put("src/client.py", '''\
+from example import Marked, Plain, Combined, Implementation
+def check(marked: Marked, plain: Plain, combined: Combined,
+          implementation: Implementation):
+    marked.run()
+    plain.run()
+    combined.run()
+    implementation.run()
+''')
+        result, _, _ = self.run_worker(selected=[])
+        self.assertEqual([(d["path"], d["line"], d["symbol"]) for d in result["diagnostics"]], [
+            ("src/client.py", 4, "example.Marked.run"),
+            ("src/client.py", 6, "example.Plain.run"),
+            ("src/client.py", 7, "example.Implementation.run")],
+            "Stub-only contract restrictions were lost for known combined receivers")
 
     def test_agreement_companion_class_marks_on_inherited_members(self):
         self.put("src/marker.py", "def encapsulated_only(value): return value\n")
@@ -495,7 +585,7 @@ Implementation().run()
             validate(report, json.loads((QUARD / "report.schema.json").read_text(encoding="utf-8")))
             self.assertEqual((report["status"], report["exit_code"]), ("violations", 1))
             self.assertEqual({d["rule"] for d in report["diagnostics"]}, {
-                "ENCAPSULATED_ONLY_DECLARATION", "ENCAPSULATED_ONLY_CALL", "reportArgumentType"})
+                "ENCAPSULATED_ONLY_CALL", "reportArgumentType"})
             job = next(tool for tool in report["tools"] if tool["name"] == "encapsulated-only")
             self.assertEqual((job["status"], job["exit_code"]), ("violations", 1))
             self.assertTrue((root / job["raw_output"]["stdout"]).is_file())

@@ -2,9 +2,9 @@
 
 Consumers use an identity decorator named `encapsulated_only` to reserve selected
 behavior for an instance and its directly stored dependencies. We choose a
-receiver-shaped access boundary and matching declaration restrictions over
-ordinary public-call semantics; the cost is reduced callable extraction,
-reflective convenience and implementation freedom. This accepted policy is
+receiver-shaped access boundary and contract-relative restrictions over
+ordinary public-call semantics; the cost is reduced callable extraction and
+reflective convenience. This accepted policy is
 implemented for explicit calls, properties, selected implicit protocols (including
 context managers, iteration and awaiting) and declaration agreement; other implicit
 dispatch remains pending.
@@ -18,17 +18,19 @@ dispatch remains pending.
   introduced members do not inherit class-wide marking.
 - An inherited member retains its marking without redeclaration. This preserves
   the existing prohibition on overriding concrete customer methods.
-- A newly declared implementation must express a restriction matching each
-  explicitly inherited contract through its own member marker or declaring-class
-  marker. The inherited contract requirement alone does not satisfy this
-  declaration requirement. Marking an implementation of an unmarked contract is
-  also a mismatch.
-- Contracts, corresponding implementations, source/stub declarations and overload
-  declarations must agree on restriction status. Equivalent class-level and
-  member-level marking and resolved decorator aliases count; identical spelling
-  or decorator placement is unnecessary.
-- Conflicting inherited contracts or corresponding declarations are violations.
-  Established restrictions still apply to access checks when agreement fails.
+- Contracts and implementations may mark members independently. A marked contract
+  restricts calls through that contract and any implementing or combined type,
+  whether or not the member is redeclared there. An implementation-only marker
+  restricts its concrete type without marking an unrelated unmarked contract.
+  Conflicting inherited contracts produce no declaration disagreement: a proven
+  receiver type with a marked contract ancestor is restricted, even if an unmarked
+  contract supplies the dispatched member. Access through the unmarked contract
+  type alone is unrestricted.
+- Source/stub member declarations and overloads of the same owner must agree on
+  restriction status; source/stub class marks are compared for inherited members.
+  Equivalent class-level and member-level marking and resolved decorator aliases
+  count; identical spelling or decorator placement is unnecessary. An agreement
+  finding does not weaken established access restrictions.
 - Structural resemblance alone does not propagate a Protocol's markers to an
   unrelated implementation. Access through a marked Protocol annotation is
   checked against that contract.

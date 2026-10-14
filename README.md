@@ -526,9 +526,12 @@ builtin protocol helpers also check explicitly restricted protocol methods. It k
 full discovered scope when LCOM4 is selected or skipped. See
 [PROFILE.md](PROFILE.md#encapsulated-only-explicit-calls) for the marker convention
 and implemented inference boundaries.
-`ENCAPSULATED_ONLY_DECLARATION` also checks restriction agreement across explicitly
-inherited contracts, newly declared implementations, companion stubs and overloads;
-marking one property accessor marks the whole property for this comparison.
+`ENCAPSULATED_ONLY_DECLARATION` checks source/stub and overload restriction agreement
+for the same owner. Contract and implementation markers are independent: a marked
+contract restricts proven calls through its type and implementing or combined types,
+including inherited members without redeclaration, while an unrelated unmarked
+contract remains unrestricted. Marking one property accessor marks the whole
+property for source/stub comparison.
 
 ### Greenfield per-change LCOM4 checks
 
