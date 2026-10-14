@@ -29,3 +29,15 @@ _Avoid_: Executable behavior
 The verbatim original text between the reported clone positions, including any
 non-eligible intervening source lines.
 _Avoid_: Prepared text
+
+## Envelope structure
+
+**Base Envelope**:
+An object that directly implements a contract by forwarding its work to one
+stored delegate.
+_Avoid_: Class identified by an Envelope suffix
+
+**Assembly Envelope**:
+An object descended from a base Envelope, directly or through other assembly
+Envelopes, that supplies a delegate during construction and inherits its behavior.
+_Avoid_: Factory
