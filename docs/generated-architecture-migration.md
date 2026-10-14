@@ -30,9 +30,12 @@ before changing source. Do not sync Tach to accept existing imports.
    factories as contracts through facades.
 3. **Move cross-group wiring.** Ordinary source modules, including type-only
    imports and stubs, depend on contracts rather than peer concrete classes.
-   Put group-specific assembly in that group's direct `envelopes/` directory,
+   Put group-specific assembly anywhere in that group's `envelopes/` subtree,
    or global assembly in one directory named `main/` anywhere under `src/`.
-   Nested directories inside `envelopes/` are ordinary groups. A `main.py`
+   Nested Envelope directories inherit assembly import and type rights. Base
+   Envelopes forward through one stored delegate; assembly Envelopes inherit that
+   behavior and initialize their parent once. These structural checks do not
+   prove the objects composed at runtime. A `main.py`
    file outside `main/` is also ordinary. Neither assembly area imports a
    Bootstrap module; Bootstrap modules do not import one another. Tests can
    compose implementations while keeping mirrored test-class placement.

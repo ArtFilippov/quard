@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+from quard.architecture_draft.group_area_utils import ORDINARY, area
 from quard.constructor_origins.origins import Origins
 from quard.constructor_origins.origins_utils import builtin
 from quard.lambda_injection.lambda_sites import LambdaSites
@@ -18,11 +19,9 @@ EXECUTION_ERROR = "LAMBDA_INJECTION_EXECUTION_ERROR"
 
 
 def assembly_site(path: str) -> bool:
-    """Production main descendants and files directly in a group's envelopes."""
+    """Production main descendants and Envelope subtrees."""
     parts = Path(path).parts
-    return (len(parts) >= 3 and parts[0] == "src" and
-            ("main" in parts[1:-1] or
-             len(parts) >= 5 and parts[-2] == "envelopes"))
+    return len(parts) >= 3 and parts[0] == "src" and area(path)[1] != ORDINARY
 
 
 def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], str | None]:

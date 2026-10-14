@@ -160,7 +160,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
 
     @override
     def base_violations(self) -> list[dict[str, object]]:
-        """Prove direct-folder Envelope roles from source and matching stubs.
+        """Prove Envelope roles throughout their subtree from source and matching stubs.
 
         Returns:
             list[dict[str, object]]: Positioned failures to prove delegation.
@@ -168,7 +168,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
         results: list[dict[str, object]] = []
         for path, tree in self.trees.items():
             current = Path(path)
-            if (current.parent.name != ENVELOPES_FOLDER or current.parts[0] == TEST_ROOT
+            if (ENVELOPES_FOLDER not in current.parts[1:-1] or current.parts[0] == TEST_ROOT
                     or current.stem == CONSTRUCTOR):
                 continue
             if not any(isinstance(item, ast.ClassDef) for item in tree.body):
@@ -177,7 +177,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
                                 "message": f"{path}: envelopes/ requires an Envelope class."})
         for name, node, path in self.declarations:
             current = Path(path)
-            if current.parent.name != ENVELOPES_FOLDER or current.parts[0] == TEST_ROOT:
+            if ENVELOPES_FOLDER not in current.parts[1:-1] or current.parts[0] == TEST_ROOT:
                 continue
             role = self.envelope_role(name, node, path)
             source = current.with_suffix(".py").as_posix()

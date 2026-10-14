@@ -124,7 +124,7 @@ def _class_diagnostics(index: Contracts, owner: tuple[str, ast.ClassDef, str], *
                        ) -> list[dict[str, object]]:
     name, node, path = owner
     parts = Path(path).parts
-    if parts[0] == _SOURCE_ROOT and (_MAIN in parts or parts[-2] == _ENVELOPES):
+    if parts[0] == _SOURCE_ROOT and (_MAIN in parts or _ENVELOPES in parts[2:-1]):
         return []
     results: list[dict[str, object]] = []
     for annotation in _annotations(node):

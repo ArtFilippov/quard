@@ -279,14 +279,14 @@ violations baseline.
   compete; the combined contract must cover that base's contract. That direct
   combined contract selects the owner for descendants and mirrored tests. Unresolved
   ancestry emits `UNRESOLVED_FOLDER_OWNER` rather than proving placement.
-  An optional direct `envelopes/` folder under a contract folder contains base
+  An optional `envelopes/` subtree under a contract folder contains base
   Envelopes inheriting one proven contract and assembly Envelopes inheriting a
   proven base directly or through other assemblies. Class suffixes and file names
   do not determine their roles. Unrelated classes and nontechnical Python modules
-  in this directory receive positioned findings. Package initializers, matching
+  anywhere in this subtree receive positioned findings. Package initializers, matching
   stubs and mirrored test modules are supported. General implementation ownership
   and independent native checks still apply outside this directory.
-  In reviewed and both generated versions, a directly placed base Envelope with
+  In reviewed and both generated versions, a base Envelope at any subtree depth with
   exactly one proven direct contract must store one delegate parameter in its
   constructor without additional work. It must implement at least one member and
   return the unchanged result of a same-named call on that stored delegate with
@@ -301,10 +301,10 @@ violations baseline.
   A proven source ancestor outside `envelopes/` can establish an assembly; unknown
   or stub-only ancestors cannot. Matching stubs must agree on ancestry, sync/async
   member kinds and property accessors. These are
-  source-level proofs, not a runtime guarantee about composition.
-  Production files in the direct contract `envelopes/` folder may assemble
-  implementations from other contract folders; this does not disable envelope
-  placement or inheritance diagnostics.
+  source-level proofs, not a runtime guarantee about which objects are composed.
+  Production files throughout the contract `envelopes/` subtree may assemble
+  implementations from other contract folders, including concrete types in stubs;
+  this does not disable envelope placement or inheritance diagnostics.
   The independent outer-class and class-contract jobs still check these files.
   Production assembly classes under any `main/` folder (including nested files and
   stubs) may combine implementations from several contract folders; contract
@@ -631,9 +631,9 @@ their diagnostics. Ordinary reports, manifests and logs stay in the chosen consu
 
 Set `[checks] lambda_injection = false` to skip the independent `lambda-injection`
 job; missing settings default to `true` on new and upgraded projects. It scans
-discovered production `.py` files beneath a `main/` directory or directly in a
-contract group's `envelopes/` directory. Nested envelope directories, tests, stubs
-and ordinary modules are not assembly sites. Positional and keyword arguments,
+discovered production `.py` files beneath a `main/` directory or anywhere in a
+contract group's `envelopes/` subtree. Tests, stubs and ordinary modules are not
+assembly sites. Positional and keyword arguments,
 including references inside direct lambdas, are checked when the call target
 resolves to a project class or an imported External target. External means imported
 from outside discovered consumer package roots,
@@ -876,8 +876,9 @@ may depend on Bootstrap peers. Only observed eligible source imports become expl
 dependencies; empty dependency lists remain explicit. Tach's exact/unused, cycles,
 type-checking imports and external job are retained. A single `main/` directory,
 including an empty one, is allowed anywhere in production; a second receives a
-positioned generated folder violation. Nested folders beneath `envelopes/` are
-ordinary groups. Imports into Bootstrap from other Bootstrap modules or envelopes
+positioned generated folder violation. Nested folders beneath `envelopes/` inherit
+assembly rights; ordinary groups beside them do not. Imports into Bootstrap from
+other Bootstrap modules or envelopes
 receive native Tach findings in source and positioned folder findings in source and
 stubs. A `main.py` file alone remains ordinary.
 The generated version-2 folder job checks production source and stub declarations
@@ -901,7 +902,7 @@ configurations remain consumer-owned. The optional legacy
 `init_architecture.py --contract-only` draft creates an explicit Tach
 module for each discovered production file or package, including nested folders and
 stubs. It exposes verified local contracts to ordinary modules; files anywhere under
-a production `main/` folder or in a direct contract `envelopes/` folder may import
+a production `main/` folder or anywhere in a contract `envelopes/` subtree may import
 concrete implementation classes from any contract folder, including type-only imports
 and companion stubs. Other modules' utilities remain private. Dependency
 declarations are limited to observed eligible source imports, including type-checking

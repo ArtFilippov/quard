@@ -21,8 +21,8 @@ def area(path: str) -> tuple[str, str]:
     directories = Path(path).parts[1:-1]
     if MAIN_FOLDER in directories:
         return ".".join(directories[:directories.index(MAIN_FOLDER) + 1]), MAIN_FOLDER
-    if len(directories) > 1 and directories[-1] == ENVELOPES_FOLDER:
-        return ".".join(directories[:-1]), ENVELOPES_FOLDER
+    if ENVELOPES_FOLDER in directories[1:]:
+        return ".".join(directories[:directories.index(ENVELOPES_FOLDER)]), ENVELOPES_FOLDER
     return ".".join(directories), ORDINARY
 
 

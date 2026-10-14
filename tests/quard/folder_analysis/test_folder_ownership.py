@@ -11,7 +11,9 @@ import unittest
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 
+from quard._common import write_json
 from quard._policy import discover_files, read_scope
+from quard.architecture_draft.generated_selection_utils import IDENTITY, LEGACY_IDENTITY
 from quard.check import execute_job, make_jobs
 from quard._class_contracts_worker import Contracts as LegacyContracts
 from quard._contract_folders_worker import FolderOwnership as LegacyFolderOwnership
@@ -252,6 +254,81 @@ class TestFolderOwnership(unittest.TestCase):
         self.assertEqual(contracts["diagnostics"], [])
         self.assertEqual(outer["diagnostics"], [])
 
+    def nested_envelopes(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/impl.py", "from pkg.port.port import Port\n"
+                 "class Impl(Port):\n    def send(self): return 1\n")
+        self.put("src/pkg/port/envelopes/nested/__init__.py", "")
+        self.put("src/pkg/port/envelopes/nested/base.py",
+                 "from pkg.port.port import Port\nfrom pkg.port.impl import Impl\n"
+                 "class Base(Port):\n"
+                 "    def __init__(self, delegate: Impl): self.delegate = delegate\n"
+                 "    def send(self): return self.delegate.send()\n")
+        self.put("src/pkg/port/envelopes/nested/base.pyi",
+                 "from pkg.port.port import Port\nfrom pkg.port.impl import Impl\n"
+                 "class Base(Port):\n"
+                 "    def __init__(self, delegate: Impl): ...\n"
+                 "    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/nested/deeper/relay.py",
+                 "from pkg.port.envelopes.nested.base import Base\n"
+                 "from pkg.port.impl import Impl\n"
+                 "class Relay(Base):\n"
+                 "    def __init__(self, delegate: Impl): super().__init__(delegate)\n")
+        self.put("src/pkg/port/envelopes/nested/deeper/relay.pyi",
+                 "from pkg.port.envelopes.nested.base import Base\n"
+                 "from pkg.port.impl import Impl\n"
+                 "class Relay(Base):\n    def __init__(self, delegate: Impl): ...\n")
+        self.put("tests/pkg/port/envelopes/nested/deeper/test_relay.py",
+                 "class TestRelay: pass\n")
+
+    def test_nested_envelopes_are_proved_in_every_mode(self):
+        self.nested_envelopes()
+        for marker in (None, LEGACY_IDENTITY, IDENTITY):
+            with self.subTest(marker=marker):
+                if marker:
+                    write_json(self.root / ".quard/architecture.generated.json", marker)
+                result, raw = self.run_worker()
+                self.assertEqual((result["status"], result["exit_code"],
+                                  raw["execution_error"], result["diagnostics"]),
+                                 ("passed", 0, None, []))
+
+    def test_nested_envelope_failures_keep_positions_in_every_mode(self):
+        self.nested_envelopes()
+        self.put("src/pkg/port/envelopes/nested/base.py",
+                 "from pkg.port.port import Port\nfrom pkg.port.impl import Impl\n"
+                 "class Base(Port):\n"
+                 "    def __init__(self, delegate: Impl): self.delegate = delegate\n"
+                 "    def send(self): return 0\n")
+        self.put("src/pkg/port/envelopes/nested/deeper/relay.py",
+                 "from pkg.port.envelopes.nested.base import Base\n"
+                 "class Relay(Base):\n"
+                 "    def __init__(self, delegate):\n"
+                 "        super().__init__(delegate)\n"
+                 "        super().__init__(delegate)\n")
+        self.put("src/pkg/port/envelopes/nested/deeper/unrelated.py",
+                 "class Unrelated(object): pass\n")
+        self.put("src/pkg/port/envelopes/nested/deeper/wire.py", "value = 1\n")
+        for marker in (None, LEGACY_IDENTITY, IDENTITY):
+            with self.subTest(marker=marker):
+                if marker:
+                    write_json(self.root / ".quard/architecture.generated.json", marker)
+                result, raw = self.run_worker()
+                self.assertTrue({("src/pkg/port/envelopes/nested/base.py",
+                                  "ENVELOPE_DELEGATION"),
+                                 ("src/pkg/port/envelopes/nested/deeper/relay.py",
+                                  "ENVELOPE_INHERITANCE"),
+                                 ("src/pkg/port/envelopes/nested/deeper/unrelated.py",
+                                  "ENVELOPE_INHERITANCE"),
+                                 ("src/pkg/port/envelopes/nested/deeper/wire.py",
+                                  "ENVELOPE_CLASS")} <= {
+                                     (d["path"], d["rule"]) for d in result["diagnostics"]
+                                 } and result["status"] == "violations" and
+                                result["exit_code"] == 1 and raw["execution_error"] is None
+                                and all(d["line"] > 0 and d["column"] > 0 and
+                                        not d["is_infrastructure_error"]
+                                        for d in result["diagnostics"]), result)
+
     def test_invalid_envelopes_and_misplaced_subclasses_are_positioned(self):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol):\n    def send(self): ...\n")
@@ -281,6 +358,7 @@ class TestFolderOwnership(unittest.TestCase):
             ("Random", "ENVELOPE_INHERITANCE"),
             ("Pretender", "ENVELOPE_DELEGATION"),
             ("FakePortEnvelope", "ENVELOPE_DELEGATION"),
+            ("DeepPortEnvelope", "ENVELOPE_INHERITANCE"),
             ("UnrelatedPortEnvelope", "ENVELOPE_DELEGATION")})
         self.assertTrue(all(d["line"] > 0 and d["column"] > 0 and
                             not d["is_infrastructure_error"] for d in folders["diagnostics"]))

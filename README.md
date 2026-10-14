@@ -69,10 +69,10 @@ Fresh clones need only sync dependencies
 and run check. No manual acceptance or routine `tach sync` is required. Only eligible
 source imports become exact dependency declarations; unauthorized imports of concrete
 implementations and private utilities remain native Tach violations. Files anywhere
-under a production `main/` folder or a direct group's `envelopes/` folder may assemble
+under a production `main/` folder or anywhere in a group's `envelopes/` subtree may assemble
 concrete implementations from other groups,
-including type-only imports and companion stubs. Only the direct `envelopes/`
-directory assembles; nested ordinary directories follow ordinary rules. Exactly one
+including type-only imports and companion stubs. Ordinary directories beside
+`envelopes/` follow ordinary rules. Exactly one
 `main/` directory is allowed across `src/`, even if another is empty. Neither
 envelopes nor main may import Bootstrap modules, including in stubs; Bootstrap
 modules may not import one another. Package facades may be empty or
@@ -400,8 +400,8 @@ and applications are checked. External decorators are opaque; unknown applicatio
 fail. See
 [PROFILE.md](PROFILE.md#constructor-purity).
 The independent lambda-injection job checks argument provenance and direct or locally
-aliased lambda syntax in production `main/` descendants and files directly in a contract
-group's `envelopes/` folder,
+aliased lambda syntax in production `main/` descendants and files in a contract
+group's `envelopes/` subtree,
 for both generated and reviewed architecture. It does not narrow with LCOM4;
 see [PROFILE.md](PROFILE.md#lambda-injection).
 The instance-field boundary rule uses the same full scope and reports proven
@@ -446,19 +446,23 @@ The contract-folder job checks local Protocol and abstract-interface declaration
 their implementations across the same scope, including companion stubs. A contract
 named `HTTPPort` belongs in `http_port/http_port.py` (or `.pyi`); implementations
 belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-and-scope).
-In reviewed and both generated architecture versions, a direct-folder base Envelope
-must inherit one proven contract, store one constructor delegate without other work,
+In reviewed and both generated architecture versions, a base Envelope anywhere in an
+`envelopes/` subtree must inherit one proven contract, store one constructor delegate
+without other work,
 and directly return at least one method call on that delegate with unchanged arguments,
 or directly forward a property accessor. Every implemented member must forward this
-way; async methods may directly await the delegate call. A direct-folder assembly
+way; async methods may directly await the delegate call. An assembly
 Envelope inherits a proven base (including one outside `envelopes/`) or another
 assembly Envelope, declares only a constructor, and calls `super().__init__(...)`
 exactly once as an unconditional statement. Class and file names do not select roles.
-The direct `envelopes/` directory contains only these Envelopes, with technical
+Every `envelopes/` subtree contains only these Envelopes, with technical
 package initializers, matching stubs and mirrored test modules supported. Source
 proves behavior; companion stubs must agree with source ancestry, member kinds and
 property accessors. External inherited contracts need no member enumeration.
-These checks prove forwarding and parent initialization, not runtime composition.
+Assembly rights for concrete imports and annotations are inherited at every depth;
+ordinary modules, including stubs, remain restricted. The pattern intends to
+compose implementations, but these checks prove only forwarding and parent
+initialization, not which objects are composed at runtime.
 The independent test-placement job maps `TestHTTPPort` in
 `tests/pkg/http_port/test_http_port.py` to the production `HTTPPort` declaration
 in `src/pkg/http_port/`. The same mirrored layout applies to implementations

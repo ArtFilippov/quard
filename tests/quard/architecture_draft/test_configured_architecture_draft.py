@@ -1348,10 +1348,10 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             nested.mkdir()
             (nested / "__init__.py").write_text("")
             violations = (
-                (nested / "wire.py", "from demo.arbitrary.sender import Sender\n",
-                 "CONCRETE_IMPLEMENTATION_IMPORT", True),
-                (nested / "wire.pyi", "from demo.arbitrary.sender import Sender\n",
-                 "CONCRETE_IMPLEMENTATION_IMPORT", False),
+                (nested / "wire.py", "from other.group.deep.main.extra import result\n",
+                 "BOOTSTRAP_DEPENDENCY", True),
+                (nested / "wire.pyi", "from other.group.deep.main.extra import result\n",
+                 "BOOTSTRAP_DEPENDENCY", False),
                 (root / "src/other/group/main.py",
                  "from demo.arbitrary.sender import Sender\n", "CONCRETE_IMPLEMENTATION_IMPORT", True),
                 (wire, "import other.group.deep.main.extra\n", "BOOTSTRAP_DEPENDENCY", True),

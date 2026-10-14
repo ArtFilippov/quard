@@ -123,8 +123,8 @@ Conflicting declarations do not erase an established restriction.
 
 ## Assembly-site lambda injection
 
-An **assembly site** is a discovered production module beneath `main/` or a file
-directly in a contract group's `envelopes/` directory. **Lambda injection** is a
+An **assembly site** is a discovered production module beneath `main/` or anywhere
+in a contract group's `envelopes/` subtree. **Lambda injection** is a
 lambda supplied to a proven project-class or External call there, directly or through
 local aliases, branch alternatives, enclosing-function captures or simple containers.
 Its body, nested lambdas and definition-time defaults must use the supported

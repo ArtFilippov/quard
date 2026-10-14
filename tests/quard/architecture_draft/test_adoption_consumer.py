@@ -245,14 +245,14 @@ class TestAdoptionConsumer(unittest.TestCase):
             self.focused_findings(root, [(group + "sender.py", "CONCRETE_DEPENDENCY_TYPE",
                                           "dependency-types", False)])
             sender.write_text(before)
-            nested = root / "src/demo/records/envelopes/nested"
-            nested.mkdir()
-            (nested / "wire.py").write_text("from demo.records.sender import Sender\n")
-            self.focused_findings(root, [("src/demo/records/envelopes/nested/wire.py",
-                                          "CONCRETE_IMPLEMENTATION_IMPORT", "contract-folders",
-                                          True)])
-            (nested / "wire.py").unlink()
-            nested.rmdir()
+            ordinary = root / "src/demo/records/ordinary"
+            ordinary.mkdir()
+            (ordinary / "wire.py").write_text("from demo.records.sender import Sender\n")
+            self.focused_findings(root, [("src/demo/records/ordinary/wire.py",
+                                           "CONCRETE_IMPLEMENTATION_IMPORT", "contract-folders",
+                                           True)])
+            (ordinary / "wire.py").unlink()
+            ordinary.rmdir()
             duplicate = root / "src/gateway/main"
             duplicate.mkdir()
             self.focused_findings(root, [("src/gateway/main", "MULTIPLE_MAIN_DIRECTORIES",

@@ -40,5 +40,7 @@ _Avoid_: Class identified by an Envelope suffix
 
 **Assembly Envelope**:
 An object descended from a base Envelope, directly or through other assembly
-Envelopes, that supplies a delegate during construction and inherits its behavior.
+Envelopes, that calls its parent constructor and inherits its behavior. Its intended
+delegate composition is not statically proved. Its `envelopes/` subtree inherits
+assembly import and concrete-type rights at every depth.
 _Avoid_: Factory

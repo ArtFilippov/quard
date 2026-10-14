@@ -70,11 +70,12 @@ def assembly(port):
         self.assertEqual({(d["path"], d["line"], d["column"]) for d in result["diagnostics"]},
                          {("src/demo/main/wire.py", 13, 31),
                           ("src/demo/main/wire.py", 14, 32),
-                          ("src/demo/domain/envelopes/wire.py", 2, 19)})
+                          ("src/demo/domain/envelopes/wire.py", 2, 19),
+                          ("src/demo/domain/envelopes/nested/wire.py", 2, 19)})
         self.assertTrue(all("wrapper class" in d["message"] for d in result["diagnostics"]))
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text())
         self.assertEqual(raw["execution_error"], None)
-        self.assertEqual(len(raw["diagnostics"]), 3)
+        self.assertEqual(len(raw["diagnostics"]), 4)
 
     def test_forbidden_forms_and_lexical_shadowing(self):
         self.put("src/demo/main/wire.py", '''\
