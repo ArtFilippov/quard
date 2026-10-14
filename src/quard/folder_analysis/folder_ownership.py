@@ -13,6 +13,11 @@ from quard.folder_analysis.folder_utils import analyze, main, snake_case
 __all__ = ["FolderOwnership", "analyze", "main", "snake_case"]
 SOURCE_ROOT = "src"
 MAIN_FOLDER = "main"
+ENVELOPES_FOLDER = "envelopes"
+STUB_SUFFIX = ".pyi"
+CONSTRUCTOR = "__init__"
+OPAQUE_BASES = {"builtins.object", "typing.Protocol", "typing_extensions.Protocol",
+                "abc.ABC", "abc.ABCMeta"}
 
 
 class FolderOwnership(Contracts, FolderAnalysis):
@@ -104,12 +109,18 @@ class FolderOwnership(Contracts, FolderAnalysis):
                            owner: str | None) -> tuple[str, str] | None:
         """Check the reserved direct envelopes folder and its named classes."""
         current = Path(path)
-        inside = "envelopes" in current.parts[1:-1]
+        inside = ENVELOPES_FOLDER in current.parts[1:-1]
         if not inside and (owner is None or not node.name.endswith("Envelope")):
             return None
         if inside and not node.name.endswith("Envelope"):
             return "ENVELOPE_CLASS", f"{name}: only named envelope classes belong in envelopes/."
         if owner is None:
+            if (inside and current.parent.name == ENVELOPES_FOLDER
+                    and len(node.bases) == 1
+                    and (base := self.resolved(name, node.bases[0], path)) is not None
+                    and self.delegation(node) is None
+                    and not self.local_module(base) and base not in OPAQUE_BASES):
+                return None
             return "ENVELOPE_INHERITANCE", (f"{name}: envelope must inherit its parent "
                                             "local contract through the base envelope.")
         expected = self.folder(owner, current.parts[0]) / "envelopes"
@@ -127,6 +138,135 @@ class FolderOwnership(Contracts, FolderAnalysis):
             return "ENVELOPE_INHERITANCE", (f"{name}: inherit {owner} directly as "
                                             f"{base_name}, or subclass that base envelope.")
         return None
+
+    @override
+    def base_violations(self) -> list[dict[str, object]]:
+        """Prove direct-folder base Envelopes from their source bodies.
+
+        Returns:
+            list[dict[str, object]]: Positioned failures to prove delegation.
+        """
+        results: list[dict[str, object]] = []
+        for name, node, path in self.declarations:
+            current = Path(path)
+            if (current.parent.name != ENVELOPES_FOLDER or not node.name.endswith("Envelope")
+                    or current.stem != snake_case(node.name)):
+                continue
+            bases = [self.resolved(name, base, path) for base in node.bases]
+            contracts = [base for base in bases if base in self.contracts or (
+                base is not None and not self.local_module(base)
+                and base not in OPAQUE_BASES)]
+            # Concrete descendants remain assembly Envelopes in this first slice.
+            if (any(base in self.nodes and base not in self.contracts for base in bases)
+                    and (snake_case(node.name).removesuffix("_envelope")
+                         != current.parent.parent.name)
+                    or len(contracts) == 1 and contracts[0] in self.contracts
+                    and node.name != self.nodes[contracts[0]].name + "Envelope"
+                    or current.suffix == STUB_SUFFIX
+                    and current.with_suffix(".py").as_posix() in self.bindings_by_path):
+                continue
+            if len(bases) != 1 or len(contracts) != 1:
+                message = "directly inherit exactly one proven contract"
+            elif current.suffix == STUB_SUFFIX:
+                message = "provide Python source to prove delegation"
+            else:
+                message = self.delegation(node)
+            if message is not None:
+                results.append({"path": path, "line": node.lineno,
+                                "column": node.col_offset + 1,
+                                "symbol": name.removeprefix(module_name(path) + "."),
+                                "rule": "ENVELOPE_DELEGATION",
+                                "message": f"{name}: {message}."})
+        return results
+
+    @override
+    def delegation(self, node: ast.ClassDef) -> str | None:
+        """Recognize one stored parameter and direct forwarding bodies.
+
+        Args:
+            node (ast.ClassDef): Candidate base Envelope.
+
+        Returns:
+            str | None: Reason the class is not a forwarding base, if any.
+        """
+        methods = [item for item in node.body if isinstance(item, (ast.FunctionDef,
+                                                                     ast.AsyncFunctionDef))]
+        constructors = [item for item in methods if item.name == CONSTRUCTOR]
+        if len(constructors) != 1:
+            return "store exactly one delegate in a constructor"
+        constructor = constructors[0]
+        body = constructor.body
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]
+        if (constructor.decorator_list or len(body) != 1 or not isinstance(body[0], ast.Assign)
+                or len(body[0].targets) != 1
+                or not isinstance(body[0].targets[0], ast.Attribute)
+                or not isinstance(body[0].targets[0].value, ast.Name)
+                or constructor.args.posonlyargs or not constructor.args.args
+                or body[0].targets[0].value.id != constructor.args.args[0].arg
+                or not isinstance(body[0].value, ast.Name)
+                or body[0].value.id not in {arg.arg for arg in constructor.args.args[1:]}
+                or len(constructor.args.args[1:]) != 1
+                or constructor.args.vararg or constructor.args.kwarg
+                or constructor.args.kwonlyargs or constructor.args.defaults):
+            return "assign one constructor parameter to one receiver field without other work"
+        field = body[0].targets[0].attr
+        forwarding = [item for item in methods if item.name != CONSTRUCTOR]
+        failure = next((item for item in forwarding if not self.forwarded(item, field)), None)
+        if not forwarding or failure is not None:
+            return (f"forward {failure.name} directly to the stored delegate" if failure
+                    else "implement at least one directly forwarded method")
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]
+        return ("declare only forwarding methods and the delegate constructor"
+                if any(not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                       for item in body) else None)
+
+    @override
+    def forwarded(self, method: ast.FunctionDef | ast.AsyncFunctionDef, field: str) -> bool:
+        """Match an unchanged call, including its awaited async form.
+
+        Args:
+            method (ast.FunctionDef | ast.AsyncFunctionDef): Implemented method.
+            field (str): Stored delegate field.
+
+        Returns:
+            bool: Whether the method directly forwards its parameters and result.
+        """
+        args = method.args
+        if (method.decorator_list or not args.args or len(method.body) != 1
+                or not isinstance(method.body[0], ast.Return)):
+            return False
+        receiver = args.args[0].arg
+        value = method.body[0].value
+        if isinstance(method, ast.AsyncFunctionDef):
+            if not isinstance(value, ast.Await):
+                return False
+            value = value.value
+        if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
+            return False
+        positional = args.posonlyargs + args.args[1:]
+        star = value.args[-1] if args.vararg is not None and value.args else None
+        actual = value.args[:-1] if args.vararg is not None and value.args else value.args
+        expected: list[tuple[str | None, str]] = [(arg.arg, arg.arg) for arg in args.kwonlyargs]
+        if args.kwarg is not None:
+            expected.append((None, args.kwarg.arg))
+        return (value.func.attr == method.name and isinstance(value.func.value, ast.Attribute)
+                and value.func.value.attr == field
+                and isinstance(value.func.value.value, ast.Name)
+                and value.func.value.value.id == receiver
+                and (args.vararg is None or isinstance(star, ast.Starred)
+                     and isinstance(star.value, ast.Name) and star.value.id == args.vararg.arg)
+                and len(actual) == len(positional)
+                and all(isinstance(item, ast.Name) and item.id == arg.arg
+                        for item, arg in zip(actual, positional))
+                and len(value.keywords) == len(expected)
+                and all(item.arg == name and isinstance(item.value, ast.Name)
+                        and item.value.id == origin
+                        for item, (name, origin) in zip(value.keywords, expected)))
 
     @override
     def folder_violations(self) -> list[dict[str, object]]:

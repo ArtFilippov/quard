@@ -419,6 +419,10 @@ class TestArchitectureDraft(unittest.TestCase):
 
     def envelope_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
         pkg, _, client = self.main_fixture(root)
+        (pkg / "reader/impl.py").write_text(
+            "from demo.reader.reader import Reader\n"
+            "class ReaderImpl(Reader):\n"
+            "    def wire(self, implementation): return implementation\n")
         envelopes = pkg / "reader/envelopes"
         envelopes.mkdir()
         base = envelopes / "reader_envelope.py"
@@ -426,8 +430,9 @@ class TestArchitectureDraft(unittest.TestCase):
             "from demo.reader.reader import Reader\n" +
             "from demo.writer.impl import WriterImpl\n" +
             "class ReaderEnvelope(Reader):\n" +
+            "    def __init__(self, delegate): self.delegate = delegate\n" +
             "    def wire(self, implementation: WriterImpl) -> WriterImpl: " +
-            "return implementation\n")
+            "return self.delegate.wire(implementation)\n")
         (envelopes / "reader_envelope.pyi").write_text(
             "from demo.reader.reader import Reader\n" +
             "from demo.writer.impl import WriterImpl\n" +
@@ -540,7 +545,8 @@ class TestArchitectureDraft(unittest.TestCase):
                                  "from demo.reader.envelopes.named_envelope " +
                                  "import NamedEnvelope; " +
                                  "from demo.writer.impl import WriterImpl; " +
-                                 "assert ReaderEnvelope().wire(WriterImpl()).__class__ " +
+                                 "from demo.reader.impl import ReaderImpl; " +
+                                 "assert ReaderEnvelope(ReaderImpl()).wire(WriterImpl()).__class__ " +
                                  "is WriterImpl; assert issubclass(NamedEnvelope, ReaderEnvelope)"],
                                 root, 10)
             self.assertEqual(execution["exit_code"], 0, execution)

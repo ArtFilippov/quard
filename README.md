@@ -446,6 +446,11 @@ The contract-folder job checks local Protocol and abstract-interface declaration
 their implementations across the same scope, including companion stubs. A contract
 named `HTTPPort` belongs in `http_port/http_port.py` (or `.pyi`); implementations
 belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-and-scope).
+In reviewed and both generated architecture versions, a direct-folder base Envelope
+must inherit one proven contract, store one constructor delegate without other work,
+and directly return at least one method call on that delegate with unchanged arguments.
+Every method it implements must forward this way; async methods may directly await
+the delegate call. Source is required to prove delegation; a stub alone cannot.
 An optional direct `envelopes/` folder holds `HTTPPortEnvelope` in
 `http_port/envelopes/http_port_envelope.py` and named envelope subclasses in
 separate, class-named files; they inherit the parent contract through the base.

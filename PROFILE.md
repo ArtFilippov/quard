@@ -287,7 +287,14 @@ violations baseline.
   direct folder receive positioned `ENVELOPE_CLASS`, `ENVELOPE_INHERITANCE`,
   `ENVELOPE_FOLDER` or `ENVELOPE_FILE` diagnostics. The same layout applies under
   `tests/`; source and stubs may each declare the same class in companion files.
-  This checks static structure and inheritance, not runtime delegation or composition.
+  In reviewed and both generated versions, a directly placed base Envelope with
+  exactly one proven direct contract must store one delegate parameter in its
+  constructor without additional work. It must implement at least one method and
+  return the unchanged result of a same-named call on that stored delegate with
+  unchanged arguments for every implemented method (or directly await that call
+  in an async method). `ENVELOPE_DELEGATION` reports failed proof at the class;
+  stub-only declarations cannot prove forwarding. This is source-level evidence,
+  not a runtime guarantee about the delegate or assembly composition.
   Production files in the direct contract `envelopes/` folder may assemble
   implementations from other contract folders; this does not disable envelope
   placement or inheritance diagnostics.

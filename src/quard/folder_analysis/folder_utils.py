@@ -55,9 +55,12 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                     "rule": "SOURCE_ROOT_LAYOUT", "path": path, "line": 1, "column": 1,
                     "symbol": Path(path).name,
                     "message": f"{path}: place Python files inside a source directory."})
-        diagnostics.extend(group_roles(trees, GeneratedOwnership(trees)))
+        ownership = GeneratedOwnership(trees)
+        diagnostics.extend(group_roles(trees, ownership))
     else:
-        diagnostics.extend(FolderOwnership(trees).folder_violations())
+        ownership = FolderOwnership(trees)
+        diagnostics.extend(ownership.folder_violations())
+    diagnostics.extend(ownership.base_violations())
     return diagnostics, error
 
 

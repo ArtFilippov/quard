@@ -224,8 +224,10 @@ class TestFolderOwnership(unittest.TestCase):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol):\n    def send(self): ...\n")
         self.put("src/pkg/port/envelopes/port_envelope.py",
-                 "from pkg.port.port import Port as Parent\n"
-                 "class PortEnvelope(Parent):\n    def send(self): pass\n")
+                  "from pkg.port.port import Port as Parent\n"
+                  "class PortEnvelope(Parent):\n"
+                  "    def __init__(self, delegate): self.delegate = delegate\n"
+                  "    def send(self): return self.delegate.send()\n")
         self.put("src/pkg/port/envelopes/port_envelope.pyi",
                  "from pkg.port.port import Port\n"
                  "class PortEnvelope(Port):\n    def send(self): ...\n")
@@ -254,8 +256,10 @@ class TestFolderOwnership(unittest.TestCase):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol):\n    def send(self): ...\n")
         self.put("src/pkg/port/envelopes/port_envelope.py",
-                 "from pkg.port.port import Port\n"
-                 "class PortEnvelope(Port):\n    def send(self): pass\n")
+                  "from pkg.port.port import Port\n"
+                  "class PortEnvelope(Port):\n"
+                  "    def __init__(self, delegate): self.delegate = delegate\n"
+                  "    def send(self): return self.delegate.send()\n")
         self.put("src/pkg/port/envelopes/bad.py", "from .port_envelope import PortEnvelope\n"
                  "class WrongFileEnvelope(PortEnvelope): pass\n")
         self.put("src/pkg/port/envelopes/random.py", "class Random(object): pass\n")
@@ -278,6 +282,7 @@ class TestFolderOwnership(unittest.TestCase):
             ("Pretender", "ENVELOPE_CLASS"),
             ("FakePortEnvelope", "ENVELOPE_INHERITANCE"),
             ("UnrelatedPortEnvelope", "ENVELOPE_INHERITANCE"),
+            ("UnrelatedPortEnvelope", "ENVELOPE_DELEGATION"),
             ("OtherPortEnvelope", "ENVELOPE_FOLDER"),
             ("DeepPortEnvelope", "ENVELOPE_FOLDER")})
         self.assertTrue(all(d["line"] > 0 and d["column"] > 0 and
@@ -287,9 +292,11 @@ class TestFolderOwnership(unittest.TestCase):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol):\n    def send(self): ...\n")
         self.put("src/pkg/port/envelopes/port_envelope.py",
-                 "from pkg.port.port import Port\n"
-                 "class PortEnvelope(Port):\n    def send(self): pass\n"
-                 "class ExtraEnvelope(PortEnvelope):\n    def extra(self): pass\n")
+                  "from pkg.port.port import Port\n"
+                  "class PortEnvelope(Port):\n"
+                  "    def __init__(self, delegate): self.delegate = delegate\n"
+                  "    def send(self): return self.delegate.send()\n"
+                  "class ExtraEnvelope(PortEnvelope):\n    def extra(self): pass\n")
         folders, _ = self.run_worker()
         contracts, _ = self.run_worker("class-contracts")
         outer, _ = self.run_worker("outer-classes")
@@ -302,7 +309,9 @@ class TestFolderOwnership(unittest.TestCase):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol): pass\n")
         self.put("src/pkg/port/envelopes/port_envelope.py",
-                 "from pkg.port.port import Port\nclass PortEnvelope(Port): pass\n")
+                  "from pkg.port.port import Port\nclass PortEnvelope(Port):\n"
+                  "    def __init__(self, delegate): self.delegate = delegate\n"
+                  "    def send(self): return self.delegate.send()\n")
         self.put("src/pkg/port/envelopes/port_envelope.pyi",
                  "class PortEnvelope(object): ...\n")
         self.put("src/pkg/port/envelopes/child_port_envelope.py",
@@ -310,7 +319,147 @@ class TestFolderOwnership(unittest.TestCase):
                  "class ChildPortEnvelope(PortEnvelope): pass\n")
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["rule"]) for d in result["diagnostics"]],
-                         [("src/pkg/port/envelopes/port_envelope.pyi", "ENVELOPE_INHERITANCE")])
+                          [("src/pkg/port/envelopes/port_envelope.pyi", "ENVELOPE_INHERITANCE")])
+
+    def test_base_delegates_in_each_architecture_mode(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol):\n    def send(self, value): ...\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\n" +
+                 "class PortEnvelope(Port):\n" +
+                 "    def __init__(self, delegate): self.delegate = delegate\n" +
+                 "    def send(self, value): return self.delegate.send(value)\n")
+        self.put("src/pkg/port/envelopes/port_envelope.pyi",
+                 "from pkg.port.port import Port\n" +
+                 "class PortEnvelope(Port):\n    def send(self, value): ...\n")
+        results = []
+        for version in (None, 1, 2):
+            if version is not None:
+                self.put(".quard/architecture.generated.json",
+                         json.dumps({"policy": "contract-only", "version": version}))
+            result, _ = self.run_worker()
+            results.append((result["status"], result["exit_code"], result["diagnostics"]))
+        self.assertEqual(results, [("passed", 0, [])] * 3, "valid base did not pass")
+
+    def test_non_forwarding_and_invalid_constructor_are_positioned_in_every_mode(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol):\n    def send(self, value): ...\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\n" +
+                 "class PortEnvelope(Port):\n" +
+                 "    def __init__(self, delegate): self.delegate = delegate\n" +
+                 "    def send(self, value): return value\n")
+        results = []
+        for version in (None, 1, 2):
+            if version is not None:
+                self.put(".quard/architecture.generated.json",
+                         json.dumps({"policy": "contract-only", "version": version}))
+            result, _ = self.run_worker()
+            results.append((result["status"], result["exit_code"],
+                            [(item["rule"], item["line"], item["column"],
+                              item["is_infrastructure_error"]) for item in result["diagnostics"]]))
+        self.assertEqual(results, [("violations", 1, [("ENVELOPE_DELEGATION", 2, 1, False)])] * 3,
+                         "non-forwarding base was not reported")
+
+    def test_extra_constructor_work_rejected(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\nclass PortEnvelope(Port):\n" +
+                 "    def __init__(self, delegate):\n" +
+                 "        self.delegate = delegate\n        delegate.send()\n" +
+                 "    def send(self): return self.delegate.send()\n")
+        result, _ = self.run_worker()
+        self.assertEqual([(item["rule"], item["line"]) for item in result["diagnostics"]],
+                         [("ENVELOPE_DELEGATION", 2)], "constructor work was not reported")
+
+    def test_async_forwarding_accepts_same_arguments(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\nclass PortEnvelope(Port):\n" +
+                 "    def __init__(self, delegate): self.delegate = delegate\n" +
+                 "    async def send(self, value, *, flag=False):\n" +
+                 "        return await self.delegate.send(value, flag=flag)\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "async forwarding was rejected")
+
+    def test_external_contract_base_can_delegate(self):
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from external_api import Port\nclass PortEnvelope(Port):\n" +
+                 "    def __init__(self, delegate): self.delegate = delegate\n" +
+                 "    def send(self, value): return self.delegate.send(value)\n")
+        results = []
+        for version in (None, 1, 2):
+            if version is not None:
+                self.put(".quard/architecture.generated.json",
+                         json.dumps({"policy": "contract-only", "version": version}))
+            result, _ = self.run_worker()
+            results.append(result["diagnostics"])
+        self.assertEqual(results, [[], [], []], "external contract base was rejected")
+
+    def test_stub_without_source_cannot_prove_delegation(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.pyi",
+                 "from pkg.port.port import Port\nclass PortEnvelope(Port):\n" +
+                 "    def send(self): ...\n")
+        result, _ = self.run_worker()
+        self.assertEqual([(item["rule"], item["line"]) for item in result["diagnostics"]],
+                         [("ENVELOPE_DELEGATION", 2)], "stub-only base was accepted")
+
+    def test_base_rejects_unproved_shapes(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/impl.py", "from pkg.port.port import Port\nclass Impl(Port): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\nclass PortEnvelope(Port): pass\n")
+        shapes = (
+            "class PortEnvelope:\n    def __init__(self, delegate): self.delegate = delegate\n" +
+            "    def send(self, value): return self.delegate.send(value)\n",
+            "class PortEnvelope(Port, object):\n" +
+            "    def __init__(self, delegate): self.delegate = delegate\n" +
+            "    def send(self, value): return self.delegate.send(value)\n",
+            "class PortEnvelope(Port, Impl):\n" +
+            "    def __init__(self, delegate): self.delegate = delegate\n" +
+            "    def send(self, value): return self.delegate.send(value)\n",
+            "class PortEnvelope(Port):\n" +
+            "    def send(self, value): return value\n",
+            "class PortEnvelope(Port):\n" +
+            "    def __init__(self, delegate): self.delegate = delegate\n",
+            "class PortEnvelope(Port):\n" +
+            "    def __init__(self, delegate): self.delegate = delegate\n" +
+            "    def send(self, value): return self.delegate.send(value + 1)\n",
+            "class PortEnvelope(Port):\n" +
+            "    def __init__(self, delegate): self.delegate = delegate\n" +
+            "    def send(self, value): return self.other.send(value)\n",
+        )
+        results = []
+        for shape in shapes:
+            self.put("src/pkg/port/envelopes/port_envelope.py",
+                     "from pkg.port.port import Port\nfrom pkg.port.impl import Impl\n" + shape)
+            result, _ = self.run_worker()
+            results.append((result["status"], result["exit_code"],
+                            any(item["rule"] == "ENVELOPE_DELEGATION" and item["line"] == 3
+                                and not item["is_infrastructure_error"]
+                                for item in result["diagnostics"])))
+        self.assertEqual(results, [("violations", 1, True)] * len(shapes),
+                         "unproved base shape was accepted")
+
+    def test_generated_malformed_source_stays_an_error_with_base_violation(self):
+        self.put(".quard/architecture.generated.json",
+                 json.dumps({"policy": "contract-only", "version": 2}))
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol): pass\n")
+        self.put("src/pkg/port/envelopes/port_envelope.py",
+                 "from pkg.port.port import Port\nclass PortEnvelope(Port): pass\n")
+        self.put("src/pkg/broken.py", "class Broken(\n")
+        result, raw = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"], raw["execution_error"],
+                          {item["rule"] for item in result["diagnostics"]}),
+                         ("error", 2, "CONTRACT_FOLDERS_PARSE_ERROR",
+                          {"CONTRACT_FOLDERS_PARSE_ERROR", "ENVELOPE_DELEGATION"}),
+                         "malformed source was treated as a passing check")
 
     def test_parse_failure_retains_violations_and_malformed_report_fails(self):
         self.put("src/bad.py", "class Broken(\n")
@@ -318,7 +467,9 @@ class TestFolderOwnership(unittest.TestCase):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol): pass\n")
         self.put("src/pkg/port/envelopes/wrong.py", "from pkg.port.port import Port\n"
-                 "class PortEnvelope(Port): pass\n")
+                  "class PortEnvelope(Port):\n"
+                  "    def __init__(self, delegate): self.delegate = delegate\n"
+                  "    def send(self): return self.delegate.send()\n")
         result, raw = self.run_worker()
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("error", 2, "CONTRACT_FOLDERS_PARSE_ERROR"))

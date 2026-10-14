@@ -317,7 +317,8 @@ def parse_contract_folders(text: str, root: Path) -> tuple[list[dict[str, Any]],
                   "UNRESOLVED_FACADE_EXPORT", "CONFLICTING_FACADE_EXPORT",
                    "CONFLICTING_CONTRACT_ALIAS", "UNRESOLVED_CONTRACT_ALIAS",
                   "UNRESOLVED_FOLDER_OWNER", "ENVELOPE_FOLDER", "ENVELOPE_CLASS",
-                   "ENVELOPE_FILE", "ENVELOPE_INHERITANCE", "SOURCE_ROOT_LAYOUT",
+                    "ENVELOPE_FILE", "ENVELOPE_INHERITANCE", "ENVELOPE_DELEGATION",
+                    "SOURCE_ROOT_LAYOUT",
                    "MULTIPLE_MAIN_DIRECTORIES", "BOOTSTRAP_DEPENDENCY"}
     items = []
     for entry in obj["diagnostics"]:
