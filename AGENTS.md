@@ -1,4 +1,52 @@
-# Quard agent instructions
+## Changes
+
+Keep changes focused and minimal.
+Leave puzzles for later, following Puzzle Driven Development.
+Flag smells and refactoring, suggesting issues rather than fixing silently.
+Fix style violations in code, trusting checkers rather than suppressing them.
+
+## Code
+
+Favor aesthetics over functionality.
+Prepend classes with plain-text docblocks explaining purpose, not usage.
+Name variables as single nouns.
+Inline single-use expressions, dropping unnecessary local variables.
+Name methods as single nouns or verbs, separating commands from queries.
+
+## Objects
+
+Honor Elegant Objects and SOLID.
+Follow DDD (domain-driven design) and YAGNI (you arent gonna need it).
+Apply SRP (single-responsibility) and DRY (dont repeat yourself).
+Favor failing immediately over failing silently.
+Allow only assignments in constructor.
+Compose objects instead of inheriting implementation.
+Reject -er names and utility classes.
+
+## Methods
+
+Drop static methods, public static literals, setters, and getters.
+Declare methods in interfaces first, exposing nothing public outside them.
+Reject null returns and arguments.
+Skip type introspection, casting, and reflection.
+
+## Tests
+
+Follow "Angry Tests".
+Place one assertion per test, as its last statement.
+Phrase each failure message negatively.
+Keep tests short, verifying one behavior with one statement.
+
+## Fixtures
+
+Provide custom arguments to tested objects, not defaults.
+Skip irrelevant code, side effects, accessors, constructors, and errors.
+Favor fakes and stubs over mocks.
+Inline brief fixtures, generating bulky ones at runtime.
+Create fixture objects against duplication, using temporary directories.
+Keep filesystem, sockets, and memory unmocked.
+
+## Other
 
 Read `README.md`, `PROFILE.md` and `COMPATIBILITY.md` before changing analyzer policy
 or version-specific patches. Preserve diagnostics from enabled checks: do not filter
