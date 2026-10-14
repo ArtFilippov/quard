@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from collections import Counter
 from pathlib import Path
 import sys
 from typing import override
@@ -20,6 +21,11 @@ TEST_ROOT = "tests"
 SUPER_NAME = "super"
 BASE_ROLE = "base"
 ASSEMBLY_ROLE = "assembly"
+METHOD_KIND = "method"
+GET_KIND = "get"
+SET_KIND = "set"
+DELETE_KIND = "delete"
+PROPERTY_NAME = "builtins.property"
 OPAQUE_BASES = {"builtins.object", "typing.Protocol", "typing_extensions.Protocol",
                 "abc.ABC", "abc.ABCMeta"}
 
@@ -106,11 +112,10 @@ class FolderOwnership(Contracts, FolderAnalysis):
             return BASE_ROLE
         if parent not in self.nodes or parent == name:
             return None
-        if ENVELOPES_FOLDER not in Path(self.paths[parent]).parts[1:-1]:
-            return None
         role = self.envelope_role(parent, self.nodes[parent], self.paths[parent], seen | {name})
         if self.paths[parent].endswith(".py") and (
-                role == BASE_ROLE and self.delegation(self.nodes[parent]) is None or
+                role == BASE_ROLE and self.delegation(
+                    parent, self.nodes[parent], self.paths[parent]) is None or
                 role == ASSEMBLY_ROLE and
                 self.assembly(self.nodes[parent], self.paths[parent]) is None):
             return ASSEMBLY_ROLE
@@ -131,19 +136,21 @@ class FolderOwnership(Contracts, FolderAnalysis):
         Returns:
             bool: Whether the stub describes the same role and members.
         """
-        members = {item.name for item in node.body
+        members = [(item.name, self.member_kind(name, item, path),
+                    isinstance(item, ast.AsyncFunctionDef)) for item in node.body
                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                   and item.name != CONSTRUCTOR}
-        declared = {item.name for item in original.body
+                   and item.name != CONSTRUCTOR]
+        declared = [(item.name, self.member_kind(name, item, source),
+                     isinstance(item, ast.AsyncFunctionDef)) for item in original.body
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and item.name != CONSTRUCTOR}
+                    and item.name != CONSTRUCTOR]
         constructors = [item for item in node.body
                         if isinstance(item, ast.FunctionDef) and item.name == CONSTRUCTOR]
         return (self.envelope_role(name, node, path) ==
                 self.envelope_role(name, original, source) and
                 [self.resolved(name, base, path) for base in node.bases] ==
                 [self.resolved(name, base, source) for base in original.bases] and
-                members == declared and
+                Counter(members) == Counter(declared) and
                 (self.envelope_role(name, node, path) != ASSEMBLY_ROLE or
                  len(constructors) == 1 and all(
                      item is constructors[0] or isinstance(item, ast.Expr) and
@@ -189,7 +196,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
             elif current.suffix == STUB_SUFFIX:
                 message = "provide Python source to prove Envelope behavior"
             elif role == BASE_ROLE:
-                message = self.delegation(node)
+                message = self.delegation(name, node, path)
             else:
                 message = self.assembly(node, path)
             if message is not None:
@@ -245,11 +252,13 @@ class FolderOwnership(Contracts, FolderAnalysis):
         return None
 
     @override
-    def delegation(self, node: ast.ClassDef) -> str | None:
+    def delegation(self, name: str, node: ast.ClassDef, path: str) -> str | None:
         """Recognize one stored parameter and direct forwarding bodies.
 
         Args:
+            name (str): Qualified class name.
             node (ast.ClassDef): Candidate base Envelope.
+            path (str): Source path for decorator resolution.
 
         Returns:
             str | None: Reason the class is not a forwarding base, if any.
@@ -278,10 +287,15 @@ class FolderOwnership(Contracts, FolderAnalysis):
             return "assign one constructor parameter to one receiver field without other work"
         field = body[0].targets[0].attr
         forwarding = [item for item in methods if item.name != CONSTRUCTOR]
-        failure = next((item for item in forwarding if not self.forwarded(item, field)), None)
+        getters = {item.name for item in forwarding
+                   if self.member_kind(name, item, path) == GET_KIND}
+        failure = next((item for item in forwarding
+                        if (kind := self.member_kind(name, item, path)) is None
+                        or kind in {SET_KIND, DELETE_KIND} and item.name not in getters
+                        or not self.forwarded(item, field, kind)), None)
         if not forwarding or failure is not None:
             return (f"forward {failure.name} directly to the stored delegate" if failure
-                    else "implement at least one directly forwarded method")
+                    else "implement at least one directly forwarded member")
         body = node.body
         if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
                 and isinstance(body[0].value.value, str)):
@@ -291,21 +305,50 @@ class FolderOwnership(Contracts, FolderAnalysis):
                        for item in body) else None)
 
     @override
-    def forwarded(self, method: ast.FunctionDef | ast.AsyncFunctionDef, field: str) -> bool:
+    def member_kind(self, name: str, method: ast.FunctionDef | ast.AsyncFunctionDef,
+                    path: str) -> str | None:
+        """Identify an ordinary method or a direct built-in property accessor.
+
+        Args:
+            name (str): Qualified class name.
+            method (ast.FunctionDef | ast.AsyncFunctionDef): Declared member.
+            path (str): Source or stub path.
+
+        Returns:
+            str | None: Member kind, or no recognized declaration kind.
+        """
+        if not method.decorator_list:
+            return METHOD_KIND
+        if len(method.decorator_list) == 1 and isinstance(method, ast.FunctionDef):
+            decorator = method.decorator_list[0]
+            if self.resolved(name, decorator, path) == PROPERTY_NAME:
+                return GET_KIND
+            if (isinstance(decorator, ast.Attribute) and isinstance(decorator.value, ast.Name)
+                    and decorator.value.id == method.name):
+                return {"setter": SET_KIND, "deleter": DELETE_KIND}.get(decorator.attr)
+        return None
+
+    @override
+    def forwarded(self, method: ast.FunctionDef | ast.AsyncFunctionDef, field: str,
+                  kind: str) -> bool:
         """Match an unchanged call, including its awaited async form.
 
         Args:
             method (ast.FunctionDef | ast.AsyncFunctionDef): Implemented method.
             field (str): Stored delegate field.
+            kind (str): Proven member declaration kind.
 
         Returns:
             bool: Whether the method directly forwards its parameters and result.
         """
         args = method.args
-        if (method.decorator_list or not args.args or len(method.body) != 1
-                or not isinstance(method.body[0], ast.Return)):
+        if not (args.posonlyargs or args.args) or len(method.body) != 1:
             return False
-        receiver = args.args[0].arg
+        if kind != METHOD_KIND:
+            return self.property_forwarded(method, field, kind)
+        receiver = (args.posonlyargs + args.args)[0].arg
+        if not isinstance(method.body[0], ast.Return):
+            return False
         value = method.body[0].value
         if isinstance(method, ast.AsyncFunctionDef):
             if not isinstance(value, ast.Await):
@@ -313,7 +356,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
             value = value.value
         if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
             return False
-        positional = args.posonlyargs + args.args[1:]
+        positional = (args.posonlyargs + args.args)[1:]
         star = value.args[-1] if args.vararg is not None and value.args else None
         actual = value.args[:-1] if args.vararg is not None and value.args else value.args
         expected: list[tuple[str | None, str]] = [(arg.arg, arg.arg) for arg in args.kwonlyargs]
@@ -332,6 +375,43 @@ class FolderOwnership(Contracts, FolderAnalysis):
                 and all(item.arg == name and isinstance(item.value, ast.Name)
                         and item.value.id == origin
                         for item, (name, origin) in zip(value.keywords, expected)))
+
+    @override
+    def property_forwarded(self, method: ast.FunctionDef | ast.AsyncFunctionDef,
+                           field: str, kind: str) -> bool:
+        """Prove a direct property operation on the stored delegate.
+
+        Args:
+            method (ast.FunctionDef | ast.AsyncFunctionDef): Accessor declaration.
+            field (str): Stored delegate field.
+            kind (str): Getter, setter or deleter kind.
+
+        Returns:
+            bool: Whether the matching property is forwarded without other work.
+        """
+        args = method.args
+        if (args.posonlyargs or args.vararg or args.kwarg or args.kwonlyargs
+                or args.defaults or args.kw_defaults
+                or len(args.args) != (2 if kind == SET_KIND else 1)):
+            return False
+        statement = method.body[0]
+        if kind == GET_KIND:
+            target = statement.value if isinstance(statement, ast.Return) else None
+        elif (kind == SET_KIND and isinstance(statement, ast.Assign)
+              and len(statement.targets) == 1):
+            target = statement.targets[0]
+            if (not isinstance(statement.value, ast.Name)
+                    or statement.value.id != args.args[1].arg):
+                return False
+        elif (kind == DELETE_KIND and isinstance(statement, ast.Delete)
+              and len(statement.targets) == 1):
+            target = statement.targets[0]
+        else:
+            return False
+        return (isinstance(target, ast.Attribute) and target.attr == method.name
+                and isinstance(target.value, ast.Attribute) and target.value.attr == field
+                and isinstance(target.value.value, ast.Name)
+                and target.value.value.id == args.args[0].arg)
 
     @override
     def folder_violations(self) -> list[dict[str, object]]:

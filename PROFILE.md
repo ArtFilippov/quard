@@ -288,14 +288,19 @@ violations baseline.
   and independent native checks still apply outside this directory.
   In reviewed and both generated versions, a directly placed base Envelope with
   exactly one proven direct contract must store one delegate parameter in its
-  constructor without additional work. It must implement at least one method and
+  constructor without additional work. It must implement at least one member and
   return the unchanged result of a same-named call on that stored delegate with
   unchanged arguments for every implemented method (or directly await that call
-  in an async method). `ENVELOPE_DELEGATION` reports failed proof at the class;
+  in an async method). Direct property getters, setters and deleters must read,
+  assign and delete the matching delegate property without intermediate work.
+  Explicit external bases qualify without enumerating their members.
+  `ENVELOPE_DELEGATION` reports failed proof at the class;
   stub-only declarations cannot prove forwarding. Assembly Envelopes declare only
   one constructor, which must directly call `super().__init__(...)` once; additional
   members and conditional or repeated parent calls fail with `ENVELOPE_INHERITANCE`.
-  Matching stubs must agree on ancestry and member declarations. These are
+  A proven source ancestor outside `envelopes/` can establish an assembly; unknown
+  or stub-only ancestors cannot. Matching stubs must agree on ancestry, sync/async
+  member kinds and property accessors. These are
   source-level proofs, not a runtime guarantee about composition.
   Production files in the direct contract `envelopes/` folder may assemble
   implementations from other contract folders; this does not disable envelope

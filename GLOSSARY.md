@@ -33,8 +33,9 @@ _Avoid_: Prepared text
 ## Envelope structure
 
 **Base Envelope**:
-An object that directly implements a contract by forwarding its work to one
-stored delegate.
+An object that directly implements a local or explicitly imported external contract
+by forwarding methods and property accessors to one stored delegate. The check
+proves declared forwarding, not the complete contract interface.
 _Avoid_: Class identified by an Envelope suffix
 
 **Assembly Envelope**:
