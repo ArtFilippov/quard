@@ -16,6 +16,10 @@ MAIN_FOLDER = "main"
 ENVELOPES_FOLDER = "envelopes"
 STUB_SUFFIX = ".pyi"
 CONSTRUCTOR = "__init__"
+TEST_ROOT = "tests"
+SUPER_NAME = "super"
+BASE_ROLE = "base"
+ASSEMBLY_ROLE = "assembly"
 OPAQUE_BASES = {"builtins.object", "typing.Protocol", "typing_extensions.Protocol",
                 "abc.ABC", "abc.ABCMeta"}
 
@@ -25,6 +29,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
 
     def __init__(self, trees: dict[str, ast.Module]):
         super().__init__(trees)
+        self.trees = trees
         self.contracts = {name for name in self.nodes if self.declaration(name)}
 
     @override
@@ -80,104 +85,164 @@ class FolderOwnership(Contracts, FolderAnalysis):
         return ancestors
 
     @override
-    def inherits_envelope(self, name: str, node: ast.ClassDef, path: str, *,
-                          owner: str, seen: frozenset[str] = frozenset()) -> bool:
-        """Find a correctly placed base envelope in the local concrete ancestry."""
-        if name in seen:
-            return False
-        base_name = owner.rpartition(".")[2] + "Envelope"
-        for base in node.bases:
-            parent = self.resolved(name, base, path)
-            if parent not in self.nodes or parent in self.contracts:
-                continue
-            parent_node = self.nodes[parent]
-            parent_path = self.paths[parent]
-            parent_file = Path(parent_path)
-            expected = self.folder(owner, parent_file.parts[0]) / "envelopes"
-            if (parent_node.name == base_name and parent_file.parent == expected
-                    and parent_file.stem == snake_case(base_name)
-                    and any(self.resolved(parent, direct) == owner
-                            for direct in parent_node.bases)):
-                return True
-            if self.inherits_envelope(parent, parent_node, parent_path, owner=owner,
-                                      seen=seen | {name}):
-                return True
-        return False
+    def envelope_role(self, name: str, node: ast.ClassDef, path: str,
+                      seen: frozenset[str] = frozenset()) -> str | None:
+        """Prove a direct contract base or a chain of assembly ancestors.
 
-    @override
-    def envelope_violation(self, name: str, node: ast.ClassDef, path: str, *,
-                           owner: str | None) -> tuple[str, str] | None:
-        """Check the reserved direct envelopes folder and its named classes."""
-        current = Path(path)
-        inside = ENVELOPES_FOLDER in current.parts[1:-1]
-        if not inside and (owner is None or not node.name.endswith("Envelope")):
+        Args:
+            name (str): Qualified Envelope name.
+            node (ast.ClassDef): Declaration to classify.
+            path (str): Source or stub path.
+            seen (frozenset[str], default=frozenset()): Visited ancestors.
+
+        Returns:
+            str | None: Proven role, if any.
+        """
+        if name in seen or len(node.bases) != 1:
             return None
-        if inside and not node.name.endswith("Envelope"):
-            return "ENVELOPE_CLASS", f"{name}: only named envelope classes belong in envelopes/."
-        if owner is None:
-            if (inside and current.parent.name == ENVELOPES_FOLDER
-                    and len(node.bases) == 1
-                    and (base := self.resolved(name, node.bases[0], path)) is not None
-                    and self.delegation(node) is None
-                    and not self.local_module(base) and base not in OPAQUE_BASES):
-                return None
-            return "ENVELOPE_INHERITANCE", (f"{name}: envelope must inherit its parent "
-                                            "local contract through the base envelope.")
-        expected = self.folder(owner, current.parts[0]) / "envelopes"
-        if current.parent != expected:
-            return "ENVELOPE_FOLDER", f"{name}: place this envelope in '{expected}/'."
-        if current.stem != snake_case(node.name):
-            return "ENVELOPE_FILE", (f"{name}: declare this envelope in "
-                                     f"'{expected / (snake_case(node.name) + current.suffix)}'.")
-        base_name = owner.rpartition(".")[2] + "Envelope"
-        if node.name == base_name:
-            valid = any(self.resolved(name, base, path) == owner for base in node.bases)
-        else:
-            valid = self.inherits_envelope(name, node, path, owner=owner)
-        if not valid:
-            return "ENVELOPE_INHERITANCE", (f"{name}: inherit {owner} directly as "
-                                            f"{base_name}, or subclass that base envelope.")
+        parent = self.resolved(name, node.bases[0], path)
+        if parent in self.contracts or (parent is not None and not self.local_module(parent)
+                                        and parent not in OPAQUE_BASES):
+            return BASE_ROLE
+        if parent not in self.nodes or parent == name:
+            return None
+        if ENVELOPES_FOLDER not in Path(self.paths[parent]).parts[1:-1]:
+            return None
+        role = self.envelope_role(parent, self.nodes[parent], self.paths[parent], seen | {name})
+        if self.paths[parent].endswith(".py") and (
+                role == BASE_ROLE and self.delegation(self.nodes[parent]) is None or
+                role == ASSEMBLY_ROLE and
+                self.assembly(self.nodes[parent], self.paths[parent]) is None):
+            return ASSEMBLY_ROLE
         return None
 
     @override
+    def stub_agreement(self, name: str, node: ast.ClassDef, path: str, *,
+                       original: ast.ClassDef, source: str) -> bool:
+        """Compare source and stub Envelope ancestry and behavior declarations.
+
+        Args:
+            name (str): Qualified Envelope name.
+            node (ast.ClassDef): Stub class.
+            path (str): Stub path.
+            original (ast.ClassDef): Source class.
+            source (str): Source path.
+
+        Returns:
+            bool: Whether the stub describes the same role and members.
+        """
+        members = {item.name for item in node.body
+                   if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and item.name != CONSTRUCTOR}
+        declared = {item.name for item in original.body
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and item.name != CONSTRUCTOR}
+        constructors = [item for item in node.body
+                        if isinstance(item, ast.FunctionDef) and item.name == CONSTRUCTOR]
+        return (self.envelope_role(name, node, path) ==
+                self.envelope_role(name, original, source) and
+                [self.resolved(name, base, path) for base in node.bases] ==
+                [self.resolved(name, base, source) for base in original.bases] and
+                members == declared and
+                (self.envelope_role(name, node, path) != ASSEMBLY_ROLE or
+                 len(constructors) == 1 and all(
+                     item is constructors[0] or isinstance(item, ast.Expr) and
+                     isinstance(item.value, ast.Constant) and
+                     isinstance(item.value.value, str)
+                     for item in node.body)))
+
+    @override
     def base_violations(self) -> list[dict[str, object]]:
-        """Prove direct-folder base Envelopes from their source bodies.
+        """Prove direct-folder Envelope roles from source and matching stubs.
 
         Returns:
             list[dict[str, object]]: Positioned failures to prove delegation.
         """
         results: list[dict[str, object]] = []
+        for path, tree in self.trees.items():
+            current = Path(path)
+            if (current.parent.name != ENVELOPES_FOLDER or current.parts[0] == TEST_ROOT
+                    or current.stem == CONSTRUCTOR):
+                continue
+            if not any(isinstance(item, ast.ClassDef) for item in tree.body):
+                results.append({"path": path, "line": 1, "column": 1,
+                                "symbol": current.stem, "rule": "ENVELOPE_CLASS",
+                                "message": f"{path}: envelopes/ requires an Envelope class."})
         for name, node, path in self.declarations:
             current = Path(path)
-            if (current.parent.name != ENVELOPES_FOLDER or not node.name.endswith("Envelope")
-                    or current.stem != snake_case(node.name)):
+            if current.parent.name != ENVELOPES_FOLDER or current.parts[0] == TEST_ROOT:
                 continue
-            bases = [self.resolved(name, base, path) for base in node.bases]
-            contracts = [base for base in bases if base in self.contracts or (
-                base is not None and not self.local_module(base)
-                and base not in OPAQUE_BASES)]
-            # Concrete descendants remain assembly Envelopes in this first slice.
-            if (any(base in self.nodes and base not in self.contracts for base in bases)
-                    and (snake_case(node.name).removesuffix("_envelope")
-                         != current.parent.parent.name)
-                    or len(contracts) == 1 and contracts[0] in self.contracts
-                    and node.name != self.nodes[contracts[0]].name + "Envelope"
-                    or current.suffix == STUB_SUFFIX
-                    and current.with_suffix(".py").as_posix() in self.bindings_by_path):
-                continue
-            if len(bases) != 1 or len(contracts) != 1:
-                message = "directly inherit exactly one proven contract"
+            role = self.envelope_role(name, node, path)
+            source = current.with_suffix(".py").as_posix()
+            if current.suffix == STUB_SUFFIX and source in self.trees:
+                original = next((item for item in self.trees[source].body
+                                 if isinstance(item, ast.ClassDef) and item.name == node.name),
+                                None)
+                if original is not None:
+                    message = (None if self.stub_agreement(name, node, path,
+                                                           original=original, source=source)
+                               else "match the source Envelope ancestry and declared members")
+                else:
+                    message = "declare the same Envelope class in source"
+            elif role is None:
+                message = "inherit exactly one proven contract or a proven Envelope parent"
             elif current.suffix == STUB_SUFFIX:
-                message = "provide Python source to prove delegation"
-            else:
+                message = "provide Python source to prove Envelope behavior"
+            elif role == BASE_ROLE:
                 message = self.delegation(node)
+            else:
+                message = self.assembly(node, path)
             if message is not None:
                 results.append({"path": path, "line": node.lineno,
                                 "column": node.col_offset + 1,
                                 "symbol": name.removeprefix(module_name(path) + "."),
-                                "rule": "ENVELOPE_DELEGATION",
+                                "rule": ("ENVELOPE_DELEGATION" if role == BASE_ROLE
+                                         else "ENVELOPE_INHERITANCE"),
                                 "message": f"{name}: {message}."})
         return results
+
+    @override
+    def assembly(self, node: ast.ClassDef, path: str) -> str | None:
+        """Require one direct parent constructor call and no other declared behavior.
+
+        Args:
+            node (ast.ClassDef): Assembly Envelope declaration.
+            path (str): Source path for builtin name resolution.
+
+        Returns:
+            str | None: Reason that assembly could not be proved, if any.
+        """
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]
+        if (len(body) != 1 or not isinstance(body[0], ast.FunctionDef)
+                or body[0].name != CONSTRUCTOR or body[0].decorator_list):
+            return "declare only one constructor and no other members"
+        constructor = body[0]
+        statements = constructor.body
+        if (statements and isinstance(statements[0], ast.Expr)
+                and isinstance(statements[0].value, ast.Constant)
+                and isinstance(statements[0].value.value, str)):
+            statements = statements[1:]
+        calls = [item.value for item in statements if isinstance(item, ast.Expr)
+                 and isinstance(item.value, ast.Call) and isinstance(item.value.func, ast.Attribute)
+                 and item.value.func.attr == CONSTRUCTOR
+                 and isinstance(item.value.func.value, ast.Call)
+                 and isinstance(item.value.func.value.func, ast.Name)
+                 and item.value.func.value.func.id == SUPER_NAME
+                 and not item.value.func.value.args and not item.value.func.value.keywords]
+        if (len(calls) != 1 or SUPER_NAME in self.bindings_by_path[path] or
+                SUPER_NAME in {arg.arg for arg in constructor.args.posonlyargs +
+                               constructor.args.args + constructor.args.kwonlyargs} or
+                any(isinstance(item, ast.Name) and item.id == SUPER_NAME
+                    and isinstance(item.ctx, ast.Store) for item in ast.walk(constructor))
+                or sum(1 for item in ast.walk(constructor) if isinstance(item, ast.Call)
+                       and isinstance(item.func, ast.Attribute)
+                       and item.func.attr == CONSTRUCTOR) != 1):
+            return "call super().__init__(...) exactly once in the constructor"
+        return None
 
     @override
     def delegation(self, node: ast.ClassDef) -> str | None:
@@ -322,17 +387,8 @@ class FolderOwnership(Contracts, FolderAnalysis):
                     results.append({**location, "rule": "UNRESOLVED_FOLDER_OWNER",
                                     "message": f"{name}: resolve local ancestry before its "
                                     "implementation folder can be verified."})
-                elif violation := self.envelope_violation(name, node, path, owner=None):
-                    rule, message = violation
-                    results.append({**location, "rule": rule, "message": message})
                 continue
             owner = next(iter(owners))
-            if violation := self.envelope_violation(name, node, path, owner=owner):
-                rule, message = violation
-                results.append({**location, "rule": rule, "message": message})
-                continue
-            if "envelopes" in current.parts[1:-1] or node.name.endswith("Envelope"):
-                continue
             expected = self.folder(owner, current.parts[0])
             if current.parent != expected and expected not in current.parents:
                 results.append({**location, "rule": "IMPLEMENTATION_FOLDER",

@@ -450,10 +450,13 @@ In reviewed and both generated architecture versions, a direct-folder base Envel
 must inherit one proven contract, store one constructor delegate without other work,
 and directly return at least one method call on that delegate with unchanged arguments.
 Every method it implements must forward this way; async methods may directly await
-the delegate call. Source is required to prove delegation; a stub alone cannot.
-An optional direct `envelopes/` folder holds `HTTPPortEnvelope` in
-`http_port/envelopes/http_port_envelope.py` and named envelope subclasses in
-separate, class-named files; they inherit the parent contract through the base.
+the delegate call. A direct-folder assembly Envelope inherits a proven base or another
+assembly Envelope, declares only a constructor, and calls `super().__init__(...)`
+exactly once as an unconditional statement. Class and file names do not select roles.
+The direct `envelopes/` directory contains only these Envelopes, with technical
+package initializers, matching stubs and mirrored test modules supported. Source
+proves behavior; companion stubs must agree with source ancestry and members.
+These checks prove forwarding and parent initialization, not runtime composition.
 The independent test-placement job maps `TestHTTPPort` in
 `tests/pkg/http_port/test_http_port.py` to the production `HTTPPort` declaration
 in `src/pkg/http_port/`. The same mirrored layout applies to implementations

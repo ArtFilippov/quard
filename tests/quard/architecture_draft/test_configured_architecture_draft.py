@@ -1319,7 +1319,10 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 "from demo.arbitrary.sender import Sender\n"
                 "result = Sender().first('nested')\n")
 
-            self.assertEqual(self.focused_diagnostics(root, "contract-folders"), [])
+            self.assertEqual({item["path"] for item in self.focused_diagnostics(root, "contract-folders")
+                              if item["rule"] == "ENVELOPE_DELEGATION"},
+                             {"src/demo/arbitrary/envelopes/adapter.py",
+                              "src/other/group/deep/envelopes/relay.py"})
             modules = {item["path"]: item for item in generated_policy.render(root)[0]["modules"]}
             self.assertEqual(modules["demo.arbitrary.envelopes.adapter"]["layer"], "Envelopes")
             self.assertEqual(modules["other.group.deep.envelopes.relay"]["layer"], "Envelopes")
@@ -1389,7 +1392,10 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                                         item["line"] == item["column"] == 1 for item in
                                         diagnostics), diagnostics)
                     duplicate.rmdir()
-            self.assertEqual(self.focused_diagnostics(root, "contract-folders"), [])
+            self.assertEqual({item["path"] for item in self.focused_diagnostics(root, "contract-folders")
+                              if item["rule"] == "ENVELOPE_DELEGATION"},
+                             {"src/demo/arbitrary/envelopes/adapter.py",
+                              "src/other/group/deep/envelopes/relay.py"})
 
     def test_generated_provenance_disagreement_does_not_expose_contracts(self):
         with TemporaryDirectory(prefix="quard-provenance-consumer-") as directory:

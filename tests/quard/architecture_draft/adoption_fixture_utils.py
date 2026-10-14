@@ -80,17 +80,19 @@ def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
     (group / "__init__.pyi").write_text((group / "__init__.py").read_text())
     (root / "src/demo/__init__.py").write_text(
         "from .records import Port as PublicPort\n__all__ = ['PublicPort']\n")
-    (group / "envelopes/adapter.py").write_text(
+    (group / "adapter.py").write_text(
         "from typing import override\nfrom demo.records.service import Service\n" +
-        "from demo.records.sender import Sender\n\nclass Adapter(Service):\n" +
+        "\nclass Adapter(Service):\n" +
+        "    def __init__(self, delegate: Service) -> None:\n"
+        "        super().__init__()\n        self.delegate = delegate\n\n" +
         "    @override\n    def first(self, value: str) -> str:\n" +
-        "        return Sender().first(value)\n\n" +
+        "        return self.delegate.first(value)\n\n" +
         "    @override\n    def second(self, value: str) -> str:\n" +
-        "        return self.first(value + '!')\n")
+        "        return self.delegate.second(value)\n")
     (root / "src/demo/main/wire.py").write_text(
-        "from demo.records.envelopes.adapter import Adapter\n" +
+        "from demo.records.adapter import Adapter\n" +
         "from demo.records.sender import Sender\n\n" +
-        "def connect() -> str:\n    return Adapter().first(Sender().second('ok'))\n")
+        "def connect() -> str:\n    return Adapter(Sender()).first(Sender().second('ok'))\n")
     (root / "src/gateway/client/value_utils.py").write_text(
         "from demo import PublicPort\n" +
         "import demo.records.entry_shape as shape\n\n" +

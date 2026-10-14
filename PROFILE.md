@@ -279,22 +279,24 @@ violations baseline.
   compete; the combined contract must cover that base's contract. That direct
   combined contract selects the owner for descendants and mirrored tests. Unresolved
   ancestry emits `UNRESOLVED_FOLDER_OWNER` rather than proving placement.
-  An optional direct `envelopes/` folder under a contract folder contains a base
-  `<Contract>Envelope` in `<contract>_envelope.py` (or `.pyi`) that directly inherits
-  the parent contract. Named `*Envelope` subclasses live in separate files named
-  after their classes in snake_case and inherit that base through local ancestry,
-  retaining the parent contract. Other classes and envelope classes outside that
-  direct folder receive positioned `ENVELOPE_CLASS`, `ENVELOPE_INHERITANCE`,
-  `ENVELOPE_FOLDER` or `ENVELOPE_FILE` diagnostics. The same layout applies under
-  `tests/`; source and stubs may each declare the same class in companion files.
+  An optional direct `envelopes/` folder under a contract folder contains base
+  Envelopes inheriting one proven contract and assembly Envelopes inheriting a
+  proven base directly or through other assemblies. Class suffixes and file names
+  do not determine their roles. Unrelated classes and nontechnical Python modules
+  in this directory receive positioned findings. Package initializers, matching
+  stubs and mirrored test modules are supported. General implementation ownership
+  and independent native checks still apply outside this directory.
   In reviewed and both generated versions, a directly placed base Envelope with
   exactly one proven direct contract must store one delegate parameter in its
   constructor without additional work. It must implement at least one method and
   return the unchanged result of a same-named call on that stored delegate with
   unchanged arguments for every implemented method (or directly await that call
   in an async method). `ENVELOPE_DELEGATION` reports failed proof at the class;
-  stub-only declarations cannot prove forwarding. This is source-level evidence,
-  not a runtime guarantee about the delegate or assembly composition.
+  stub-only declarations cannot prove forwarding. Assembly Envelopes declare only
+  one constructor, which must directly call `super().__init__(...)` once; additional
+  members and conditional or repeated parent calls fail with `ENVELOPE_INHERITANCE`.
+  Matching stubs must agree on ancestry and member declarations. These are
+  source-level proofs, not a runtime guarantee about composition.
   Production files in the direct contract `envelopes/` folder may assemble
   implementations from other contract folders; this does not disable envelope
   placement or inheritance diagnostics.

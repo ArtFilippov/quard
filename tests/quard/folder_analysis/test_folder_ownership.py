@@ -232,16 +232,16 @@ class TestFolderOwnership(unittest.TestCase):
                  "from pkg.port.port import Port\n"
                  "class PortEnvelope(Port):\n    def send(self): ...\n")
         self.put("src/pkg/port/envelopes/relay.py",
-                 "from .port_envelope import PortEnvelope as Base\n")
-        self.put("src/pkg/port/envelopes/logging_port_envelope.py",
-                 "from .relay import Base as Decorator\n"
-                 "class LoggingPortEnvelope(Decorator): pass\n")
-        self.put("src/pkg/port/envelopes/logging_port_envelope.pyi",
-                 "from .port_envelope import PortEnvelope\n"
-                 "class LoggingPortEnvelope(PortEnvelope): ...\n")
-        self.put("src/pkg/port/envelopes/stub_port_envelope.pyi",
                  "from .port_envelope import PortEnvelope as Base\n"
-                 "class StubPortEnvelope(Base): ...\n")
+                 "class Relay(Base):\n    def __init__(self, delegate): super().__init__(delegate)\n")
+        self.put("src/pkg/port/envelopes/logging_port_envelope.py",
+                 "from .relay import Relay as Decorator\n"
+                 "class LoggingPortEnvelope(Decorator):\n"
+                 "    def __init__(self, delegate): super().__init__(delegate)\n")
+        self.put("src/pkg/port/envelopes/logging_port_envelope.pyi",
+                 "from .relay import Relay\n"
+                 "class LoggingPortEnvelope(Relay):\n"
+                 "    def __init__(self, delegate): ...\n")
         self.put("tests/pkg/port/envelopes/test_port_envelope.py",
                  "from pkg.port.envelopes.port_envelope import PortEnvelope\n"
                  "class TestPortEnvelope(PortEnvelope): pass\n")
@@ -277,14 +277,11 @@ class TestFolderOwnership(unittest.TestCase):
                  "class DeepPortEnvelope(PortEnvelope): pass\n")
         folders, _ = self.run_worker()
         self.assertEqual({(d["symbol"], d["rule"]) for d in folders["diagnostics"]}, {
-            ("WrongFileEnvelope", "ENVELOPE_FILE"),
-            ("Random", "ENVELOPE_CLASS"),
-            ("Pretender", "ENVELOPE_CLASS"),
-            ("FakePortEnvelope", "ENVELOPE_INHERITANCE"),
-            ("UnrelatedPortEnvelope", "ENVELOPE_INHERITANCE"),
-            ("UnrelatedPortEnvelope", "ENVELOPE_DELEGATION"),
-            ("OtherPortEnvelope", "ENVELOPE_FOLDER"),
-            ("DeepPortEnvelope", "ENVELOPE_FOLDER")})
+            ("WrongFileEnvelope", "ENVELOPE_INHERITANCE"),
+            ("Random", "ENVELOPE_INHERITANCE"),
+            ("Pretender", "ENVELOPE_DELEGATION"),
+            ("FakePortEnvelope", "ENVELOPE_DELEGATION"),
+            ("UnrelatedPortEnvelope", "ENVELOPE_DELEGATION")})
         self.assertTrue(all(d["line"] > 0 and d["column"] > 0 and
                             not d["is_infrastructure_error"] for d in folders["diagnostics"]))
 
@@ -300,7 +297,7 @@ class TestFolderOwnership(unittest.TestCase):
         folders, _ = self.run_worker()
         contracts, _ = self.run_worker("class-contracts")
         outer, _ = self.run_worker("outer-classes")
-        self.assertEqual({d["rule"] for d in folders["diagnostics"]}, {"ENVELOPE_FILE"})
+        self.assertEqual({d["rule"] for d in folders["diagnostics"]}, {"ENVELOPE_INHERITANCE"})
         self.assertEqual(contracts["diagnostics"], [])
         self.assertEqual([d["rule"] for d in outer["diagnostics"]],
                          ["MULTIPLE_OUTER_CLASSES", "MULTIPLE_OUTER_CLASSES"])
@@ -316,7 +313,8 @@ class TestFolderOwnership(unittest.TestCase):
                  "class PortEnvelope(object): ...\n")
         self.put("src/pkg/port/envelopes/child_port_envelope.py",
                  "from .port_envelope import PortEnvelope\n"
-                 "class ChildPortEnvelope(PortEnvelope): pass\n")
+                 "class ChildPortEnvelope(PortEnvelope):\n"
+                 "    def __init__(self, delegate): super().__init__(delegate)\n")
         result, _ = self.run_worker()
         self.assertEqual([(d["path"], d["rule"]) for d in result["diagnostics"]],
                           [("src/pkg/port/envelopes/port_envelope.pyi", "ENVELOPE_INHERITANCE")])
@@ -340,6 +338,117 @@ class TestFolderOwnership(unittest.TestCase):
             result, _ = self.run_worker()
             results.append((result["status"], result["exit_code"], result["diagnostics"]))
         self.assertEqual(results, [("passed", 0, [])] * 3, "valid base did not pass")
+
+    def test_named_chained_assembly_and_mirrored_tests_in_each_mode(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self, value): ...\n")
+        self.put("src/pkg/port/envelopes/anything.py", "from pkg.port.port import Port\n"
+                 "class Core(Port):\n"
+                 "    def __init__(self, target): self.target = target\n"
+                 "    def send(self, value): return self.target.send(value)\n")
+        self.put("src/pkg/port/envelopes/anything.pyi", "from pkg.port.port import Port\n"
+                 "class Core(Port):\n    def send(self, value): ...\n")
+        self.put("src/pkg/port/envelopes/arbitrary.py", "from .anything import Core\n"
+                 "class Compose(Core):\n"
+                 "    def __init__(self, target):\n"
+                 "        value = target\n        super().__init__(value)\n")
+        self.put("src/pkg/port/envelopes/arbitrary.pyi", "from .anything import Core\n"
+                 "class Compose(Core):\n    def __init__(self, target): ...\n")
+        self.put("src/pkg/port/envelopes/chain.py", "from .arbitrary import Compose\n"
+                 "class Final(Compose):\n    def __init__(self, target): super().__init__(target)\n")
+        self.put("src/pkg/port/envelopes/__init__.py", "\n")
+        self.put("tests/pkg/port/envelopes/test_final.py", "from pkg.port.envelopes.chain import Final\n"
+                 "class TestFinal:\n    def test_forwarding(self):\n        assert Final(object())\n")
+        results = []
+        for version in (None, 1, 2):
+            if version is not None:
+                self.put(".quard/architecture.generated.json",
+                         json.dumps({"policy": "contract-only", "version": version}))
+            result, _ = self.run_worker()
+            results.append((result["status"], result["exit_code"], result["diagnostics"]))
+        self.assertEqual(results, [("passed", 0, [])] * 3, "named assembly did not pass")
+
+    def test_assembly_failures_are_positioned_in_all_modes(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/core.py", "from pkg.port.port import Port\n"
+                 "class Core(Port):\n    def __init__(self, target): self.target = target\n"
+                 "    def send(self): return self.target.send()\n")
+        cases = {
+            "missing": "class Missing(Core):\n    def __init__(self, target): pass\n",
+            "twice": "class Twice(Core):\n    def __init__(self, target):\n"
+                     "        super().__init__(target)\n        super().__init__(target)\n",
+            "branch": "class Branch(Core):\n    def __init__(self, target):\n"
+                      "        if target: super().__init__(target)\n",
+            "shadow": "class Shadow(Core):\n    def __init__(self, target):\n"
+                      "        super = target\n        super().__init__(target)\n",
+            "extra": "class Extra(Core):\n    def __init__(self, target): super().__init__(target)\n"
+                     "    def send(self): return 42\n",
+            "unrelated": "class Unrelated(object): pass\n",
+        }
+        for stem, text in cases.items():
+            self.put(f"src/pkg/port/envelopes/{stem}.py",
+                     "from .core import Core\n" + text)
+        self.put("src/pkg/port/envelopes/helpers.py", "def dispatch(): return 1\n")
+        results = []
+        for version in (None, 1, 2):
+            if version is not None:
+                self.put(".quard/architecture.generated.json",
+                         json.dumps({"policy": "contract-only", "version": version}))
+            result, _ = self.run_worker()
+            results.append((result["status"], result["exit_code"],
+                            {(item["path"], item["line"], item["column"],
+                              item["is_infrastructure_error"]) for item in result["diagnostics"]}))
+        expected = {(f"src/pkg/port/envelopes/{stem}.py", 2, 1, False) for stem in cases}
+        expected.add(("src/pkg/port/envelopes/helpers.py", 1, 1, False))
+        self.assertEqual(results, [("violations", 1, expected)] * 3,
+                         "invalid assembly was accepted")
+
+    def test_stub_ancestry_and_source_proof_cannot_be_bypassed(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/core.py", "from pkg.port.port import Port\n"
+                 "class Core(Port):\n    def __init__(self, target): self.target = target\n"
+                 "    def send(self): return self.target.send()\n")
+        self.put("src/pkg/port/envelopes/chain.py", "from .core import Core\n"
+                 "class Chain(Core):\n    def __init__(self, target): super().__init__(target)\n")
+        self.put("src/pkg/port/envelopes/chain.pyi", "from pkg.port.port import Port\n"
+                 "class Chain(Port):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/orphan.pyi", "from .core import Core\n"
+                 "class Orphan(Core):\n    def __init__(self, target): ...\n")
+        self.put("src/pkg/port/envelopes/empty.py", "from .core import Core\n"
+                 "class Empty(Core):\n    def __init__(self, target): super().__init__(target)\n")
+        self.put("src/pkg/port/envelopes/empty.pyi", "from .core import Core\n"
+                 "class Empty(Core): ...\n")
+        result, _ = self.run_worker()
+        self.assertEqual((result["status"], result["exit_code"],
+                          {(item["path"], item["line"], item["column"], item["rule"],
+                            item["is_infrastructure_error"]) for item in result["diagnostics"]}),
+                         ("violations", 1, {
+                             ("src/pkg/port/envelopes/chain.pyi", 2, 1,
+                              "ENVELOPE_DELEGATION", False),
+                             ("src/pkg/port/envelopes/orphan.pyi", 2, 1,
+                              "ENVELOPE_INHERITANCE", False),
+                             ("src/pkg/port/envelopes/empty.pyi", 2, 1,
+                              "ENVELOPE_INHERITANCE", False)}),
+                         "stub-only or conflicting Envelope passed")
+
+    def test_unproved_parent_blocks_descendant_and_keeps_ownership(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/core.py", "from pkg.port.port import Port\n"
+                 "class Core(Port):\n    def send(self): return 0\n")
+        self.put("src/pkg/port/envelopes/chain.py", "from .core import Core\n"
+                 "class Chain(Core):\n    def __init__(self, target): super().__init__(target)\n")
+        self.put("src/pkg/foreign/envelopes/wrong.py", "from pkg.port.port import Port\n"
+                 "class Wrong(Port):\n    def __init__(self, target): self.target = target\n"
+                 "    def send(self): return self.target.send()\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["rule"]) for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/core.py", "ENVELOPE_DELEGATION"),
+                          ("src/pkg/port/envelopes/chain.py", "ENVELOPE_INHERITANCE"),
+                          ("src/pkg/foreign/envelopes/wrong.py", "IMPLEMENTATION_FOLDER")},
+                         "unproved ancestor or foreign ownership was accepted")
 
     def test_non_forwarding_and_invalid_constructor_are_positioned_in_every_mode(self):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
@@ -440,7 +549,8 @@ class TestFolderOwnership(unittest.TestCase):
                      "from pkg.port.port import Port\nfrom pkg.port.impl import Impl\n" + shape)
             result, _ = self.run_worker()
             results.append((result["status"], result["exit_code"],
-                            any(item["rule"] == "ENVELOPE_DELEGATION" and item["line"] == 3
+                            any(item["rule"] in {"ENVELOPE_DELEGATION", "ENVELOPE_INHERITANCE"}
+                                and item["line"] == 3
                                 and not item["is_infrastructure_error"]
                                 for item in result["diagnostics"])))
         self.assertEqual(results, [("violations", 1, True)] * len(shapes),
@@ -474,8 +584,7 @@ class TestFolderOwnership(unittest.TestCase):
         self.assertEqual((result["status"], result["exit_code"], raw["execution_error"]),
                          ("error", 2, "CONTRACT_FOLDERS_PARSE_ERROR"))
         self.assertEqual({d["rule"] for d in result["diagnostics"]},
-                         {"CONTRACT_FOLDER", "ENVELOPE_FILE",
-                          "CONTRACT_FOLDERS_PARSE_ERROR"})
+                         {"CONTRACT_FOLDER", "CONTRACT_FOLDERS_PARSE_ERROR"})
         files = discover_files(self.root, read_scope(self.root))
         job = next(job for job in make_jobs(self.root, self.run_dir, files, False, [])
                    if job["name"] == "contract-folders")

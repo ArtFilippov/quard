@@ -134,10 +134,11 @@ class TestReviewFollowup(unittest.TestCase):
             infrastructure.write_text("def suffix() -> str:\n    return ''\n")
             assembly = root / "src/demo/main/wire.py"
             assembly.write_text("from demo.records.envelopes.wire_utils import wire\n"
-                                 "from demo.records.helpers_utils import suffix\n" +
-                                 assembly.read_text().replace("second('ok')",
-                                                              "second(wire() + suffix())"))
-            self.assertEqual(self.folders(root), [])
+                                  "from demo.records.helpers_utils import suffix\n" +
+                                  assembly.read_text().replace("second('ok')",
+                                                               "second(wire() + suffix())"))
+            self.rule(self.folders(root), "ENVELOPE_CLASS",
+                      "src/demo/records/envelopes/wire_utils.py")
             modules = {m["path"]: m for m in self.policy(root)["modules"]}
             self.assertIn("demo.records.envelopes.wire_utils",
                           modules["demo.main.wire"]["depends_on"])

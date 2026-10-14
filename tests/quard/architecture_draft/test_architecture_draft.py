@@ -443,11 +443,13 @@ class TestArchitectureDraft(unittest.TestCase):
             "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n" +
             "from typing import TYPE_CHECKING\n" +
             "if TYPE_CHECKING:\n    from demo.writer.impl import WriterImpl\n" +
-            "class NamedEnvelope(ReaderEnvelope): pass\n")
+            "class NamedEnvelope(ReaderEnvelope):\n" +
+            "    def __init__(self, delegate): super().__init__(delegate)\n")
         (envelopes / "named_envelope.pyi").write_text(
             "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n" +
             "from demo.writer.impl import WriterImpl\n" +
-            "class NamedEnvelope(ReaderEnvelope): ...\n")
+            "class NamedEnvelope(ReaderEnvelope):\n" +
+            "    def __init__(self, delegate): ...\n")
         return envelopes, base, named, client
 
     def test_envelope_assembles_unrelated_implementations(self):
@@ -482,7 +484,9 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertEqual(next(module for module in config["modules"]
                                   if module["path"] == "demo.reader.envelopes.assembly_types")
                              ["depends_on"], [])
-            self.assertEqual(self.folder_findings(root), [])
+            self.assertEqual({(item["path"], item["rule"]) for item in self.folder_findings(root)},
+                             {("src/demo/reader/envelopes/assembly_types.pyi", "ENVELOPE_CLASS")})
+            stub_only.unlink()
             client.write_text("from demo.writer.writer import Writer\n" +
                               "from demo.writer.impl import WriterImpl\n")
             rejected = self.main_policy(root)
@@ -522,7 +526,7 @@ class TestArchitectureDraft(unittest.TestCase):
                                                        "class NamedEnvelope(WriterImpl)")
                              .replace("from demo.reader.impl import ReaderImpl\n", ""))
             findings = self.folder_findings(root)
-            self.assertTrue(any(item["rule"] == "ENVELOPE_FOLDER" and
+            self.assertTrue(any(item["rule"] == "IMPLEMENTATION_FOLDER" and
                                 item["path"] == "src/demo/reader/envelopes/named_envelope.py" and
                                 item["line"] > 0 and item["column"] > 0
                                 for item in findings), findings)

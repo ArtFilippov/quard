@@ -81,7 +81,7 @@ class TestAdoptionConsumer(unittest.TestCase):
             self.assertIn("placeholder", modules)
             self.assertEqual(modules["demo.records.entry_shape"]["layer"], "Contract")
             self.assertEqual(modules["demo.records.entry"]["layer"], "Infrastructure")
-            self.assertEqual(modules["demo.records.envelopes.adapter"]["layer"], "Envelopes")
+            self.assertEqual(modules["demo.records.adapter"]["layer"], "Infrastructure")
             self.assertEqual(modules["demo.main.wire"]["layer"], "Bootstrap")
             self.assertEqual(modules["gateway.client.value_utils"]["depends_on"],
                              ["demo", "demo.records.entry_shape"])
@@ -132,7 +132,7 @@ class TestAdoptionConsumer(unittest.TestCase):
                  (client, "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n" +
                   "    from demo.records.sender import Sender\n",
                  "CONCRETE_IMPLEMENTATION_IMPORT", "contract-folders", True),
-                ("src/demo/records/envelopes/adapter.py", "from demo.main.wire import connect\n",
+                ("src/demo/records/adapter.py", "from demo.main.wire import connect\n",
                  "BOOTSTRAP_DEPENDENCY", "contract-folders", True),
                 ("src/demo/main/wire.py", "from demo.main.peer import result\n",
                  "BOOTSTRAP_DEPENDENCY", "contract-folders", True),
