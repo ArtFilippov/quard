@@ -297,10 +297,15 @@ violations baseline.
   `ENVELOPE_DELEGATION` reports failed proof at the class;
   stub-only declarations cannot prove forwarding. Assembly Envelopes declare only
   one constructor, which must directly call `super().__init__(...)` once; additional
-  members and conditional or repeated parent calls fail with `ENVELOPE_INHERITANCE`.
+   members, early returns before the parent call, and conditional or repeated parent
+   calls fail with `ENVELOPE_INHERITANCE`.
   A proven source ancestor outside `envelopes/` can establish an assembly; unknown
-  or stub-only ancestors cannot. Matching stubs must agree on ancestry, sync/async
-  member kinds and property accessors. These are
+   or stub-only ancestors cannot. Matching stubs must agree on ancestry, sync/async
+   member kinds, property accessors and declared constructor parameter structure;
+   a base stub may omit the constructor. Package initializers accept only technical
+   imports (including `TYPE_CHECKING` imports), docstrings, `pass` and literal
+   `__all__` exports, not arbitrary values or classes.
+   Configured test directories inside `src/` retain test classification. These are
   source-level proofs, not a runtime guarantee about which objects are composed.
   Production files throughout the contract `envelopes/` subtree may assemble
   implementations from other contract folders, including concrete types in stubs;

@@ -454,11 +454,16 @@ or directly forward a property accessor. Every implemented member must forward t
 way; async methods may directly await the delegate call. An assembly
 Envelope inherits a proven base (including one outside `envelopes/`) or another
 assembly Envelope, declares only a constructor, and calls `super().__init__(...)`
-exactly once as an unconditional statement. Class and file names do not select roles.
+    exactly once as an unconditional statement reached on every normal constructor path.
+    Class and file names do not select roles.
 Every `envelopes/` subtree contains only these Envelopes, with technical
 package initializers, matching stubs and mirrored test modules supported. Source
-proves behavior; companion stubs must agree with source ancestry, member kinds and
-property accessors. External inherited contracts need no member enumeration.
+    proves behavior; companion stubs must agree with source ancestry, member kinds,
+    property accessors and any declared constructor's parameter structure (a base stub
+    may omit its constructor). Package initializers may contain imports (including
+    `TYPE_CHECKING` imports), docstrings, `pass` and literal `__all__` exports,
+    but not executable declarations or classes.
+    External inherited contracts need no member enumeration.
 Assembly rights for concrete imports and annotations are inherited at every depth;
 ordinary modules, including stubs, remain restricted. The pattern intends to
 compose implementations, but these checks prove only forwarding and parent

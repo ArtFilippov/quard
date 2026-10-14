@@ -9,6 +9,7 @@ import re
 
 from quard._common import read_json
 from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER, generated
+from quard.policy_utils import read_scope
 
 SOURCE_ROOT = "src"
 SOURCE_ROOT_DEPTH = 2
@@ -36,13 +37,13 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
+    scope = read_scope(root)
     if generated(root) and read_json(root / MARKER) == IDENTITY:
-        from quard._policy import read_scope
         from quard.architecture_draft.group_area_utils import main_directories
         from quard.folder_analysis.generated_group_roles_utils import analyze as group_roles
         from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 
-        main_areas = main_directories(root, read_scope(root))
+        main_areas = main_directories(root, scope)
         for path in main_areas if len(main_areas) > 1 else []:
             diagnostics.append({"rule": "MULTIPLE_MAIN_DIRECTORIES", "path": path,
                                 "line": 1, "column": 1, "symbol": "main",
@@ -60,7 +61,7 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
     else:
         ownership = FolderOwnership(trees)
         diagnostics.extend(ownership.folder_violations())
-    diagnostics.extend(ownership.base_violations())
+    diagnostics.extend(ownership.base_violations(frozenset(scope["test_directory_names"])))
     return diagnostics, error
 
 

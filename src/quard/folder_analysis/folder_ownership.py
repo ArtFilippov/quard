@@ -26,6 +26,9 @@ GET_KIND = "get"
 SET_KIND = "set"
 DELETE_KIND = "delete"
 PROPERTY_NAME = "builtins.property"
+TYPE_CHECKING_NAME = "TYPE_CHECKING"
+TYPING_NAME = "typing"
+EXPORTS_NAME = "__all__"
 OPAQUE_BASES = {"builtins.object", "typing.Protocol", "typing_extensions.Protocol",
                 "abc.ABC", "abc.ABCMeta"}
 
@@ -146,11 +149,15 @@ class FolderOwnership(Contracts, FolderAnalysis):
                     and item.name != CONSTRUCTOR]
         constructors = [item for item in node.body
                         if isinstance(item, ast.FunctionDef) and item.name == CONSTRUCTOR]
+        originals = [item for item in original.body
+                     if isinstance(item, ast.FunctionDef) and item.name == CONSTRUCTOR]
         return (self.envelope_role(name, node, path) ==
                 self.envelope_role(name, original, source) and
                 [self.resolved(name, base, path) for base in node.bases] ==
                 [self.resolved(name, base, source) for base in original.bases] and
                 Counter(members) == Counter(declared) and
+                (not constructors or len(constructors) == len(originals) == 1 and
+                 self.signature(constructors[0].args) == self.signature(originals[0].args)) and
                 (self.envelope_role(name, node, path) != ASSEMBLY_ROLE or
                  len(constructors) == 1 and all(
                      item is constructors[0] or isinstance(item, ast.Expr) and
@@ -159,8 +166,57 @@ class FolderOwnership(Contracts, FolderAnalysis):
                      for item in node.body)))
 
     @override
-    def base_violations(self) -> list[dict[str, object]]:
+    def signature(self, args: ast.arguments) -> tuple[object, ...]:
+        """Compare callable parameter structure without requiring stub annotations.
+
+        Args:
+            args (ast.arguments): Parameters in source or stub.
+
+        Returns:
+            tuple[object, ...]: Structural signature without annotation values.
+        """
+        return (len(args.posonlyargs), tuple(arg.arg for arg in args.args),
+                args.vararg.arg if args.vararg else None,
+                tuple(arg.arg for arg in args.kwonlyargs),
+                tuple(value is not None for value in args.kw_defaults),
+                args.kwarg.arg if args.kwarg else None, len(args.defaults))
+
+    @override
+    def technical(self, statement: ast.stmt) -> bool:
+        """Recognize package metadata and imports without executing user behavior.
+
+        Args:
+            statement (ast.stmt): Top-level declaration.
+
+        Returns:
+            bool: Whether the declaration is technical package content.
+        """
+        if isinstance(statement, (ast.Import, ast.ImportFrom, ast.Pass)):
+            return True
+        if isinstance(statement, ast.If):
+            return (isinstance(statement.test, ast.Name) and
+                    statement.test.id == TYPE_CHECKING_NAME
+                    or isinstance(statement.test, ast.Attribute) and
+                    isinstance(statement.test.value, ast.Name) and
+                    statement.test.value.id == TYPING_NAME and
+                    statement.test.attr == TYPE_CHECKING_NAME) and not statement.orelse and all(
+                        isinstance(item, (ast.Import, ast.ImportFrom)) for item in statement.body)
+        if isinstance(statement, ast.Expr):
+            return isinstance(statement.value, ast.Constant) and isinstance(
+                statement.value.value, str)
+        return (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == EXPORTS_NAME
+                and isinstance(statement.value, (ast.List, ast.Tuple))
+                and all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+                        for item in statement.value.elts))
+
+    @override
+    def base_violations(self, tests: frozenset[str]) -> list[dict[str, object]]:
         """Prove Envelope roles throughout their subtree from source and matching stubs.
+
+        Args:
+            tests (frozenset[str]): Configured test-directory basenames.
 
         Returns:
             list[dict[str, object]]: Positioned failures to prove delegation.
@@ -168,16 +224,15 @@ class FolderOwnership(Contracts, FolderAnalysis):
         results: list[dict[str, object]] = []
         for path, tree in self.trees.items():
             current = Path(path)
-            if (ENVELOPES_FOLDER not in current.parts[1:-1] or current.parts[0] == TEST_ROOT
-                    or current.stem == CONSTRUCTOR):
+            if (ENVELOPES_FOLDER not in current.parts[1:-1] or current.parts[0] == TEST_ROOT or
+                    any(part in tests for part in current.parts[:-1])):
                 continue
-            if not any(isinstance(item, ast.ClassDef) for item in tree.body):
-                results.append({"path": path, "line": 1, "column": 1,
-                                "symbol": current.stem, "rule": "ENVELOPE_CLASS",
-                                "message": f"{path}: envelopes/ requires an Envelope class."})
+            results.extend(self.module_violations(path, tree))
         for name, node, path in self.declarations:
             current = Path(path)
-            if ENVELOPES_FOLDER not in current.parts[1:-1] or current.parts[0] == TEST_ROOT:
+            if (ENVELOPES_FOLDER not in current.parts[1:-1] or current.parts[0] == TEST_ROOT or
+                    any(part in tests for part in current.parts[:-1]) or
+                    current.stem == CONSTRUCTOR):
                 continue
             role = self.envelope_role(name, node, path)
             source = current.with_suffix(".py").as_posix()
@@ -209,6 +264,33 @@ class FolderOwnership(Contracts, FolderAnalysis):
         return results
 
     @override
+    def module_violations(self, path: str, tree: ast.Module) -> list[dict[str, object]]:
+        """Check that a production module contains only Envelopes and technical declarations.
+
+        Args:
+            path (str): Module path.
+            tree (ast.Module): Parsed module.
+
+        Returns:
+            list[dict[str, object]]: Positioned module-content violations.
+        """
+        current = Path(path)
+        results: list[dict[str, object]] = [
+            {"path": path, "line": item.lineno,
+             "column": item.col_offset + 1, "symbol": current.stem,
+             "rule": "ENVELOPE_CLASS",
+             "message": f"{path}: envelopes/ permits only Envelopes and " +
+                        "technical package declarations."} for item in tree.body
+            if not self.technical(item) and not (
+                current.stem != CONSTRUCTOR and isinstance(item, ast.ClassDef))]
+        if (not results and current.stem != CONSTRUCTOR and
+                not any(isinstance(item, ast.ClassDef) for item in tree.body)):
+            results.append({"path": path, "line": 1, "column": 1,
+                            "symbol": current.stem, "rule": "ENVELOPE_CLASS",
+                            "message": f"{path}: envelopes/ requires an Envelope class."})
+        return results
+
+    @override
     def assembly(self, node: ast.ClassDef, path: str) -> str | None:
         """Require one direct parent constructor call and no other declared behavior.
 
@@ -233,23 +315,67 @@ class FolderOwnership(Contracts, FolderAnalysis):
                 and isinstance(statements[0].value, ast.Constant)
                 and isinstance(statements[0].value.value, str)):
             statements = statements[1:]
-        calls = [item.value for item in statements if isinstance(item, ast.Expr)
+        calls = [item for item in statements if isinstance(item, ast.Expr)
                  and isinstance(item.value, ast.Call) and isinstance(item.value.func, ast.Attribute)
                  and item.value.func.attr == CONSTRUCTOR
                  and isinstance(item.value.func.value, ast.Call)
                  and isinstance(item.value.func.value.func, ast.Name)
                  and item.value.func.value.func.id == SUPER_NAME
                  and not item.value.func.value.args and not item.value.func.value.keywords]
-        if (len(calls) != 1 or SUPER_NAME in self.bindings_by_path[path] or
+        if len(calls) != 1 or any(
+                isinstance(item, ast.Return)
+                for statement in statements[:statements.index(calls[0])]
+                for item in self.eager(statement)):
+            return "call super().__init__(...) on every returning path"
+        if (SUPER_NAME in self.bindings_by_path[path] or
                 SUPER_NAME in {arg.arg for arg in constructor.args.posonlyargs +
                                constructor.args.args + constructor.args.kwonlyargs} or
-                any(isinstance(item, ast.Name) and item.id == SUPER_NAME
-                    and isinstance(item.ctx, ast.Store) for item in ast.walk(constructor))
-                or sum(1 for item in ast.walk(constructor) if isinstance(item, ast.Call)
+                any(self.shadowed(item) for statement in statements
+                    for item in self.eager(statement))
+                or sum(1 for statement in statements
+                       for item in self.eager(statement)
+                       if isinstance(item, ast.Call)
                        and isinstance(item.func, ast.Attribute)
                        and item.func.attr == CONSTRUCTOR) != 1):
             return "call super().__init__(...) exactly once in the constructor"
         return None
+
+    @override
+    def eager(self, node: ast.AST) -> list[ast.AST]:
+        """Walk immediately executable syntax, excluding deferred nested bodies.
+
+        Args:
+            node (ast.AST): Statement or expression inside a constructor.
+
+        Returns:
+            list[ast.AST]: Nodes that can execute when the constructor runs.
+        """
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return [node]
+        if isinstance(node, ast.Lambda):
+            return []
+        return [node] + [item for child in ast.iter_child_nodes(node)
+                         for item in self.eager(child)]
+
+    @override
+    def shadowed(self, node: ast.AST) -> bool:
+        """Find constructor bindings that replace the built-in parent-call target.
+
+        Args:
+            node (ast.AST): Immediately executable constructor syntax.
+
+        Returns:
+            bool: Whether this node binds the name of the built-in super.
+        """
+        if isinstance(node, ast.Name):
+            return node.id == SUPER_NAME and isinstance(node.ctx, ast.Store)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return node.name == SUPER_NAME
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return any((alias.asname or (alias.name.split(".")[0]
+                                         if isinstance(node, ast.Import) else alias.name)) ==
+                       SUPER_NAME for alias in node.names)
+        return False
 
     @override
     def delegation(self, name: str, node: ast.ClassDef, path: str) -> str | None:

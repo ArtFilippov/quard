@@ -687,6 +687,151 @@ class TestFolderOwnership(unittest.TestCase):
         self.assertEqual([(item["rule"], item["line"]) for item in result["diagnostics"]],
                          [("ENVELOPE_DELEGATION", 2)], "stub changed sync kind")
 
+    def envelope_pair(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n" +
+                 "class Port(Protocol):\n    def send(self): ...\n")
+        self.put("src/pkg/port/envelopes/core.py", "from pkg.port.port import Port\n" +
+                 "class Core(Port):\n    def __init__(self, target): self.target = target\n" +
+                 "    def send(self): return self.target.send()\n")
+
+    def test_assembly_return_before_parent_call_is_not_proof(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/relay.py", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target):\n" +
+                 "        if target is None: return\n" +
+                 "        super().__init__(target)\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["rule"]) for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/relay.py", "ENVELOPE_INHERITANCE")},
+                         "an early return passed as a parent call")
+
+    def test_assembly_unconditional_return_before_parent_call_is_not_proof(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/relay.py", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target):\n" +
+                 "        return\n        super().__init__(target)\n")
+        result, _ = self.run_worker()
+        self.assertEqual({item["rule"] for item in result["diagnostics"]},
+                         {"ENVELOPE_INHERITANCE"}, "an unreachable parent call passed")
+
+    def test_branch_without_early_return_preserves_parent_call(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/relay.py", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target):\n" +
+                 "        if target is None: target = object()\n" +
+                 "        super().__init__(target)\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "a reachable parent call was rejected")
+
+    def test_nested_constructor_scope_does_not_count_as_parent_call(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/relay.py", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target):\n" +
+                 "        def later(): super().__init__(target)\n" +
+                 "        return\n")
+        result, _ = self.run_worker()
+        self.assertEqual({item["rule"] for item in result["diagnostics"]},
+                         {"ENVELOPE_INHERITANCE"}, "a deferred parent call passed")
+
+    def test_local_super_definition_cannot_prove_parent_call(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/relay.py", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target):\n" +
+                 "        def super(): return target\n" +
+                 "        super().__init__(target)\n")
+        result, _ = self.run_worker()
+        self.assertEqual({item["rule"] for item in result["diagnostics"]},
+                         {"ENVELOPE_INHERITANCE"}, "a shadowed super passed")
+
+    def test_envelope_module_rejects_unrelated_free_function(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/core.py", (self.root / "src/pkg/port/envelopes/core.py")
+                 .read_text() + "def unrelated(): return 42\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["line"], item["rule"])
+                          for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/core.py", 5, "ENVELOPE_CLASS")},
+                         "unrelated module behavior passed")
+
+    def test_envelope_initializer_rejects_value(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/__init__.py", "value = 42\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["line"], item["rule"])
+                          for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/__init__.py", 1, "ENVELOPE_CLASS")},
+                         "initializer code passed")
+
+    def test_envelope_initializer_rejects_unrelated_class(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/__init__.py", "class Unrelated: pass\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["line"], item["rule"])
+                          for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/__init__.py", 1, "ENVELOPE_CLASS")},
+                         "an initializer class passed")
+
+    def test_technical_envelope_initializer_is_allowed(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/__init__.py", '"""Envelope exports."""\n' +
+                 "from .core import Core\n__all__ = ['Core']\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "technical initialization was rejected")
+
+    def test_configured_source_test_directory_is_not_an_envelope(self):
+        self.envelope_pair()
+        self.put(".quard/config.toml", (self.root / ".quard/config.toml").read_text()
+                 .replace('test_directory_names = ["tests"]',
+                          'test_directory_names = ["tests", "specs"]'))
+        self.put("src/pkg/port/envelopes/specs/test_core.py", "class TestCore: pass\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "a configured test was checked as an Envelope")
+
+    def test_root_tests_remain_tests_with_other_configured_names(self):
+        self.envelope_pair()
+        self.put(".quard/config.toml", (self.root / ".quard/config.toml").read_text()
+                 .replace('test_directory_names = ["tests"]',
+                          'test_directory_names = ["specs"]'))
+        self.put("tests/pkg/port/envelopes/test_core.py", "class TestCore: pass\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "root tests were checked as Envelopes")
+
+    def test_paired_stub_constructor_signature_must_match_source(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/core.pyi", "from pkg.port.port import Port\n" +
+                 "class Core(Port):\n    def __init__(self, target, extra): ...\n" +
+                 "    def send(self): ...\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["rule"]) for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/core.pyi", "ENVELOPE_DELEGATION")},
+                         "an incompatible stub constructor passed")
+
+    def test_paired_stub_may_omit_base_constructor(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/core.pyi", "from pkg.port.port import Port\n" +
+                 "class Core(Port):\n    def send(self): ...\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "an omitted stub constructor was rejected")
+
+    def test_paired_stub_constructor_allows_annotations_and_placeholder(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/core.pyi", "from pkg.port.port import Port\n" +
+                 "class Core(Port):\n    def __init__(self, target: Port) -> None: ...\n" +
+                 "    def send(self): ...\n")
+        result, _ = self.run_worker()
+        self.assertEqual(result["diagnostics"], [], "a stub annotation was rejected")
+
+    def test_paired_assembly_stub_constructor_shape_must_match(self):
+        self.envelope_pair()
+        self.put("src/pkg/port/envelopes/relay.py", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target): super().__init__(target)\n")
+        self.put("src/pkg/port/envelopes/relay.pyi", "from .core import Core\n" +
+                 "class Relay(Core):\n    def __init__(self, target, extra): ...\n")
+        result, _ = self.run_worker()
+        self.assertEqual({(item["path"], item["rule"]) for item in result["diagnostics"]},
+                         {("src/pkg/port/envelopes/relay.pyi", "ENVELOPE_INHERITANCE")},
+                         "an incompatible assembly stub passed")
+
     def test_external_contract_base_can_delegate(self):
         self.put("src/pkg/port/envelopes/port_envelope.py",
                  "from external_api import Port\nclass PortEnvelope(Port):\n" +

@@ -558,68 +558,89 @@ class TestArchitectureDraft(unittest.TestCase):
                                 root, 10)
             self.assertEqual(execution["exit_code"], 0, execution)
 
-    def test_nested_assembly_boundaries_and_ordinary_stubs_across_modes(self):
-        with TemporaryDirectory(prefix="quard-nested-boundaries-") as directory:
+    def nested_envelope_fixture(self, root: Path) -> None:
+        envelopes, _, _, client = self.envelope_fixture(root)
+        nested = envelopes / "nested/deeper"
+        nested.mkdir(parents=True)
+        (nested / "relay.py").write_text(
+            "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "class Relay(ReaderEnvelope):\n" +
+            "    def __init__(self, delegate: WriterImpl): super().__init__(delegate)\n")
+        (nested / "relay.pyi").write_text(
+            "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n" +
+            "from demo.writer.impl import WriterImpl\n" +
+            "class Relay(ReaderEnvelope):\n" +
+            "    def __init__(self, delegate: WriterImpl): ...\n")
+        client.write_text("from demo.writer.impl import WriterImpl\n" +
+                          "class Client:\n    def send(self, value: WriterImpl) -> None: pass\n")
+        client.with_suffix(".pyi").write_text(client.read_text())
+
+    def test_nested_assembly_executes(self):
+        with TemporaryDirectory(prefix="quard-nested-runtime-") as directory:
             root = Path(directory)
-            envelopes, _, _, client = self.envelope_fixture(root)
-            nested = envelopes / "nested/deeper"
-            nested.mkdir(parents=True)
-            (nested / "relay.py").write_text(
-                "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n"
-                "from demo.writer.impl import WriterImpl\n"
-                "class Relay(ReaderEnvelope):\n"
-                "    def __init__(self, delegate: WriterImpl): super().__init__(delegate)\n")
-            (nested / "relay.pyi").write_text(
-                "from demo.reader.envelopes.reader_envelope import ReaderEnvelope\n"
-                "from demo.writer.impl import WriterImpl\n"
-                "class Relay(ReaderEnvelope):\n"
-                "    def __init__(self, delegate: WriterImpl): ...\n")
-            client.write_text("from demo.writer.impl import WriterImpl\n"
-                              "class Client:\n    def send(self, value: WriterImpl) -> None: pass\n")
-            client.with_suffix(".pyi").write_text(client.read_text())
+            self.nested_envelope_fixture(root)
             execution = capture([sys.executable, "-c",
-                                 "import sys; sys.path.insert(0, 'src'); "
-                                 "from demo.reader.envelopes.nested.deeper.relay import Relay; "
-                                 "from demo.reader.impl import ReaderImpl; "
-                                 "from demo.writer.impl import WriterImpl; "
-                                 "assert isinstance(Relay(ReaderImpl()).wire(WriterImpl()), "
+                                 "import sys; sys.path.insert(0, 'src'); " +
+                                 "from demo.reader.envelopes.nested.deeper.relay import Relay; " +
+                                 "from demo.reader.impl import ReaderImpl; " +
+                                 "from demo.writer.impl import WriterImpl; " +
+                                 "assert isinstance(Relay(ReaderImpl()).wire(WriterImpl()), " +
                                  "WriterImpl)"], root, 10)
-            source = "demo.reader.envelopes.nested.deeper.relay"
+            self.assertEqual(execution["exit_code"], 0, "nested Envelope failed at runtime")
+
+    def test_nested_assembly_boundary_across_modes(self):
+        with TemporaryDirectory(prefix="quard-nested-boundary-") as directory:
+            root = Path(directory)
+            self.nested_envelope_fixture(root)
+            results = []
             for mode in ("draft", "v1", "v2"):
-                with self.subTest(mode=mode):
-                    if mode != "draft":
-                        write_json(root / ".quard/architecture.generated.json",
-                                   LEGACY_IDENTITY if mode == "v1" else IDENTITY)
-                    config = (self.main_policy(root) if mode == "draft" else
-                              generated_policy.render(root)[0])
-                    modules = {item["path"]: item for item in config["modules"]}
-                    files = ConfiguredConsumerPolicy(root).files()
-                    types, error = dependency_types(root, sorted(files["production"] +
-                                                          files["tests"]))
-                    findings = self.folder_findings(root) if mode == "v2" else []
-                    actual = {
-                        "error": error,
-                        "runtime": execution["exit_code"],
-                        "assembly": "demo.writer.impl" in modules[source]["depends_on"],
-                        "ordinary": "demo.writer.impl" in modules["demo.client"]["depends_on"],
-                        "visible": source in next(item["visibility"] for item in config[
-                            "interfaces"] if item["from"] == [r"^demo\.writer\.impl$"]
-                            and "visibility" in item),
-                        "layer": modules[source]["layer"],
-                        "types": {item["path"] for item in types if item["rule"] ==
-                                  "CONCRETE_DEPENDENCY_TYPE"},
-                        "nested": any(item["path"] == str((nested / "relay.py").relative_to(
-                            root)) for item in findings),
-                        "imports": {"src/demo/client.py", "src/demo/client.pyi"} <= {
-                            item["path"] for item in findings if item["rule"] ==
-                            "CONCRETE_IMPLEMENTATION_IMPORT"},
-                    }
-                    self.assertEqual(actual, {
-                        "error": None, "runtime": 0, "assembly": True, "ordinary": False,
-                        "visible": True, "layer": "Envelopes" if mode == "v2" else "Bootstrap",
-                        "types": {"src/demo/client.py", "src/demo/client.pyi"},
-                        "nested": False, "imports": mode == "v2",
-                    }, "Nested assembly policy was not preserved.")
+                if mode != "draft":
+                    write_json(root / ".quard/architecture.generated.json",
+                               LEGACY_IDENTITY if mode == "v1" else IDENTITY)
+                config = (self.main_policy(root) if mode == "draft" else
+                          generated_policy.render(root)[0])
+                modules = {item["path"]: item for item in config["modules"]}
+                source = "demo.reader.envelopes.nested.deeper.relay"
+                results.append(("demo.writer.impl" in modules[source]["depends_on"],
+                                "demo.writer.impl" in modules["demo.client"]["depends_on"],
+                                source in next(item["visibility"] for item in config["interfaces"]
+                                               if item["from"] == [r"^demo\.writer\.impl$"] and
+                                               "visibility" in item), modules[source]["layer"]))
+            self.assertEqual(results, [(True, False, True, "Bootstrap"),
+                                       (True, False, True, "Bootstrap"),
+                                       (True, False, True, "Envelopes")],
+                             "nested assembly boundaries changed")
+
+    def test_nested_assembly_annotations_across_modes(self):
+        with TemporaryDirectory(prefix="quard-nested-types-") as directory:
+            root = Path(directory)
+            self.nested_envelope_fixture(root)
+            files = ConfiguredConsumerPolicy(root).files()
+            results = []
+            for mode in ("draft", "v1", "v2"):
+                if mode != "draft":
+                    write_json(root / ".quard/architecture.generated.json",
+                               LEGACY_IDENTITY if mode == "v1" else IDENTITY)
+                types, error = dependency_types(root, sorted(files["production"] + files["tests"]))
+                results.append((error, {item["path"] for item in types if item["rule"] ==
+                                        "CONCRETE_DEPENDENCY_TYPE"}))
+            self.assertEqual(results, [(None, {"src/demo/client.py", "src/demo/client.pyi"})] * 3,
+                             "nested assembly annotations were misclassified")
+
+    def test_nested_assembly_folder_and_ordinary_imports(self):
+        with TemporaryDirectory(prefix="quard-nested-folders-") as directory:
+            root = Path(directory)
+            self.nested_envelope_fixture(root)
+            write_json(root / ".quard/architecture.generated.json", IDENTITY)
+            findings = self.folder_findings(root)
+            self.assertEqual(({"src/demo/client.py", "src/demo/client.pyi"} &
+                              {item["path"] for item in findings if item["rule"] ==
+                               "CONCRETE_IMPLEMENTATION_IMPORT"},
+                              {item["path"] for item in findings if item["path"].endswith(
+                                  "/nested/deeper/relay.py")}),
+                             ({"src/demo/client.py", "src/demo/client.pyi"}, set()),
+                             "nested assembly folder or ordinary imports passed incorrectly")
 
     def test_layer_direction_and_generated_exact_declarations(self):
         with TemporaryDirectory(prefix="quard-contract-layers-") as directory:
