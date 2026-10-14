@@ -5,7 +5,7 @@ from pathlib import Path
 
 from quard._common import load_toml, read_json
 from quard.policy_utils import (LIMIT_MAP, discover_files, exclude_globs, exclude_regex,
-                               pyright_config, read_limits, read_scope)
+                                pyright_config, read_checks, read_limits, read_scope)
 
 
 def limit_drift(root: Path) -> list[str]:
@@ -29,7 +29,7 @@ def scope_drift(root: Path) -> list[str]:
                  ("tests", load_toml(root / ".quard/pylint-tests.toml")
                   .get("tool", {}).get("pylint", {})))
                 if config.get("main", {}).get("ignore-paths") != [exclude_regex(scope)]]
-    expected = pyright_config(scope, files)
+    expected = pyright_config(scope, files, read_checks(root)["contract_folders"])
     for name in ("exclude", "ignore", "include", "executionEnvironments"):
         if tool.get("pyright", {}).get(name) != expected[name]:
             mismatch.append(f"pyright.{name}")

@@ -150,6 +150,10 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                 "--manifest", str(manifest), "--config", str(config), "--output", str(output)]
         if (root / ".quard/architecture.generated.json").exists():
             argv.append("--generated")
+        if profile == "production" and enabled["contract_folders"]:
+            envelopes = run_dir / "pylint-envelope-files.json"
+            write_json(envelopes, files["production"], root)
+            argv.extend(["--envelopes-manifest", str(envelopes)])
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
                      "argv": argv, "json_file": output})
     source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files

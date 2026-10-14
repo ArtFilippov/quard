@@ -21,6 +21,7 @@ TEST_ROOT = "tests"
 SUPER_NAME = "super"
 BASE_ROLE = "base"
 ASSEMBLY_ROLE = "assembly"
+OPTIONAL_CONSTRUCTOR_STATEMENTS = 2
 METHOD_KIND = "method"
 GET_KIND = "get"
 SET_KIND = "set"
@@ -399,6 +400,22 @@ class FolderOwnership(Contracts, FolderAnalysis):
         if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
                 and isinstance(body[0].value.value, str)):
             body = body[1:]
+        if len(body) == OPTIONAL_CONSTRUCTOR_STATEMENTS:
+            call = body[0]
+            if (not isinstance(call, ast.Expr) or not isinstance(call.value, ast.Call)
+                    or not isinstance(call.value.func, ast.Attribute)
+                    or call.value.func.attr != CONSTRUCTOR
+                    or not isinstance(call.value.func.value, ast.Call)
+                    or not isinstance(call.value.func.value.func, ast.Name)
+                    or call.value.func.value.func.id != SUPER_NAME
+                    or call.value.func.value.args or call.value.func.value.keywords
+                    or call.value.args or call.value.keywords
+                    or SUPER_NAME in self.bindings_by_path[path]
+                    or SUPER_NAME in {arg.arg for arg in constructor.args.args}
+                    or any(self.shadowed(item) for statement in body
+                           for item in self.eager(statement))):
+                return "call zero-argument super().__init__() before assigning the delegate"
+            body = body[1:]
         if (constructor.decorator_list or len(body) != 1 or not isinstance(body[0], ast.Assign)
                 or len(body[0].targets) != 1
                 or not isinstance(body[0].targets[0], ast.Attribute)
@@ -443,10 +460,12 @@ class FolderOwnership(Contracts, FolderAnalysis):
         Returns:
             str | None: Member kind, or no recognized declaration kind.
         """
-        if not method.decorator_list:
+        decorators = [item for item in method.decorator_list if self.resolved(name, item, path)
+                      not in {"typing.override", "typing_extensions.override"}]
+        if not decorators:
             return METHOD_KIND
-        if len(method.decorator_list) == 1 and isinstance(method, ast.FunctionDef):
-            decorator = method.decorator_list[0]
+        if len(decorators) == 1 and isinstance(method, ast.FunctionDef):
+            decorator = decorators[0]
             if self.resolved(name, decorator, path) == PROPERTY_NAME:
                 return GET_KIND
             if (isinstance(decorator, ast.Attribute) and isinstance(decorator.value, ast.Name)

@@ -46,7 +46,7 @@ fail-under = 0
 fail-on = ["I"]
 recursive = true
 py-version = "3.12"
-ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"]
+ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations|\\.ipynb_checkpoints)(?:[/\\\\]|$)"]
 
 [tool.pylint.messages_control]
 enable = ["all"]
@@ -95,8 +95,8 @@ max-try-statements = 1
 
 [tool.pyright]
 include = ["src", "tests"]
-exclude = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".quard/**", "**/.quard/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
-ignore = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".quard/**", "**/.quard/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**"]
+exclude = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".quard/**", "**/.quard/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**", ".ipynb_checkpoints/**", "**/.ipynb_checkpoints/**"]
+ignore = [".git/**", "**/.git/**", ".venv/**", "**/.venv/**", "venv/**", "**/venv/**", "__pycache__/**", "**/__pycache__/**", ".mypy_cache/**", "**/.mypy_cache/**", ".pytest_cache/**", "**/.pytest_cache/**", ".ruff_cache/**", "**/.ruff_cache/**", ".tox/**", "**/.tox/**", ".nox/**", "**/.nox/**", ".quard/**", "**/.quard/**", "node_modules/**", "**/node_modules/**", "build/**", "**/build/**", "dist/**", "**/dist/**", "vendor/**", "**/vendor/**", "vendored/**", "**/vendored/**", "_vendor/**", "**/_vendor/**", "generated/**", "**/generated/**", "_generated/**", "**/_generated/**", "migrations/**", "**/migrations/**", ".ipynb_checkpoints/**", "**/.ipynb_checkpoints/**"]
 typeCheckingMode = "strict"
 pythonPlatform = "Linux"
 extraPaths = ["src"]
@@ -137,7 +137,7 @@ extraPaths = ["src"]
 [tool.pydoclint]
 style = "google"
 quiet = true
-exclude = "(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"
+exclude = "(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations|\\.ipynb_checkpoints)(?:[/\\\\]|$)"
 skip-checking-short-docstrings = false
 skip-checking-private-functions = false
 skip-checking-raises = false

@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from typing import override
 import unittest
+
+import tomlkit
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 
 from quard._common import write_json
 from quard._policy import discover_files, read_scope
+from quard.policy_utils import base_pylint, pyright_config
 from quard.architecture_draft.generated_selection_utils import IDENTITY, LEGACY_IDENTITY
 from quard.check import execute_job, make_jobs
 from quard._class_contracts_worker import Contracts as LegacyContracts
@@ -32,6 +36,154 @@ from quard.method_analysis.declarations import Declarations
 
 
 class TestFolderOwnership(unittest.TestCase):
+    def test_delegate_super_override_and_invalid_forwarding(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def run(self, value: int) -> int: ...\n")
+        for label, constructor, decorator, result in (
+                ("plain", "", "", "value"),
+                ("super", "super().__init__()\n        ", "@alias\n    ", "value"),
+                ("changed", "", "", "value + 1"),
+                ("args", "super().__init__(value)\n        ", "", "value"),
+                ("unrelated", "", "@property\n    ", "value")):
+            self.put(f"src/pkg/port/envelopes/{label}.py",
+                     "from pkg.port.port import Port\n"
+                     + ("from typing import override as alias\n" if decorator else "")
+                     + f"class {label.title()}(Port):\n"
+                     + "    def __init__(self, delegate: Port) -> None:\n        "
+                     + constructor + "self.delegate = delegate\n"
+                     + f"    {decorator}def run(self, value: int) -> int:\n"
+                     + f"        return self.delegate.run({result})\n")
+        result, raw = self.run_worker()
+        self.assertEqual({item["symbol"] for item in raw["diagnostics"]
+                          if item["rule"] == "ENVELOPE_DELEGATION"},
+                         {"Changed", "Args", "Unrelated"}, "valid forwarding was rejected")
+
+    def test_override_property_accessors_with_matching_stub(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    @property\n    def value(self) -> int: ...\n"
+                 "    @value.setter\n    def value(self, value: int) -> None: ...\n"
+                 "    @value.deleter\n    def value(self) -> None: ...\n")
+        self.put("src/pkg/port/envelopes/value.py",
+                 "from typing_extensions import override as alias\n"
+                 "from pkg.port.port import Port\nclass Value(Port):\n"
+                 "    def __init__(self, delegate: Port) -> None:\n"
+                 "        super().__init__()\n        self.delegate = delegate\n"
+                 "    @alias\n    @property\n    def value(self) -> int:\n"
+                 "        return self.delegate.value\n"
+                 "    @value.setter\n    @alias\n    def value(self, value: int) -> None:\n"
+                 "        self.delegate.value = value\n"
+                 "    @alias\n    @value.deleter\n    def value(self) -> None:\n"
+                 "        del self.delegate.value\n")
+        self.put("src/pkg/port/envelopes/value.pyi",
+                 "from typing_extensions import override as alias\n"
+                 "from pkg.port.port import Port\nclass Value(Port):\n"
+                 "    @alias\n    @property\n    def value(self) -> int: ...\n"
+                 "    @value.setter\n    @alias\n    def value(self, value: int) -> None: ...\n"
+                 "    @alias\n    @value.deleter\n    def value(self) -> None: ...\n")
+        result, raw = self.run_worker()
+        self.assertEqual(raw["diagnostics"], [], "override accessors lost proof")
+
+    def test_checkpoints_are_excluded_without_hiding_other_directories(self):
+        for path in ("src/pkg/envelopes/nested/good.py", "src/pkg/.hidden/good.py",
+                     "src/pkg/.ipynb_checkpoints/bad.py", "tests/.ipynb_checkpoints/bad.py"):
+            self.put(path, "VALUE = 1\n")
+        files = discover_files(self.root, read_scope(self.root))
+        self.assertEqual((files["production"], files["excluded_directories"]),
+                         (["src/pkg/.hidden/good.py", "src/pkg/envelopes/nested/good.py"],
+                          ["src/pkg/.ipynb_checkpoints/", "tests/.ipynb_checkpoints/"]),
+                         "checkpoint files entered the discovered scope")
+
+    def test_native_pylint_exempts_only_proven_envelopes(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def run(self, value: int) -> int: ...\n")
+        self.put("src/pkg/port/envelopes/proven.py", "from pkg.port.port import Port\n"
+                 "class Proven(Port):\n    def __init__(self, delegate: Port) -> None:\n"
+                 "        self.delegate = delegate\n    def run(self, value: int) -> int:\n"
+                 "        return self.delegate.run(value)\n")
+        self.put("src/pkg/port/envelopes/assembly.py",
+                 "from pkg.port.envelopes.proven import Proven\nclass Assembly(Proven):\n"
+                 "    def __init__(self, delegate: Proven) -> None:\n"
+                 "        super().__init__(delegate)\n")
+        self.put("src/pkg/port/envelopes/invalid.py", "from pkg.port.port import Port\n"
+                 "class Invalid(Port):\n    def run(self, value: int) -> int:\n"
+                 "        return value\n")
+        self.put("src/pkg/port/ordinary.py", "class Ordinary:\n"
+                 "    def run(self) -> int:\n        return 1\n")
+        files = discover_files(self.root, read_scope(self.root))["production"]
+        config = self.root / "pylint.toml"
+        config.write_text(tomlkit.dumps({"tool": {"pylint": base_pylint([], read_scope(self.root))}}))
+        manifest = self.root / "files.json"
+        manifest.write_text(json.dumps(files))
+        output = self.root / "output.json"
+        result = subprocess.run([sys.executable, str(QUARD / "_pylint_worker.py"),
+                                 "--manifest", str(manifest), "--envelopes-manifest", str(manifest),
+                                 "--config", str(config), "--output", str(output), "--generated"],
+                                cwd=self.root, capture_output=True, text=True, check=False)
+        self.assertTrue(output.exists(), result.stderr)
+        findings = json.loads(output.read_text())["messages"]
+        self.assertEqual({item["obj"] for item in findings if item["messageId"] == "R0903"},
+                         {"Invalid", "Ordinary"}, "R0903 exempted an unproved class")
+
+    def test_native_pylint_restores_r0903_without_contract_folders(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def run(self, value: int) -> int: ...\n")
+        self.put("src/pkg/port/envelopes/proven.py", "from pkg.port.port import Port\n"
+                 "class Proven(Port):\n    def __init__(self, delegate: Port) -> None:\n"
+                 "        self.delegate = delegate\n    def run(self, value: int) -> int:\n"
+                 "        return self.delegate.run(value)\n")
+        files = discover_files(self.root, read_scope(self.root))["production"]
+        config = self.root / "pylint.toml"
+        config.write_text(tomlkit.dumps({"tool": {"pylint": base_pylint([], read_scope(self.root))}}))
+        manifest = self.root / "files.json"
+        manifest.write_text(json.dumps(files))
+        output = self.root / "output.json"
+        subprocess.run([sys.executable, str(QUARD / "_pylint_worker.py"), "--manifest",
+                        str(manifest), "--config", str(config), "--output", str(output),
+                        "--generated"], cwd=self.root, capture_output=True, text=True, check=False)
+        self.assertIn("Proven", {item["obj"] for item in json.loads(output.read_text())["messages"]
+                                 if item["messageId"] == "R0903"},
+                      "disabled contract folders retained the R0903 exception")
+
+    def test_native_pyright_rules_keep_outside_scope(self):
+        self.put("src/pkg/parent.py", "class Parent:\n"
+                 "    def __init__(self) -> None: super().__init__()\n"
+                 "    def run(self) -> int: return 1\n")
+        for path in ("src/pkg/ordinary.py", "src/pkg/envelopes/nested/inside.py"):
+            self.put(path, "from pkg.parent import Parent\nclass Child(Parent):\n"
+                     "    def __init__(self) -> None: pass\n"
+                     "    def run(self) -> int: return 2\n")
+        files = discover_files(self.root, read_scope(self.root))
+        (self.root / "pyrightconfig.json").write_text(json.dumps(pyright_config(
+            read_scope(self.root), files, True)))
+        result = subprocess.run([sys.executable, "-m", "pyright", "--project",
+                                 str(self.root / "pyrightconfig.json"), "--pythonpath", sys.executable,
+                                 "--outputjson"], cwd=self.root, capture_output=True, text=True,
+                                check=False)
+        findings = json.loads(result.stdout)["generalDiagnostics"]
+        self.assertEqual({(Path(item["file"]).name, item["rule"]) for item in findings
+                          if item.get("rule") in {"reportMissingSuperCall", "reportImplicitOverride"}},
+                         {("ordinary.py", "reportMissingSuperCall"),
+                         ("ordinary.py", "reportImplicitOverride")},
+                         "Pyright's native exceptions escaped the Envelope subtree")
+
+    def test_native_pyright_restores_rules_without_contract_folders(self):
+        self.put("src/pkg/parent.py", "class Parent:\n"
+                 "    def __init__(self) -> None: super().__init__()\n"
+                 "    def run(self) -> int: return 1\n")
+        self.put("src/pkg/envelopes/nested/inside.py", "from pkg.parent import Parent\n"
+                 "class Child(Parent):\n    def __init__(self) -> None: pass\n"
+                 "    def run(self) -> int: return 2\n")
+        files = discover_files(self.root, read_scope(self.root))
+        (self.root / "pyrightconfig.json").write_text(json.dumps(pyright_config(
+            read_scope(self.root), files, False)))
+        result = subprocess.run([sys.executable, "-m", "pyright", "--project",
+                                 str(self.root / "pyrightconfig.json"), "--pythonpath", sys.executable,
+                                 "--outputjson"], cwd=self.root, capture_output=True, text=True,
+                                check=False)
+        findings = json.loads(result.stdout)["generalDiagnostics"]
+        self.assertIn("reportImplicitOverride", {item.get("rule") for item in findings},
+                      "disabled contract folders retained the Pyright exception")
+
     def test_migrated_production_classes_and_compatibility_imports(self):
         self.assertEqual(self.run_worker("class-contracts")[0]["exit_code"], 0)
         self.assertIs(LegacyContracts, Contracts)

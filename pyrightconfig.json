@@ -41,7 +41,9 @@
     "_generated/**",
     "**/_generated/**",
     "migrations/**",
-    "**/migrations/**"
+    "**/migrations/**",
+    ".ipynb_checkpoints/**",
+    "**/.ipynb_checkpoints/**"
   ],
   "executionEnvironments": [
     {
@@ -100,7 +102,9 @@
     "_generated/**",
     "**/_generated/**",
     "migrations/**",
-    "**/migrations/**"
+    "**/migrations/**",
+    ".ipynb_checkpoints/**",
+    "**/.ipynb_checkpoints/**"
   ],
   "include": [
     "src",

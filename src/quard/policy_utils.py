@@ -79,6 +79,7 @@ IGNORED_FRAMEWORK_PARENTS = [
     "builtins.OSError", "builtins.TimeoutError", "typing.Protocol",
     "typing_extensions.Protocol", "enum.Enum", "enum.StrEnum",
 ]
+CHECKPOINT_DIRECTORY = ".ipynb_checkpoints"
 LAYER_DIRS = {
     "domain": "Domain", "application": "UseCase", "use_cases": "UseCase",
     "usecase": "UseCase", "usecases": "UseCase", "infrastructure": "Infrastructure",
@@ -175,12 +176,14 @@ def validate_settings(root: Path) -> None:
 
 
 def exclude_globs(scope: dict[str, list[str]]) -> list[str]:
-    return [pattern for name in scope["exclude_directory_names"]
+    return [pattern for name in dict.fromkeys([*scope["exclude_directory_names"],
+                                               CHECKPOINT_DIRECTORY])
             for pattern in (f"{name}/**", f"**/{name}/**")]
 
 
 def exclude_regex(scope: dict[str, list[str]]) -> str:
-    return r"(?:^|[/\\])(?:" + "|".join(map(re.escape, scope["exclude_directory_names"])) + r")(?:[/\\]|$)"
+    return r"(?:^|[/\\])(?:" + "|".join(map(re.escape, dict.fromkeys(
+        [*scope["exclude_directory_names"], CHECKPOINT_DIRECTORY]))) + r")(?:[/\\]|$)"
 
 
 def discover_files(root: Path, scope: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -188,7 +191,7 @@ def discover_files(root: Path, scope: dict[str, list[str]]) -> dict[str, list[st
     production: list[str] = []
     tests: list[str] = []
     excluded: list[str] = []
-    excluded_dirs = set(scope["exclude_directory_names"])
+    excluded_dirs = set(scope["exclude_directory_names"]) | {CHECKPOINT_DIRECTORY}
     test_dirs = set(scope["test_directory_names"])
     for top in (root / "src", root / "tests"):
         if not top.is_dir():
@@ -241,7 +244,8 @@ def base_pylint(plugins: list[str], scope: dict[str, list[str]]) -> dict[str, An
     }
 
 
-def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]]) -> dict[str, Any]:
+def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]],
+                   contract_folders: bool = False) -> dict[str, Any]:
     config: dict[str, Any] = {
         "include": ["src"] + (["tests"] if any(path.startswith("tests/") for path in files["tests"]) else []),
         "exclude": exclude_globs(scope), "ignore": exclude_globs(scope),
@@ -264,10 +268,16 @@ def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]]) -> 
                 test_roots.add(Path(*parts[:index + 1]).as_posix())
                 break
     # Tests still use strict types. These two demands obstruct pytest assertions/mocks.
+    envelopes = {Path(*parts[:index + 1]).as_posix()
+                 for file in files["production"] for parts in [Path(file).parts]
+                 for index, part in enumerate(parts[:-1]) if part == "envelopes"}
     config["executionEnvironments"] = [
         {"root": path, "extraPaths": ["src"], "reportPrivateUsage": "none", "reportUnusedCallResult": "none"}
         for path in sorted(test_roots, key=lambda x: (-len(x), x))
-    ] + [{"root": "src", "extraPaths": ["src"]}]
+    ] + ([{"root": path, "extraPaths": ["src"], "reportMissingSuperCall": "none",
+           "reportImplicitOverride": "none"}
+          for path in sorted(envelopes, key=lambda x: (-len(x), x))]
+         if contract_folders else []) + [{"root": "src", "extraPaths": ["src"]}]
     return config
 
 
@@ -330,7 +340,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         # Initialize missing sections only. Reinstallation preserves native policy,
         # reviewed layers, stubPath and other project-specific settings.
         tool.setdefault("pylint", base_pylint(plugins, scope))
-        tool.setdefault("pyright", pyright_config(scope, files))
+        tool.setdefault("pyright", pyright_config(scope, files, read_checks(root)["contract_folders"]))
         tool.setdefault("pydoclint", pydoclint_config(scope))
         if not managed:
             tool.setdefault("clean-arch", clean_config())
@@ -368,7 +378,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     if "pyright" in tool:
         tool["pyright"]["exclude"] = exclude_globs(scope)
         tool["pyright"]["ignore"] = exclude_globs(scope)
-        discovered = pyright_config(scope, files)
+        discovered = pyright_config(scope, files, read_checks(root)["contract_folders"])
         tool["pyright"]["include"] = discovered["include"]
         if tool["pyright"].get("executionEnvironments") != discovered["executionEnvironments"]:
             tool["pyright"]["executionEnvironments"] = discovered["executionEnvironments"]

@@ -288,11 +288,15 @@ violations baseline.
   and independent native checks still apply outside this directory.
   In reviewed and both generated versions, a base Envelope at any subtree depth with
   exactly one proven direct contract must store one delegate parameter in its
-  constructor without additional work. It must implement at least one member and
+  constructor, optionally preceded by one zero-argument `super().__init__()` call.
+  No other constructor work is accepted. It must implement at least one member and
   return the unchanged result of a same-named call on that stored delegate with
   unchanged arguments for every implemented method (or directly await that call
   in an async method). Direct property getters, setters and deleters must read,
   assign and delete the matching delegate property without intermediate work.
+  Proven `typing.override` and `typing_extensions.override`, including imported
+  aliases, may decorate those members in source and matching stubs; unrelated
+  decorators do not establish forwarding.
   Explicit external bases qualify without enumerating their members.
   `ENVELOPE_DELEGATION` reports failed proof at the class;
   stub-only declarations cannot prove forwarding. Assembly Envelopes declare only
@@ -307,6 +311,11 @@ violations baseline.
    `__all__` exports, not arbitrary values or classes.
    Configured test directories inside `src/` retain test classification. These are
   source-level proofs, not a runtime guarantee about which objects are composed.
+  With contract folders enabled, Pyright disables `reportMissingSuperCall` and
+  `reportImplicitOverride` only for discovered production `envelopes/` subtrees;
+  other rules remain enabled there. Pylint R0903 exempts only proven base and
+  assembly Envelopes, preserving ordinary and unproved class findings and the
+  configured minimum. Disabling contract folders restores native behavior.
   Production files throughout the contract `envelopes/` subtree may assemble
   implementations from other contract folders, including concrete types in stubs;
   this does not disable envelope placement or inheritance diagnostics.
@@ -393,7 +402,9 @@ violations baseline.
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.quard/config.toml` under `[scope]`. Exclusions match **exact directory basenames**,
 not substrings:
-`generated_models` is not `generated`. Discovered excluded directories appear in
+`generated_models` is not `generated`. `.ipynb_checkpoints` is always excluded
+under production and test roots, even in previously installed projects; other hidden
+directories are not implicitly excluded. Discovered excluded directories appear in
 reports. `.pyi` files are checked by Pyright, both method rules, class contracts
 and outer classes; other tools use their native scope. `__init__.py` is included. Root scripts and
 notebooks are outside the consumer's source scope. In the Quard checkout, its own

@@ -390,6 +390,13 @@ reviewed-конфигурации. Generated-проекты запускают �
   `_is_exempt_from_public_methods` для настоящих Protocol declarations.
   Concrete subclasses Protocol и обычные классы с одним методом сохраняют R0903;
   R0901, R0904, max/min limits и список игнорируемых built-in ancestors не меняются.
+  При включённом `contract_folders` отдельное исключение R0903 применяется только к
+  структурно доказанным базовым и сборочным Envelope в production. Оно не меняет
+  native-лимиты и не исключает другие сообщения Pylint. Pyright сохраняет остальные
+  диагностики, но отключает `reportMissingSuperCall` и `reportImplicitOverride` внутри
+  обнаруженных production `envelopes/` (включая вложенные каталоги), когда эта
+  проверка включена; вне этих областей правила продолжают действовать. См.
+  [ADR 0008](docs/adr/0008-scoped-envelope-native-exceptions.md).
 * **Pylint E1111 — возвращаемое значение объявления Protocol.** Pylint 4.0.8
   рассматривает тело `...` у метода Protocol как concrete-функцию без `return`.
   Это воспроизведено для generic `Journal.call[T](...) -> T` через поле dataclass,

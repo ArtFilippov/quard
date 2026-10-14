@@ -7,7 +7,7 @@ fail-under = 0
 fail-on = ["I"]
 recursive = true
 py-version = "3.12"
-ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations)(?:[/\\\\]|$)"]
+ignore-paths = ["(?:^|[/\\\\])(?:\\.git|\\.venv|venv|__pycache__|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.nox|\\.quard|node_modules|build|dist|vendor|vendored|_vendor|generated|_generated|migrations|\\.ipynb_checkpoints)(?:[/\\\\]|$)"]
 
 [tool.pylint.messages_control]
 enable = ["all"]

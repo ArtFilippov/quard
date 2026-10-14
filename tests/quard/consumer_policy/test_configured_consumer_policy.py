@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -66,6 +67,22 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
         self.assertEqual(self.policy().scope_drift(), [])
         self.assertEqual(load_toml(pyproject)["tool"]["pylint"]["design"]["extra-policy"],
                          {"value": "owned"})
+
+    def test_apply_existing_consumer_updates_checkpoint_and_envelope_scope(self):
+        source = self.root / "src/demo/port/envelopes/nested/adapter.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("class Adapter: pass\n", encoding="utf-8")
+        checkpoint = self.root / "tests/.ipynb_checkpoints/hidden.py"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_text("INVALID = missing\n", encoding="utf-8")
+        self.policy().apply()
+        native = json.loads((self.root / "pyrightconfig.json").read_text())
+        self.assertEqual((self.policy().scope_drift(),
+                          next(item["reportMissingSuperCall"] for item in
+                               native["executionEnvironments"] if "envelopes" in item["root"]),
+                          "**/.ipynb_checkpoints/**" in native["exclude"],
+                          "tests/.ipynb_checkpoints/" in self.policy().files()["excluded_directories"]),
+                         ([], "none", True, True), "existing consumer scope was not updated")
 
     def test_config_validation_rejects_unknown_sections_and_check_names(self):
         path = self.root / ".quard/config.toml"

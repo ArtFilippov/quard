@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from quard.policy_utils import CHECKPOINT_DIRECTORY
+
 MAIN_FOLDER = "main"
 ENVELOPES_FOLDER = "envelopes"
 ORDINARY = "ordinary"
@@ -39,7 +41,8 @@ def main_directories(root: Path, scope: dict[str, list[str]]) -> list[str]:
     source = root / "src"
     if not source.is_dir():
         return []
-    skipped = set(scope["exclude_directory_names"] + scope["test_directory_names"])
+    skipped = set([*scope["exclude_directory_names"], *scope["test_directory_names"],
+                   CHECKPOINT_DIRECTORY])
     found: list[str] = []
     for parent, directories, _ in os.walk(source, followlinks=False):
         directories[:] = sorted(name for name in directories if name not in skipped)

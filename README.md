@@ -448,9 +448,10 @@ named `HTTPPort` belongs in `http_port/http_port.py` (or `.pyi`); implementation
 belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-and-scope).
 In reviewed and both generated architecture versions, a base Envelope anywhere in an
 `envelopes/` subtree must inherit one proven contract, store one constructor delegate
-without other work,
+with either no other work or one preceding zero-argument `super().__init__()`,
 and directly return at least one method call on that delegate with unchanged arguments,
-or directly forward a property accessor. Every implemented member must forward this
+or directly forward a property accessor. Proven `typing`/`typing_extensions.override`
+decorators, including aliases, are optional. Every implemented member must forward this
 way; async methods may directly await the delegate call. An assembly
 Envelope inherits a proven base (including one outside `envelopes/`) or another
 assembly Envelope, declares only a constructor, and calls `super().__init__(...)`
@@ -468,6 +469,12 @@ Assembly rights for concrete imports and annotations are inherited at every dept
 ordinary modules, including stubs, remain restricted. The pattern intends to
 compose implementations, but these checks prove only forwarding and parent
 initialization, not which objects are composed at runtime.
+With `contract_folders` enabled, Pyright omits only `reportMissingSuperCall` and
+`reportImplicitOverride` inside discovered production `envelopes/` subtrees; outside
+them both rules remain active. Production Pylint R0903 exempts only proven base and
+assembly Envelopes, without changing the configured minimum or other diagnostics.
+Turning off `contract_folders` restores both native rules for Envelopes. See
+[ADR 0008](docs/adr/0008-scoped-envelope-native-exceptions.md).
 The independent test-placement job maps `TestHTTPPort` in
 `tests/pkg/http_port/test_http_port.py` to the production `HTTPPort` declaration
 in `src/pkg/http_port/`. The same mirrored layout applies to implementations

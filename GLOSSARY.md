@@ -34,8 +34,10 @@ _Avoid_: Prepared text
 
 **Base Envelope**:
 An object that directly implements a local or explicitly imported external contract
-by forwarding methods and property accessors to one stored delegate. The check
-proves declared forwarding, not the complete contract interface.
+by forwarding methods and property accessors to one stored delegate. Its constructor
+may first call the parent without arguments; forwarding does not depend on an
+`@override` annotation. This proves declared forwarding, not the complete contract
+interface or the composition of particular objects.
 _Avoid_: Class identified by an Envelope suffix
 
 **Assembly Envelope**:
