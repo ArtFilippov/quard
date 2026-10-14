@@ -30,6 +30,7 @@ PROPERTY_NAME = "builtins.property"
 TYPE_CHECKING_NAME = "TYPE_CHECKING"
 TYPING_NAME = "typing"
 EXPORTS_NAME = "__all__"
+ENVELOPE_CLASS_RULE = "ENVELOPE_CLASS"
 OPAQUE_BASES = {"builtins.object", "typing.Protocol", "typing_extensions.Protocol",
                 "abc.ABC", "abc.ABCMeta"}
 
@@ -265,6 +266,51 @@ class FolderOwnership(Contracts, FolderAnalysis):
         return results
 
     @override
+    def assemblies(self, tests: frozenset[str]) -> set[tuple[str, str]]:
+        """Identify production assemblies with valid source, ancestry and companion stubs.
+
+        Args:
+            tests (frozenset[str]): Configured test-directory basenames.
+
+        Returns:
+            set[tuple[str, str]]: Proven source paths and class symbols.
+        """
+        failures = self.base_violations(tests)
+        rejected = {(item["path"], item.get("symbol")) for item in failures}
+        modules = {item["path"] for item in failures if item["rule"] == ENVELOPE_CLASS_RULE}
+        blocked = {name for name, _, path in self.all_declarations()
+                   if path in modules or (path, name.removeprefix(module_name(path) + "."))
+                   in rejected}
+
+        def ancestry(name: str, seen: frozenset[str]) -> bool:
+            """Require every local ancestor to have valid Envelope evidence.
+
+            Args:
+                name (str): Qualified class name.
+                seen (frozenset[str]): Ancestors visited on this path.
+
+            Returns:
+                bool: Whether the ancestor chain is free of Envelope failures.
+            """
+            if name in blocked or name in seen:
+                return False
+            if name in self.contracts or (node := self.node_for(name)) is None:
+                return True
+            return all(ancestry(parent, seen | {name}) for base in node.bases
+                       if (parent := self.resolved(name, base)) is not None
+                       and self.node_for(parent) is not None)
+
+        return {(path, name.removeprefix(module_name(path) + "."))
+                for name, node, path in self.all_declarations()
+                if (path.endswith(".py") and Path(path).parts[0] == SOURCE_ROOT
+                    and ENVELOPES_FOLDER in Path(path).parts[1:-1]
+                    and not any(part in tests for part in Path(path).parts[:-1])
+                    and name not in blocked
+                    and self.envelope_role(name, node, path) == ASSEMBLY_ROLE
+                    and ancestry(name, frozenset())
+                    and self.assembly(node, path) is None)}
+
+    @override
     def module_violations(self, path: str, tree: ast.Module) -> list[dict[str, object]]:
         """Check that a production module contains only Envelopes and technical declarations.
 
@@ -279,7 +325,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
         results: list[dict[str, object]] = [
             {"path": path, "line": item.lineno,
              "column": item.col_offset + 1, "symbol": current.stem,
-             "rule": "ENVELOPE_CLASS",
+             "rule": ENVELOPE_CLASS_RULE,
              "message": f"{path}: envelopes/ permits only Envelopes and " +
                         "technical package declarations."} for item in tree.body
             if not self.technical(item) and not (
@@ -287,7 +333,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
         if (not results and current.stem != CONSTRUCTOR and
                 not any(isinstance(item, ast.ClassDef) for item in tree.body)):
             results.append({"path": path, "line": 1, "column": 1,
-                            "symbol": current.stem, "rule": "ENVELOPE_CLASS",
+                            "symbol": current.stem, "rule": ENVELOPE_CLASS_RULE,
                             "message": f"{path}: envelopes/ requires an Envelope class."})
         return results
 

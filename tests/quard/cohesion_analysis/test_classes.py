@@ -13,6 +13,7 @@ sys.path.insert(0, str(QUARD / "src"))
 
 from quard import _common, _policy
 from quard.check import execute_job, make_jobs, select_lcom_files
+from quard.check_selection_utils import architecture_defaults
 
 
 class TestClasses(unittest.TestCase):
@@ -35,7 +36,7 @@ class TestClasses(unittest.TestCase):
             'test_directory_names = ["tests"]\n', encoding="utf-8")
         self.run_dir.mkdir(parents=True)
 
-    def put(self, path, code):
+    def put(self, path: str, code: str) -> None:
         file = self.root / path
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(code, encoding="utf-8")
@@ -111,6 +112,79 @@ class Nested:
         self.assertEqual({d["symbol"] for d in result["diagnostics"]}, {"Core", "Fixture"})
         self.assertEqual(json.loads((self.run_dir / "lcom4-files.json").read_text(encoding="utf-8")),
                          ["tests/test_fixture.py", "src/demo/core.py"])
+
+    def envelopes(self) -> None:
+        self.put("src/demo/source/source.py", "from typing import Protocol\n"
+                 + "class Source(Protocol):\n    def read(self) -> str: ...\n")
+        self.put("src/demo/source/envelopes/base.py",
+                 "from demo.source.source import Source\n"
+                 + "class Base(Source):\n"
+                 + "    def __init__(self, origin: Source) -> None: self.origin = origin\n"
+                 + "    def read(self) -> str: return self.origin.read()\n")
+        self.put("src/demo/source/envelopes/nested/named.py",
+                 "from demo.source.envelopes.base import Base\n"
+                 + "class Named(Base):\n"
+                 + "    def __init__(self, origin: Base) -> None: super().__init__(origin)\n")
+
+    def test_proven_assembly_is_excluded_but_other_concrete_classes_are_checked(self):
+        self.envelopes()
+        self.put("src/demo/source/envelopes/nested/broken.py",
+                 "from demo.source.envelopes.base import Base\n"
+                 + "class Broken(Base):\n    def __init__(self, origin): pass\n")
+        self.put("src/demo/ordinary.py", "class Ordinary:\n    def __init__(self): pass\n")
+        result, _, _ = self.run_worker()
+        self.assertEqual({item["symbol"]: item["score"] for item in result["diagnostics"]},
+                         {"Broken": 0, "Ordinary": 0}, "unproved classes lost LCOM4")
+
+    def test_selected_assembly_uses_unselected_parent_evidence(self):
+        self.envelopes()
+        results = []
+        for version in (None, 1, 2):
+            if version is not None:
+                self.put(".quard/architecture.generated.json",
+                         json.dumps({"policy": "contract-only", "version": version}))
+            files = _policy.discover_files(self.root, _policy.read_scope(self.root))
+            job = next(job for job in make_jobs(self.root, self.run_dir, files, False,
+                           ["src/demo/source/envelopes/nested/named.py"]) if job["name"] == "lcom4")
+            result = execute_job(job, self.root, self.run_dir, timeout=30)
+            results.append((result["status"], result["diagnostics"]))
+        self.assertEqual(results, [("passed", [])] * 3,
+                         "selected assembly lost its parent proof")
+
+    def test_conflicting_stub_does_not_prove_assembly(self):
+        self.envelopes()
+        self.put("src/demo/source/envelopes/nested/named.pyi",
+                 "from demo.source.source import Source\nclass Named(Source): ...\n")
+        result, _, _ = self.run_worker()
+        self.assertEqual({item["symbol"] for item in result["diagnostics"]}, {"Named"},
+                         "conflicting stub bypassed LCOM4")
+
+    def test_conflicting_parent_stub_does_not_prove_assembly(self):
+        self.envelopes()
+        self.put("src/demo/source/envelopes/base.pyi", "class Base(object): ...\n")
+        result, _, _ = self.run_worker()
+        self.assertEqual({item["symbol"] for item in result["diagnostics"]}, {"Named"},
+                         "conflicting parent stub bypassed LCOM4")
+
+    def test_disabled_contract_folders_does_not_exempt_assembly(self):
+        self.envelopes()
+        files = _policy.discover_files(self.root, _policy.read_scope(self.root))
+        checks = {**architecture_defaults(self.root), "contract_folders": False}
+        job = next(job for job in make_jobs(self.root, self.run_dir, files, False,
+                       checks=checks) if job["name"] == "lcom4")
+        result = execute_job(job, self.root, self.run_dir, timeout=30)
+        self.assertEqual({item["symbol"] for item in result["diagnostics"]}, {"Named"},
+                         "disabled folder proof still exempted assembly")
+
+    def test_broken_unselected_context_is_an_infrastructure_error(self):
+        self.envelopes()
+        self.put("src/demo/broken.py", "class Broken(\n")
+        files = _policy.discover_files(self.root, _policy.read_scope(self.root))
+        job = next(job for job in make_jobs(self.root, self.run_dir, files, False,
+                       ["src/demo/source/envelopes/nested/named.py"]) if job["name"] == "lcom4")
+        result = execute_job(job, self.root, self.run_dir, timeout=30)
+        self.assertEqual((result["status"], result["exit_code"]), ("error", 2),
+                         "broken Envelope context was silently accepted")
 
     def test_quoted_file_name_with_spaces_is_selectable(self):
         self.put("src/demo/a file.py", "class Example: pass\n")

@@ -776,8 +776,13 @@ the class name. Property access alone does not create a getter/setter call edge;
 accessors with the same name are distinct vertices. Comprehensions in method bodies
 contribute references; nested function, lambda and class bodies do not. Nested
 classes are scored independently. A class with no eligible methods scores 0; a
-connected class scores 1. Scores other than 1 produce class-location diagnostics with the
-score and disconnected groups, without a baseline or exemptions.
+connected class scores 1. When `contract_folders` is enabled, a production
+assembly Envelope proven by its source, ancestry and companion stub does not
+receive an LCOM4 finding: its only permitted method is the excluded constructor.
+Invalid Envelopes, base Envelopes, test classes and ordinary concrete classes keep
+normal LCOM4 scoring. Proof uses the full discovered source/stub scope even
+with `--lcom_files`; only selected `.py` files are scored. Scores other than 1
+produce class-location diagnostics with the score and disconnected groups.
 
 This pass is syntactic: it does not resolve receiver aliases, external inheritance, indirect
 calls, dynamic attributes (`getattr`), decorators beyond explicit `abc`/`typing`

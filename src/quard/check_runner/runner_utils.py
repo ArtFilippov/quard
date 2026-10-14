@@ -159,6 +159,10 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files
     if lcom_files is None or source_files:
         add_worker("lcom4", "lcom4", source_files)
+        if enabled["lcom4"] and enabled["contract_folders"]:
+            manifest = run_dir / "lcom4-envelopes-files.json"
+            write_json(manifest, sorted(files["production"] + files["tests"]), root)
+            jobs[-1]["argv"][2:2] = ["--envelopes-manifest", str(manifest)]
     if enabled["duplicate_detection"]:
         min_units = read_duplication_min_units(root)
         clone_files = sorted(path for profile in ("production", "tests") for path in files[profile]

@@ -389,7 +389,8 @@ Every clone produces a kind-specific positioned diagnostic for each fragment.
 Each job saves its native JSON and raw streams with the report; an empty or
 incomplete scan is an error.
 LCOM4 runs as an independent job over discovered production and test `.py` classes;
-see [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
+proven production assembly Envelopes are exempt when `contract_folders` is enabled.
+See [PROFILE.md](PROFILE.md#basic-lcom4) for its metric and limitations.
 The non-instance-method rule independently checks discovered `.py` and `.pyi` files
 in both profiles, including when LCOM4 is narrowed or skipped.
 When enabled, the constructor-purity rule independently checks eager constructor

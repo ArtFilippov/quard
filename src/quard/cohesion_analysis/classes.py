@@ -16,13 +16,16 @@ from quard.cohesion_references.method_references import MethodReferences
 __all__ = ["ABSTRACT_DECORATORS", "METHOD", "SPECIAL_METHODS", "Classes", "Declarations",
            "MethodReferences", "analyze", "components", "dotted", "eligible",
            "is_placeholder", "main"]
+EMPTY_ASSEMBLIES: frozenset[str] = frozenset()
 
 
 class Classes(ast.NodeVisitor, CohesionAnalysis):
-    def __init__(self, path: str, declarations: Declarations):
+    def __init__(self, path: str, declarations: Declarations,
+                 assemblies: frozenset[str] = EMPTY_ASSEMBLIES):
         super().__init__()
         self.path = path
         self.declarations = declarations
+        self.assemblies = assemblies
         self.parents: list[str] = []
         self.diagnostics: list[dict[str, object]] = []
 
@@ -37,8 +40,8 @@ class Classes(ast.NodeVisitor, CohesionAnalysis):
             return
         groups = components(node, self.declarations)
         score = len(groups)
-        if score != 1:
-            detail = ("no eligible methods" if score == 0 else
+        if score != 1 and not (not score and symbol in self.assemblies):
+            detail = ("no eligible methods" if not score else
                       "disconnected method groups: " + "; ".join(", ".join(group) for group in groups))
             self.diagnostics.append({"rule": "LCOM4", "path": self.path, "line": node.lineno,
                                      "column": node.col_offset + 1, "symbol": symbol,
