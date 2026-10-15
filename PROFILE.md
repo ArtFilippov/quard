@@ -205,7 +205,8 @@ violations baseline.
   the same member does not authorize overriding a concrete customer member.
   Matching is by name: a setter alone can override a getter, and a method can
   replace a property (or vice versa). Decorated properties and assignments using
-  built-in `property` or `functools.cached_property` count, but assigned callables
+  built-in `property`, `functools.cached_property` or `qraft.cached_property`
+  count, but assigned callables
   do not. A getter/setter pair receives one violation at its first declaration
   in each class and source file. Ordinary private members and built-in static/class
   methods count. Python-recognized data-model hooks and name-mangled `__private`
@@ -399,6 +400,37 @@ violations baseline.
   Initialized dataclass instance fields, Enum members and `__slots__` declarations
   remain allowed.
 
+### Read-only cached property contracts
+
+A getter-only `@property` in a local Protocol or abstract contract promises a public
+read with the declared return type. A concrete `@qraft.cached_property` satisfies
+that read without matching the contract's decorator spelling. It caches per instance
+on first read; its data descriptor rejects assignment and deletion even after caching.
+It requires a mutable instance `__dict__`. Use `@cached_property` above `@override`
+on the implementation; pinned Pyright retains `reportImplicitOverride` and
+`reportIncompatibleMethodOverride` outside its existing scoped Envelope exception.
+An invalid return type, missing override annotation or unrelated override remains
+a native diagnostic. A writable contract (setter or deleter) is **not** a supported
+cached-property implementation; use an ordinary property for that interface.
+
+| Job | Proven `qraft.cached_property` coverage |
+|---|---|
+| `class-contracts` | Decorated and constructor-call assignments are members; concrete-ancestor redeclarations still fail in source and stubs. |
+| `instance-fields` | The descriptor is a public property, not stored class or instance state; method receivers and external field access keep their independent checks. |
+| `encapsulated-only` | Decorated and constructor-call properties retain marked read/write/delete access restrictions and source/stub marker agreement. |
+| `contract-folders` | Direct getter forwarding in base Envelopes and source/stub accessor-kind agreement accept the decorator; no cached setter/deleter syntax is recognized. |
+| Pyright/Pylint/Tach | Native type, override, style and dependency checks run normally; declare `qraft` as a runtime dependency for Tach. |
+
+The Quard property jobs above resolve explicit `qraft` imports, renamed imports,
+module aliases, local re-exports and simple value aliases at declaration time in
+discovered `.py` and `.pyi` files. A shadowed binding, unrelated decorator named
+`cached_property`, or unproved dynamic descriptor does not gain property status.
+Supported constructor syntax is `name = cached_property(function)` (including
+proven aliases and qualified imports). Contract-only Rust clone declaration units
+recognize ordinary property accessors; they do not use this descriptor index or
+enumerate concrete cached-property implementations. Other independent checks keep
+their documented scope and do not infer descriptor semantics.
+
 Production is `src/`; tests are `tests/` and the test directory basenames configured
 in `.quard/config.toml` under `[scope]`. Exclusions match **exact directory basenames**,
 not substrings:
@@ -459,7 +491,8 @@ See [ADR 0002](docs/adr/0002-instance-field-boundaries.md).
 Class assignments and initialized class annotations establish prohibited class state;
 receiver assignments, slots, uninitialized annotations and annotated dataclass defaults
 establish instance fields (except explicit `ClassVar`). Plain methods, properties and
-explicitly imported `functools.cached_property` are public interfaces; stored callables
+proven `functools.cached_property` and `qraft.cached_property` are public
+interfaces; stored callables
 and unrecognized descriptors are fields. Enum members from explicitly imported standard
 Enum bases are exempt. The rule is syntactic: dynamic owners and computed attribute
 names cannot be proved. Same-class reads of prohibited declarations are not separately
@@ -575,8 +608,9 @@ dispatch are outside this matrix. It does not claim universal runtime coverage.
 The job restricts directly marked and class/inheritance-restricted explicit method
 calls and ordinary/cached property access, including literal-name reflection. A marker
 on any recognized getter, setter or deleter restricts all three property operations,
-even after a cached value is stored. Proven `@property`, `@functools.cached_property`,
-accessor aliases and static descriptor constructors count; shadowed lookalikes do not.
+even after a cached value is stored. Proven `@property`,
+`@functools.cached_property`, `@qraft.cached_property`, accessor aliases and
+static descriptor constructors count; shadowed lookalikes do not.
 Property results never grant stored-field permission. Implicit dispatch checks
 statically resolved `__new__`/`__init__` on construction, `__call__` on callable
 instances, `__getitem__`/`__setitem__`/`__delitem__` on subscriptions, and

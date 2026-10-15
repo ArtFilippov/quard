@@ -11,6 +11,7 @@ from quard.cohesion_analysis.scoring_utils import SPECIAL_METHODS
 from quard.contract_analysis.contract_analysis import ContractAnalysis
 from quard.contract_analysis.contract_utils import collect_nodes, dotted, module_name
 from quard.contract_analysis.contract_worker_utils import analyze, main
+from quard.marker_analysis.marker_index import MarkerIndex
 
 __all__ = ["CONTRACT_BASES", "METHOD", "Contracts", "analyze", "collect_nodes",
            "dotted", "main", "module_name"]
@@ -30,6 +31,7 @@ class Contracts(ContractAnalysis):
         self.nodes: dict[str, ast.ClassDef] = {}
         self.imports: dict[str, dict[str, str | None]] = {}
         self.bindings_by_path: dict[str, dict[str, str | None]] = {}
+        self.markers = MarkerIndex(trees)
         self.declarations: list[tuple[str, ast.ClassDef, str]] = []
         self.modules = {module_name(path) for path in trees}
         self.customer_roots = {module.split(".")[0] for module in self.modules}
@@ -205,10 +207,9 @@ class Contracts(ContractAnalysis):
                         item.name.startswith("__") and not item.name.endswith("__")):
                     continue
                 _ = members.setdefault(item.name, item)
-            elif (isinstance(item, ast.Assign) and isinstance(item.value, ast.Call)
-                  and self.resolved(name, item.value.func, path) in {
-                      "builtins.property", "functools.cached_property"}):
-                for target in item.targets:
+            elif (isinstance(item, (ast.Assign, ast.AnnAssign)) and isinstance(item.value, ast.Call)
+                  and item in self.markers.descriptor_assignments):
+                for target in item.targets if isinstance(item, ast.Assign) else [item.target]:
                     if isinstance(target, ast.Name) and target.id not in SPECIAL_METHODS and not (
                             target.id.startswith("__") and not target.id.endswith("__")):
                         _ = members.setdefault(target.id, item)

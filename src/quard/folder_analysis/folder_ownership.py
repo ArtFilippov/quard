@@ -10,6 +10,7 @@ from typing import override
 from quard.contract_analysis.contracts import Contracts, module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
 from quard.folder_analysis.folder_utils import analyze, main, snake_case
+from quard.marker_utils import PROPERTY_DECORATORS
 
 __all__ = ["FolderOwnership", "analyze", "main", "snake_case"]
 SOURCE_ROOT = "src"
@@ -26,7 +27,6 @@ METHOD_KIND = "method"
 GET_KIND = "get"
 SET_KIND = "set"
 DELETE_KIND = "delete"
-PROPERTY_NAME = "builtins.property"
 TYPE_CHECKING_NAME = "TYPE_CHECKING"
 TYPING_NAME = "typing"
 EXPORTS_NAME = "__all__"
@@ -496,7 +496,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
     @override
     def member_kind(self, name: str, method: ast.FunctionDef | ast.AsyncFunctionDef,
                     path: str) -> str | None:
-        """Identify an ordinary method or a direct built-in property accessor.
+        """Identify an ordinary method or a proven property accessor.
 
         Args:
             name (str): Qualified class name.
@@ -512,7 +512,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
             return METHOD_KIND
         if len(decorators) == 1 and isinstance(method, ast.FunctionDef):
             decorator = decorators[0]
-            if self.resolved(name, decorator, path) == PROPERTY_NAME:
+            if self.markers.symbol(decorator) in PROPERTY_DECORATORS:
                 return GET_KIND
             if (isinstance(decorator, ast.Attribute) and isinstance(decorator.value, ast.Name)
                     and decorator.value.id == method.name):

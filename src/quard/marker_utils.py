@@ -6,6 +6,8 @@ from pathlib import Path
 
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 MARKER = "<encapsulated_only>"
+PROPERTY_DECORATORS = frozenset({"builtins.property", "functools.cached_property",
+                                 "qraft.cached_property"})
 
 
 def module_name(path: str) -> str:

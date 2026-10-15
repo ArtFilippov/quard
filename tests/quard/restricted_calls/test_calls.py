@@ -21,6 +21,24 @@ from legacy_clone_fixture_utils import historical_cli
 
 
 class TestCalls(unittest.TestCase):
+    def test_qraft_alias_reexport_restricts_property_reads(self):
+        self.put("src/pkg/facade.py", "from qraft import cached_property as cache\n")
+        self.put("src/pkg/example.py", '''\
+from pkg.facade import cache
+def encapsulated_only(value): return value
+class Service:
+    @encapsulated_only
+    @cache
+    def value(self) -> int: return 1
+class Client:
+    def read(self, peer: Service) -> int:
+        return peer.value
+''')
+        result, _, _ = self.run_worker()
+        self.assertEqual([(item["rule"], item["symbol"]) for item in result["diagnostics"]],
+                         [("ENCAPSULATED_ONLY_PROPERTY", "pkg.example.Service.value")],
+                         "a marked cached read was not checked as property access")
+
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)

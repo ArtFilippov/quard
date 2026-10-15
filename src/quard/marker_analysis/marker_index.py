@@ -5,8 +5,8 @@ import ast
 from typing import override
 
 from quard.marker_analysis.marker_analysis import MarkerAnalysis
-from quard.marker_utils import (FUNCTIONS, MARKER, identity_definition, import_base,
-                               local_names, module_name)
+from quard.marker_utils import (FUNCTIONS, MARKER, PROPERTY_DECORATORS,
+                                identity_definition, import_base, local_names, module_name)
 
 __all__ = ["FUNCTIONS", "MARKER", "MarkerIndex", "identity_definition", "import_base",
            "local_names", "module_name"]
@@ -64,7 +64,7 @@ class MarkerIndex(MarkerAnalysis):
             if isinstance(item, FUNCTIONS):
                 for dec in item.decorator_list:
                     symbol = self.symbol(dec)
-                    if symbol in {"builtins.property", "functools.cached_property"}:
+                    if symbol in PROPERTY_DECORATORS:
                         result.setdefault(item.name, []).append((item, "getter", symbol))
                     elif (symbol in {"builtins.property.setter", "builtins.property.deleter",
                                       "builtins.property.getter"} and isinstance(dec, ast.Attribute)

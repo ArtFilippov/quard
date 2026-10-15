@@ -9,6 +9,7 @@ from quard.field_ownership.bindings import Binding, assigned_names
 from quard.field_ownership.ownership import Ownership
 from quard.field_type_analysis.type_evidence import UNKNOWN
 from quard.marker_analysis.marker_index import FUNCTIONS, local_names
+from quard.marker_utils import PROPERTY_DECORATORS
 from quard.restricted_targets.restricted_targets import Parents, RestrictedTargets
 
 
@@ -170,7 +171,7 @@ class Restrictions(RestrictedTargets):
         return self.ownership.marker_identity(node) or self.ownership.marker_symbol(node) in {
             "abc.abstractmethod", "typing.override", "typing_extensions.override",
             "builtins.property", "builtins.property.setter", "builtins.property.deleter",
-            "builtins.property.getter", "functools.cached_property"}
+            "builtins.property.getter"} | PROPERTY_DECORATORS
 
     @override
     def report_evidence(self) -> tuple[list[dict[str, object]], list[dict[str, object]],

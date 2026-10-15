@@ -16,6 +16,7 @@ from quard.field_ownership.ownership_utils import (classvar_annotation, dataclas
                                                   pseudo_field, receiver_fields,
                                                   slot_locations, stable_class)
 from quard.marker_analysis.marker_index import MarkerIndex
+from quard.marker_utils import PROPERTY_DECORATORS
 
 __all__ = ["Binding", "Ownership", "PROTOCOL_BUILTINS", "assigned_names", "module_name"]
 
@@ -163,8 +164,6 @@ class Ownership(FieldOwnership):
         classvar_names, classvar_modules = (set(classvars[0]), set(classvars[1]))
         field_names = set(field_names or ())
         pseudo_names = set(pseudo_names or ())
-        descriptor_names: set[str] = set()
-        descriptor_modules: set[str] = set()
         for node in body:
             if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
@@ -173,7 +172,6 @@ class Ownership(FieldOwnership):
                     modules.discard(bound)
                     enum_names.discard(bound)
                     classvar_names.discard(bound)
-                    descriptor_names.discard(bound)
                     field_names.discard(bound)
                     pseudo_names.discard(bound)
                     if node.level == 0 and node.module == "dataclasses" and alias.name == "dataclass":
@@ -187,8 +185,6 @@ class Ownership(FieldOwnership):
                         enum_names.add(bound)
                     if node.level == 0 and node.module in {"typing", "typing_extensions"} and alias.name == "ClassVar":
                         classvar_names.add(bound)
-                    if node.level == 0 and node.module == "functools" and alias.name == "cached_property":
-                        descriptor_names.add(bound)
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     bound = alias.asname or alias.name.split(".")[0]
@@ -196,7 +192,6 @@ class Ownership(FieldOwnership):
                     modules.discard(bound)
                     enum_modules.discard(bound)
                     classvar_modules.discard(bound)
-                    descriptor_modules.discard(bound)
                     field_names.discard(bound)
                     pseudo_names.discard(bound)
                     if alias.name == "dataclasses":
@@ -205,8 +200,6 @@ class Ownership(FieldOwnership):
                         enum_modules.add(bound)
                     if alias.name in {"typing", "typing_extensions"}:
                         classvar_modules.add(bound)
-                    if alias.name == "functools":
-                        descriptor_modules.add(bound)
             if isinstance(node, ast.ClassDef):
                 name = f"{prefix}.{node.name}"
                 self.classes[name] = node
@@ -231,12 +224,12 @@ class Ownership(FieldOwnership):
                     if isinstance(dec, ast.Call):
                         dec = dec.func
                     if isinstance(dec, ast.Name):
-                        return dec.id in {"property", "classmethod", "staticmethod", "override", "abstractmethod"} | descriptor_names
+                        return (dec.id in {"property", "classmethod", "staticmethod", "override", "abstractmethod"}
+                                or self.markers.symbol(dec) in PROPERTY_DECORATORS)
                     return (isinstance(dec, ast.Attribute) and
                             (dec.attr in {"setter", "deleter", "getter"}
                              and isinstance(dec.value, ast.Name)
-                             or dec.attr == "cached_property" and isinstance(dec.value, ast.Name)
-                             and dec.value.id in descriptor_modules))
+                              or self.markers.symbol(dec) in PROPERTY_DECORATORS))
 
                 declarations = {item.name: item for item in node.body
                                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
@@ -347,8 +340,6 @@ class Ownership(FieldOwnership):
                     enum_modules.discard(bound)
                     classvar_names.discard(bound)
                     classvar_modules.discard(bound)
-                    descriptor_names.discard(bound)
-                    descriptor_modules.discard(bound)
                     field_names.discard(bound)
                     pseudo_names.discard(bound)
             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -358,8 +349,6 @@ class Ownership(FieldOwnership):
                 enum_modules.discard(node.name)
                 classvar_names.discard(node.name)
                 classvar_modules.discard(node.name)
-                descriptor_names.discard(node.name)
-                descriptor_modules.discard(node.name)
                 field_names.discard(node.name)
                 pseudo_names.discard(node.name)
 

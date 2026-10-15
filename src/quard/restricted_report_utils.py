@@ -5,6 +5,8 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
+from quard.marker_utils import PROPERTY_DECORATORS
+
 
 def object_dict(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -42,7 +44,7 @@ def parse_encapsulated_only(text: str,
             raise ValueError("Malformed encapsulated-only declaration evidence")
         symbol = f"{declaration['owner']}.{declaration['member']}"
         if "kind" in declaration or "accessor" in declaration:
-            if declaration.get("kind") not in {"builtins.property", "functools.cached_property"} \
+            if declaration.get("kind") not in PROPERTY_DECORATORS \
                     or declaration.get("accessor") not in {"getter", "setter", "deleter", "constructor"}:
                 raise ValueError("Malformed encapsulated-only property evidence")
             properties.add(symbol)

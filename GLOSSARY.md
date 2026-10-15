@@ -32,6 +32,15 @@ _Avoid_: Prepared text
 
 ## Envelope structure
 
+**Read-only property contract**:
+A getter-only `@property` declaration promises a public read and return type, not
+identical decorator spelling in its implementation. A proven `qraft.cached_property`
+implements that read with per-instance caching; it rejects writes and deletion.
+Writable contracts require an ordinary setter/deleter property. Class contracts,
+field ownership and restricted access recognize decorated and constructor-call
+forms; base Envelopes recognize directly forwarded decorated getters.
+_Avoid_: Assuming a cached property supplies a setter
+
 **Base Envelope**:
 An object that directly implements a local or explicitly imported external contract
 by forwarding methods and property accessors to one stored delegate. Its constructor

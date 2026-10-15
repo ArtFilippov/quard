@@ -14,7 +14,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from tempfile import mkdtemp
+from tempfile import mkdtemp, TemporaryDirectory
 from typing import Any, cast
 import unittest
 from unittest.mock import patch
@@ -48,6 +48,76 @@ def adoption_consumer(root: Path) -> None:
     spec.loader.exec_module(module)
     create = cast(Callable[[Path], None], getattr(module, "adoption_consumer"))
     create(root)
+
+
+def verify_qraft_consumer_check(test: unittest.TestCase) -> None:
+    """Run all enabled jobs over a runtime-backed getter contract.
+
+    Args:
+        test (unittest.TestCase): Assertion owner.
+    """
+    with TemporaryDirectory() as temporary:
+        project = Path(temporary)
+        adoption_consumer(project)
+        config = project / "pyproject.toml"
+        config.write_text(config.read_text(encoding="utf-8").replace(
+            'dependencies = []', 'dependencies = ["qraft==0.1.0"]') +
+            '\n[tool.uv.sources]\nquard-clones = { git = "https://example.org/quard.git", rev = "' +
+            '1' * 40 + '", subdirectory = "rust/quard-clones" }\n', encoding="utf-8")
+        folder = project / "src/demo/records"
+        (folder / "read_port.py").write_text('''\
+from typing import Protocol
+class ReadPort(Protocol):
+    @property
+    def value(self) -> int: ...
+    def describe(self) -> str: ...
+''', encoding="utf-8")
+        (folder / "computed.py").write_text('''\
+from typing import override
+from qraft import cached_property as cache
+from demo.records.read_port import ReadPort
+class Computed(ReadPort):
+    def __init__(self) -> None:
+        super().__init__()
+        self.number: int = 42
+    @cache
+    @override
+    def value(self) -> int:
+        return self.number
+    @override
+    def describe(self) -> str:
+        return str(self.number)
+''', encoding="utf-8")
+        (folder / "computed.pyi").write_text('''\
+from typing import override
+from demo.records.read_port import ReadPort
+class Computed(ReadPort):
+    @property
+    @override
+    def value(self) -> int: ...
+    @override
+    def describe(self) -> str: ...
+''', encoding="utf-8")
+        python = project / ".venv/bin/python"
+        subprocess.run(["uv", "venv", "--python", sys.executable,
+                        str(project / ".venv")], check=True, capture_output=True, text=True)
+        _, artifact = wheel()
+        for command in (["uv", "pip", "install", "--python", str(python),
+                         "--group", "dev", "--project", str(QUARD)],
+                        ["uv", "pip", "install", "--python", str(python), str(artifact),
+                         str(QUARD / "runtime/qraft")]):
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        environment = os.environ.copy()
+        environment["QUARD_CLONE_ENGINE"] = "rust"
+        environment["PATH"] = str(python.parent) + ":/usr/local/bin:/usr/bin:/bin"
+        process = subprocess.run([str(python), str(QUARD / "check.py"), "--project",
+                                  str(project), "--json"], cwd=project, env=environment,
+                                 capture_output=True, text=True, check=False, timeout=180)
+        report = json.loads((project / ".quard/reports/latest.json").read_text(encoding="utf-8"))
+        test.assertEqual((process.returncode, report["exit_code"],
+                          report["summary"]["infrastructure_errors"]), (0, 0, 0),
+                         "a valid cached property failed enabled checks: " +
+                         str(report["diagnostics"]))
 
 
 @cache

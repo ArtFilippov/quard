@@ -9,6 +9,7 @@ from quard.marker_analysis.marker_index import (FUNCTIONS, MARKER, identity_defi
                                                import_base, local_names)
 from quard.marker_analysis.marker_analysis import MarkerAnalysis
 from quard.marker_binding_analysis.marker_binding_analysis import MarkerBindingAnalysis
+from quard.marker_utils import PROPERTY_DECORATORS
 
 
 class MarkerBindings(MarkerBindingAnalysis):
@@ -52,6 +53,8 @@ class MarkerBindings(MarkerBindingAnalysis):
             return self.exports[qualified]
         # An explicit external marker import follows the identity convention.
         roots = {module.split(".")[0] for module in self.modules}
+        if qualified == "qraft.cached_property" and "qraft" in roots:
+            return None
         if qualified.split(".")[0] not in roots and qualified.endswith(".encapsulated_only"):
             return MARKER
         return qualified
@@ -85,9 +88,9 @@ class MarkerBindings(MarkerBindingAnalysis):
                 for decorator in node.decorator_list:
                     self.index.record_decorator(decorator, self.value(decorator))
                 descriptor = next((self.value(dec) for dec in node.decorator_list
-                                   if self.value(dec) in {"builtins.property", "functools.cached_property",
-                                                         "builtins.property.setter", "builtins.property.deleter",
-                                                         "builtins.property.getter"}), None)
+                                    if self.value(dec) in PROPERTY_DECORATORS | {
+                                        "builtins.property.setter", "builtins.property.deleter",
+                                        "builtins.property.getter"}), None)
                 previous = self.class_scope
                 class_namespace = self.scopes.pop() if previous and isinstance(node, FUNCTIONS) else None
                 self.scopes.append(dict.fromkeys(local_names(node)) if isinstance(node, FUNCTIONS) else {})
@@ -105,7 +108,7 @@ class MarkerBindings(MarkerBindingAnalysis):
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
                 if isinstance(node.value, ast.Call) and not conditional:
                     kind = self.value(node.value.func)
-                    if kind in {"builtins.property", "functools.cached_property"}:
+                    if kind in PROPERTY_DECORATORS:
                         self.index.record_descriptor(node, kind)
                 value = self.value(node.value) if node.value is not None and not conditional else None
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]

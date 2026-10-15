@@ -33,7 +33,8 @@ from rust_clone_engine_utils import (verify_prepared_scope, verify_corrupt_repor
                                         verify_prepared_similar, verify_similar_boundaries,
                                         verify_similar_failure,
                                         focused_scan, native_wheel, prepared_native,
-                                        report as prepared_report, versions, wheel)
+                                        report as prepared_report, versions, wheel,
+                                        verify_qraft_consumer_check)
 from typed_dict_clone_utils import verify_functional_typed_dict_fields, verify_typed_dict_fields
 from named_tuple_clone_utils import verify_named_tuple_schemas
 from clone_redesign_utils import verify_clone_redesign
@@ -43,6 +44,9 @@ PLACEHOLDERS = ("pass", "...", "raise NotImplementedError",
 
 
 class TestCheckRunner(unittest.TestCase):
+    def test_qraft_property_passes_full_consumer_check(self) -> None:
+        verify_qraft_consumer_check(self)
+
     def test_real_wheel_consolidated_clone_redesign(self) -> None:
         verify_clone_redesign(self, self.root)
 
