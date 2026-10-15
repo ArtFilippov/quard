@@ -12,6 +12,7 @@ OPTIONAL_JOBS = {
     "contract_folders": "contract-folders", "test_placement": "test-placement",
     "outer_classes": "outer-classes", "free_function_placement": "free-function-placement",
     "leading_underscores": "leading-underscores",
+    "cached_property_migration": "cached-property-migration",
     "encapsulated_only": "encapsulated-only",
     "lambda_injection": "lambda-injection",
     "pyright": "pyright", "pydoclint": "pydoclint",

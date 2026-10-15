@@ -213,6 +213,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     for key, name in (("outer_classes", "outer-classes"),
                       ("free_function_placement", "free-function-placement"),
                       ("leading_underscores", "leading-underscores"),
+                      ("cached_property_migration", "cached-property-migration"),
                       ("encapsulated_only", "encapsulated-only")):
         add_worker(key, name, full_scope)
     add_worker("lambda_injection", "lambda-injection", [

@@ -7,6 +7,7 @@ from quard.report_utils import (
     find_json,
     normalize,
     parse_class_contracts,
+    parse_cached_property_migration,
     parse_constructor_purity,
     parse_contract_folders,
     parse_free_function_placement,
@@ -27,6 +28,7 @@ from quard.report_utils import (
 
 __all__ = [
     "ANSI", "clean", "diagnostic", "find_json", "normalize", "parse_class_contracts",
+    "parse_cached_property_migration",
     "parse_constructor_purity", "parse_contract_folders", "parse_free_function_placement",
     "parse_leading_underscores",
     "parse_instance_fields", "parse_lcom4", "parse_method_decorators", "parse_outer_classes",

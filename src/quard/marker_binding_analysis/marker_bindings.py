@@ -53,6 +53,8 @@ class MarkerBindings(MarkerBindingAnalysis):
             return self.exports[qualified]
         # An explicit external marker import follows the identity convention.
         roots = {module.split(".")[0] for module in self.modules}
+        if qualified.startswith("functools.") and "functools" in roots:
+            return None
         if qualified == "qraft.cached_property" and "qraft" in roots:
             return None
         if qualified.split(".")[0] not in roots and qualified.endswith(".encapsulated_only"):
@@ -74,8 +76,52 @@ class MarkerBindings(MarkerBindingAnalysis):
             self.assign(target.value, None)
 
     @override
+    def calls(self, node: ast.stmt) -> None:
+        """Record call origins while respecting deferred and expression-local bindings."""
+        pending: list[tuple[ast.AST, frozenset[str], bool]] = [
+            (item, frozenset(), len(self.scopes) > 1 and not self.class_scope)
+            for item in ast.iter_child_nodes(node)]
+        while pending:
+            item, shadowed, deferred = pending.pop()
+            if isinstance(item, ast.stmt):
+                continue
+            if isinstance(item, ast.Lambda):
+                names = {arg.arg for arg in (*item.args.posonlyargs, *item.args.args,
+                                              *item.args.kwonlyargs)}
+                names.update(arg.arg for arg in (item.args.vararg, item.args.kwarg) if arg)
+                pending.append((item.body, shadowed | names, True))
+                pending.append((item.args, shadowed, deferred))
+                continue
+            if isinstance(item, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                names = shadowed
+                for generator in item.generators:
+                    pending.append((generator.iter, names, deferred))
+                    names = names | {part.id for part in ast.walk(generator.target)
+                                     if isinstance(part, ast.Name)}
+                    pending.extend((condition, names, deferred) for condition in generator.ifs)
+                if isinstance(item, ast.DictComp):
+                    pending.extend(((item.key, names, deferred), (item.value, names, deferred)))
+                else:
+                    pending.append((item.elt, names, deferred))
+                continue
+            if isinstance(item, ast.Call):
+                origin = None
+                if not any(isinstance(part, ast.Name) and part.id in shadowed
+                           for part in ast.walk(item.func)):
+                    origin = self.value(item.func)
+                    if (deferred and isinstance(item.func, ast.Name)
+                            and not any(item.func.id in scope for scope in self.scopes[1:])):
+                        known, binding = self.index.export(self.path, item.func.id)
+                        if known:
+                            origin = binding
+                self.index.record_call(item, origin)
+            pending.extend((child, shadowed, deferred) for child in ast.iter_child_nodes(item))
+
+    @override
     def suite(self, body: list[ast.stmt], conditional: bool = False) -> None:
         for node in body:
+            if self.index.collect_calls():
+                self.calls(node)
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     self.scopes[-1][alias.asname or alias.name.split(".")[0]] = (

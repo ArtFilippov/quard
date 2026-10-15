@@ -225,6 +225,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `outer_classes = true` | `outer-classes` |
 | `free_function_placement = true` | `free-function-placement` |
 | `leading_underscores = true` | `leading-underscores` (first-party names and paths) |
+| `cached_property_migration = true` | `cached-property-migration` |
 | `encapsulated_only = true` | `encapsulated-only` |
 | `constructor_purity = true` | `constructor-purity` |
 | `lambda_injection = true` | `lambda-injection` |
@@ -247,6 +248,17 @@ All values must be booleans; unknown keys fail
 with exit 2. Disabled jobs appear as `skipped` with null exit codes and have no
 manifest or worker execution. Missing `constructor_purity` also defaults to `true`;
 set it to `false` to skip the job.
+`cached_property_migration` is independently default-on, including on existing
+installations without the key. Set it to `false` during migration to skip only
+`cached-property-migration`; Pyright and other jobs keep their configured coverage.
+The job scans discovered production, test and stub files separately for proven
+`functools.cached_property` decorators and descriptor-constructor calls (including
+aliases and local re-exports). It reports `FUNCTOOLS_CACHED_PROPERTY` at the use,
+not at an unused import. Replace the import with `qraft.cached_property`, pin
+`qraft` as an application runtime dependency as above, and keep the decorator
+above `@override` when implementing a property contract. Check descriptor semantics
+before migrating writable properties. The report records this job's independent
+status and positioned findings; worker or malformed-source failures exit 2.
 Disabling duplicate detection skips all three clone jobs, their manifests and their
 native JSON, without changing Pylint's required duplicate-code rule. Pyright and
 pydoclint likewise skip only their own jobs; their native configuration remains

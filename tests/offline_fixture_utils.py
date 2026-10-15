@@ -30,6 +30,7 @@ WORKERS = {
     "_outer_classes_worker.py": "outer-classes",
     "_free_function_placement_worker.py": "free-function-placement",
     "_leading_underscores_worker.py": "leading-underscores",
+    "_cached_property_migration_worker.py": "cached-property-migration",
     "_encapsulated_only_worker.py": "encapsulated-only",
     "_constructor_purity_worker.py": "constructor-purity",
     "_lambda_injection_worker.py": "lambda-injection",

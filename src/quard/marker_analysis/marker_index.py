@@ -15,18 +15,21 @@ __all__ = ["FUNCTIONS", "MARKER", "MarkerIndex", "identity_definition", "import_
 class MarkerIndex(MarkerAnalysis):
     """Keep per-declaration decorators, including separate source/stub evidence."""
 
-    def __init__(self, trees: dict[str, ast.Module]):
+    def __init__(self, trees: dict[str, ast.Module], collect_calls: bool = False):
         super().__init__()
         from quard.marker_binding_analysis.marker_bindings import MarkerBindings
 
         self.modules = {module_name(path) for path in trees}
+        self.collect = collect_calls
         self.exports: dict[str, str | None] = {}
         self.decorators: dict[ast.expr, str | None] = {}
         self.descriptor_assignments: dict[ast.stmt, str] = {}
+        self.calls: dict[ast.Call, str | None] = {}
         for _ in range(len(trees) + 2):
             previous = self.exports.copy()
             self.decorators.clear()
             self.descriptor_assignments.clear()
+            self.calls.clear()
             for path, tree in trees.items():
                 bindings = MarkerBindings(self, path, self.exports, frozenset(self.modules))
                 bindings.suite(tree.body)
@@ -55,6 +58,23 @@ class MarkerIndex(MarkerAnalysis):
     @override
     def descriptor_kind(self, node: ast.stmt) -> str | None:
         return self.descriptor_assignments.get(node)
+
+    @override
+    def record_call(self, node: ast.Call, symbol: str | None) -> None:
+        self.calls[node] = symbol
+
+    @override
+    def call_symbol(self, node: ast.Call) -> str | None:
+        return self.calls.get(node)
+
+    @override
+    def collect_calls(self) -> bool:
+        return self.collect
+
+    @override
+    def export(self, path: str, name: str) -> tuple[bool, str | None]:
+        qualified = f"{module_name(path)}.{name}"
+        return qualified in self.exports, self.exports.get(qualified)
 
     @override
     def property_declarations(self, node: ast.ClassDef) -> dict[str, list[tuple[ast.stmt, str, str]]]:

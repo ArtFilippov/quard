@@ -170,6 +170,17 @@ violations baseline.
 * **Lambda injection (default-on, optional)**: `LAMBDA_INJECTION` checks direct
   and locally aliased lambdas in production assembly files, independently of LCOM4 and
   generated/reviewed architecture selection. See [Lambda injection](#lambda-injection).
+* **Cached-property migration (default-on, optional)**: the independent
+  `cached-property-migration` job scans discovered production, test and `.pyi`
+  files for proven uses of `functools.cached_property`, including direct and
+  module-qualified imports, aliases, local re-exports, decorated methods and
+  descriptor-constructor calls. Source and stub import evidence is resolved
+  separately. Unused imports, shadowed names, unrelated decorators, qraft uses
+  and excluded directories produce no migration finding. Each use receives a
+  positioned `FUNCTOOLS_CACHED_PROPERTY` replacement suggestion (exit 1).
+  Set `[checks] cached_property_migration = false` to skip its worker and manifest
+  without changing Pyright or other checks. Invalid sources, malformed worker
+  output and execution failures are infrastructure errors (exit 2).
 * **Non-instance methods**: Quard's source-positioned `NON_INSTANCE_METHOD` rule rejects
   built-in `@staticmethod` and `@classmethod` declarations and recognizable conversions
   on consumer-owned classes, independently of the native analyzers and LCOM4.
