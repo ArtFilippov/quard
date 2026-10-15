@@ -560,6 +560,11 @@ wheels = [
 ]
 
 [[package]]
+name = "qraft"
+version = "0.1.0"
+source = { directory = "runtime/qraft" }
+
+[[package]]
 name = "quard"
 version = "1.4.2"
 source = { virtual = "." }
@@ -583,6 +588,7 @@ dev = [
     { name = "pyright", extra = ["nodejs"] },
     { name = "pytest-durations" },
     { name = "pytest-testmon" },
+    { name = "qraft" },
     { name = "quard-clones" },
     { name = "tach" },
     { name = "tomlkit" },
@@ -609,6 +615,7 @@ dev = [
     { name = "pyright", extras = ["nodejs"], marker = "python_full_version >= '3.12'", specifier = "==1.1.414" },
     { name = "pytest-durations", marker = "python_full_version >= '3.12'", specifier = "==1.9.0" },
     { name = "pytest-testmon", marker = "python_full_version >= '3.12'", specifier = "==2.2.0" },
+    { name = "qraft", marker = "python_full_version >= '3.12'", directory = "runtime/qraft" },
     { name = "quard-clones", marker = "python_full_version >= '3.12'", directory = "rust/quard-clones" },
     { name = "tach", marker = "python_full_version >= '3.12'", specifier = "==0.35.1" },
     { name = "tomlkit", marker = "python_full_version >= '3.12'", specifier = "==0.13.3" },

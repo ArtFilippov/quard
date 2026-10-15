@@ -8,3 +8,5 @@ __pycache__/
 .tach/
 /tach.toml
 /rust/quard-clones/target/
+/runtime/qraft/build/
+/runtime/qraft/src/*.egg-info/

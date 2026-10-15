@@ -52,6 +52,48 @@ Repeat `--extra` for multiple extras. This selection is recorded in
 `.quard/installation.json` and reused on reinstallation. Keep the same extras on
 ordinary `uv sync`/`uv run` commands to retain those dependencies.
 
+### Optional runtime: qraft
+
+Applications that use `qraft.cached_property` install `qraft` as a separate,
+ordinary runtime dependency. Pin it to the **same fetchable Quard Git revision**
+as the tool gitlink (and `quard-clones`); for example, add to the consumer's
+`pyproject.toml`:
+
+```toml
+[project]
+dependencies = ["qraft==0.1.0"]  # keep the application's other dependencies
+
+[tool.uv.sources]
+qraft = { git = "ssh://git@github.com/ArtFilippov/quard.git", rev = "<quard-gitlink-commit>", subdirectory = "runtime/qraft" }
+```
+
+Merge these entries with existing project dependencies and uv sources. Run
+`uv lock`, commit the resulting `uv.lock`, and use `uv sync --locked` for
+reproducible production installs. `qraft` has no analyzer or third-party runtime
+dependencies; applications that do not import it need not install it. The
+`qraft` distribution includes `py.typed` for Pyright.
+
+```python
+from typing import Protocol, override
+from qraft import cached_property
+
+class Value(Protocol):
+    @property
+    def amount(self) -> int: ...
+
+class Computed(Value):
+    @cached_property
+    @override
+    def amount(self) -> int:
+        return 42
+```
+
+Reads compute the value once per instance and retain it in that instance's
+mutable `__dict__`. Assigning or deleting the attribute raises `AttributeError`,
+even after the first read. Instances without a mutable `__dict__` raise `TypeError`
+on first read. Use the shown decorator order so pinned Pyright checks the
+property-contract override. See [ADR 0009](docs/adr/0009-separate-qraft-runtime.md).
+
 Managed files are restored on failure; logs stay under `.quard/logs/`. The uv cache
 and virtual environment are not transactional: resync the restored lockfile if needed.
 Dry-run writes no consumer files; uv bootstrap may populate its external cache.
