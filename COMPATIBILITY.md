@@ -1,4 +1,4 @@
-# Совместимость Quard 1.4.2
+# Совместимость Quard 1.4.3
 
 ## Миграция с `functools.cached_property` (#165)
 
