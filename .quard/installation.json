@@ -9,7 +9,7 @@
     "tomlkit==0.13.3",
     "packaging==25.0"
   ],
-  "quard_version": "1.4.3",
+  "quard_version": "1.5.0",
   "extras": [],
   "mode": "strict",
   "source_layout": "src"

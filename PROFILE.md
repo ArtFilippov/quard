@@ -1,6 +1,6 @@
 # Native analysis profile
 
-Quard 1.4.3 preserves the original strict profile. Exact tool pins live in
+Quard 1.5.0 preserves the original strict profile. Exact tool pins live in
 `tools.json`; top-level versions are verified on every check. Consumers control
 their native configs except generated contract-only `tach.toml`; there is no hidden
 violations baseline.
