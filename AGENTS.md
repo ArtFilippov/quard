@@ -29,6 +29,10 @@ Drop static methods, public static literals, setters, and getters.
 Declare methods in interfaces first, exposing nothing public outside them.
 Reject null returns and arguments.
 Skip type introspection, casting, and reflection.
+For new signatures, prefer named value types over raw tuples. The tuple check is
+described in `README.md#tuple-signature-policy`: it defaults on for consumers.
+Keep it explicitly off only in this checkout's `.quard/config.toml` until after
+the first stable release; defer broad migration here.
 
 ## Tests
 

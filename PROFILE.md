@@ -170,6 +170,15 @@ violations baseline.
 * **Lambda injection (default-on, optional)**: `LAMBDA_INJECTION` checks direct
   and locally aliased lambdas in production assembly files, independently of LCOM4 and
   generated/reviewed architecture selection. See [Lambda injection](#lambda-injection).
+* **Tuple signatures (default-on, optional)**: `RAW_TUPLE_SIGNATURE` reports proven
+  raw `tuple` and `typing.Tuple` annotations on callable parameters and results,
+  including nested containers, unions, string annotations and proven type aliases.
+  It scans discovered production, test and stub files independently of LCOM4 and
+  architecture selection; source and stub aliases remain separate. `NamedTuple`
+  types are allowed. Consumers enable it by default, including when their config
+  lacks the setting; only the Quard checkout explicitly sets `tuple_signatures = false`
+  until after the first stable release. Unknown aliases and unannotated values are
+  not inferred. Parse and worker failures exit 2; findings exit 1.
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and

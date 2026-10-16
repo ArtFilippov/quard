@@ -197,6 +197,28 @@ class TestTransactionalInstallation(unittest.TestCase):
                 self.installation().install(root, QUARD, progress=False)
             self.assertTrue(_policy.read_checks(root)["constructor_purity"])
 
+    def test_fresh_install_enables_tuple_signatures(self):
+        with TemporaryDirectory(prefix="quard-tuple-default-") as directory:
+            root = self.project(directory)
+            with patch.object(entry, "capture", fake_uv):
+                self.installation().install(root, QUARD, progress=False)
+            self.assertTrue(_policy.read_checks(root)["tuple_signatures"])
+
+    def test_upgrade_enables_missing_tuple_switch(self):
+        root = self.configured_project()
+        setting = root / ".quard/config.toml"
+        setting.write_text(setting.read_text(encoding="utf-8").replace(
+            "tuple_signatures = false\n", ""), encoding="utf-8")
+        with patch.object(entry, "capture", fake_uv):
+            self.installation().install(root, QUARD, progress=False)
+        self.assertTrue(_policy.read_checks(root)["tuple_signatures"])
+
+    def test_upgrade_preserves_explicit_tuple_opt_out(self):
+        root = self.configured_project()
+        with patch.object(entry, "capture", fake_uv):
+            self.installation().install(root, QUARD, progress=False)
+        self.assertFalse(_policy.read_checks(root)["tuple_signatures"])
+
     def test_upgrade_adds_new_enabled_switches_without_overwriting_choices(self):
         root = self.configured_project()
         setting = root / ".quard/config.toml"

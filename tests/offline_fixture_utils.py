@@ -30,6 +30,7 @@ WORKERS = {
     "_outer_classes_worker.py": "outer-classes",
     "_free_function_placement_worker.py": "free-function-placement",
     "_leading_underscores_worker.py": "leading-underscores",
+    "_tuple_signatures_worker.py": "tuple-signatures",
     "_cached_property_migration_worker.py": "cached-property-migration",
     "_encapsulated_only_worker.py": "encapsulated-only",
     "_constructor_purity_worker.py": "constructor-purity",
@@ -51,10 +52,11 @@ def create_repo(root: Path, configured: bool = True, ready: bool = True) -> None
     (root / ".quard").mkdir()
     shutil.copy2(QUARD / "defaults/config.toml", root / ".quard/config.toml")
     setting = root / ".quard/config.toml"
-    # Most offline fixtures exercise other jobs with an explicit constructor opt-out.
+    # Most offline fixtures exercise other jobs with explicit opt-outs.
     setting.write_text(setting.read_text(encoding="utf-8").replace(
         "dependency_types = true", "dependency_types = false").replace(
-        "constructor_purity = true", "constructor_purity = false"), encoding="utf-8")
+        "constructor_purity = true", "constructor_purity = false").replace(
+        "tuple_signatures = true", "tuple_signatures = false"), encoding="utf-8")
     (root / "src/demo/domain").mkdir(parents=True)
     (root / "src/demo/__init__.py").write_text(
         '"""Autonomous fixture.\n\nUsed by isolated checks.\nNo application imports.\n"""\n',

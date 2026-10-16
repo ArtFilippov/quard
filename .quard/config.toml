@@ -2,6 +2,7 @@
 # The required Pylint profile always runs; checks below select optional independent jobs.
 [checks]
 constructor_purity = false
+tuple_signatures = false
 pyright = true
 pydoclint = true
 duplicate_detection = true

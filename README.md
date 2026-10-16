@@ -234,6 +234,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `duplicate_detection = true` | `jscpd`, `jscpd-renamed`, `jscpd-similar` |
 | `tach = true` | `tach`, `tach-external` (two separate native results) |
 | `dependency_types` | `dependency-types` (generated architecture only) |
+| `tuple_signatures = true` | `tuple-signatures` |
 
 Pylint's production and test profiles remain required. `dependency_types` defaults
 to `true` on generated projects and `false` on reviewed projects, including upgrades.
@@ -274,6 +275,26 @@ overrides and scope. Check/apply before migration fail with exit 2 and instruct
 you to reinstall. Installation rollback restores the original files on failure.
 Use `apply.py` after changing readability or scope; check reports unapplied
 native limits or scope as configuration errors. Unknown keys and check names fail.
+
+### Tuple signature policy
+
+Tuple-shaped parameter and return annotations obscure the meaning of their
+components and can hide several inputs behind one Pylint argument. The independent
+`tuple-signatures` job scans methods and free functions in production, tests and
+companion `.pyi` files by default (`[checks] tuple_signatures = true`). It reports
+`RAW_TUPLE_SIGNATURE` for `tuple` or `typing.Tuple` at any depth, including inside
+`list`, `dict`, unions and proven type aliases. A type alias alone does not make
+tuple positions meaningful; use a type with named fields instead. `NamedTuple`
+types are allowed. Collections without nested tuples are allowed. Only annotated
+parameters and results are checked; tuple expressions and inferred value types are
+not. Source and stub aliases are resolved separately, only when proven. Findings
+exit 1; parse and worker errors exit 2, with raw output archived in the report.
+
+The job defaults to **on** for new and existing consumer installations, including
+configs without this setting. Consumers can explicitly set it to `false` to skip
+the job without a manifest or diagnostics. Only Quard's own `.quard/config.toml`
+sets it to `false` during development: the checkout's existing tuple signatures
+remain technical debt until after the first stable release.
 
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:

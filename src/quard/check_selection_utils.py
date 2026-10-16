@@ -22,7 +22,8 @@ DUPLICATE_JOBS = ("jscpd", "jscpd-renamed", "jscpd-similar")
 TACH_JOBS = ("tach", "tach-external")
 DEPENDENCY_TYPES = "dependency_types"
 CHECK_DEFAULTS = {**dict.fromkeys(OPTIONAL_JOBS, True), "duplicate_detection": True,
-                  "tach": True, DEPENDENCY_TYPES: False, CONSTRUCTOR_PURITY: True}
+                  "tach": True, DEPENDENCY_TYPES: False, CONSTRUCTOR_PURITY: True,
+                  "tuple_signatures": True}
 
 
 def architecture_defaults(root: Path) -> dict[str, bool]:

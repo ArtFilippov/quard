@@ -132,6 +132,8 @@ class NativeCheckRunner(CheckRunner):
                     results.append(inactive_job(name, "skipped"))
             if not checks["dependency_types"]:
                 results.append(inactive_job("dependency-types", "skipped"))
+            if not checks["tuple_signatures"]:
+                results.append(inactive_job("tuple-signatures", "skipped"))
             try:
                 if not checks["lcom4"] and lcom_files is not None:
                     raise QuardError("LCOM4_DISABLED",

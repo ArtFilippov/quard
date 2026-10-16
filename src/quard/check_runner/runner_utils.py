@@ -216,6 +216,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
                       ("cached_property_migration", "cached-property-migration"),
                       ("encapsulated_only", "encapsulated-only")):
         add_worker(key, name, full_scope)
+    add_worker("tuple_signatures", "tuple-signatures", full_scope)
     add_worker("lambda_injection", "lambda-injection", [
         path for path in files["production"] if path.endswith(".py")])
     if constructor_purity:
