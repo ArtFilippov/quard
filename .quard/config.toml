@@ -3,6 +3,7 @@
 [checks]
 constructor_purity = false
 tuple_signatures = false
+stairfmt = false
 pyright = true
 pydoclint = true
 duplicate_detection = true

@@ -19,6 +19,7 @@ from quard.report_utils import (
     parse_pydoclint,
     parse_pylint,
     parse_pyright,
+    parse_stairfmt,
     parse_tach,
     parse_test_placement,
     parse_tuple_signatures,
@@ -33,7 +34,8 @@ __all__ = [
     "parse_constructor_purity", "parse_contract_folders", "parse_free_function_placement",
     "parse_leading_underscores",
     "parse_instance_fields", "parse_lcom4", "parse_method_decorators", "parse_outer_classes",
-    "parse_pydoclint", "parse_pylint", "parse_pyright", "parse_tach", "parse_test_placement",
+    "parse_pydoclint", "parse_pylint", "parse_pyright", "parse_stairfmt", "parse_tach",
+    "parse_test_placement",
     "parse_tuple_signatures",
     "relative_path", "sorted_diagnostics", "tach_rule",
 ]

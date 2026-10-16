@@ -20,6 +20,7 @@ duplicate_detection = true
 tach = true
 dependency_types = true
 tuple_signatures = true
+stairfmt = true
 
 # Shared minimum for exact, renamed and gap-similar Python clone jobs.
 [duplication]

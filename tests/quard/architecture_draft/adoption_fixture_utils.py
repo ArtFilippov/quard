@@ -62,10 +62,11 @@ def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
         "class EntryShape(Protocol):\n" +
         "    @property\n    def identity(self) -> IdentityShape: ...\n")
     (group / "identity.py").write_text(
-        "from typing import NamedTuple\n\nIdentity = NamedTuple('Identity', [('code', str)])\n")
+        "from typing import NamedTuple\n\nIdentity = NamedTuple(\n"
+        "    'Identity', [('code', str)]\n)\n")
     entry = ("from typing import NamedTuple\n"
              + "from demo.records.identity_shape import IdentityShape\n\n"
-             + "Entry = NamedTuple('Entry', [('identity', IdentityShape)])\n")
+             + "Entry = NamedTuple(\n    'Entry', [('identity', IdentityShape)]\n)\n")
     (group / "entry.py").write_text(entry)
     (group / "entry.pyi").write_text(entry)
     (group / "external_items.py").write_text(
@@ -92,7 +93,8 @@ def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
     (root / "src/demo/main/wire.py").write_text(
         "from demo.records.adapter import Adapter\n" +
         "from demo.records.sender import Sender\n\n" +
-        "def connect() -> str:\n    return Adapter(Sender()).first(Sender().second('ok'))\n")
+        "def connect() -> str:\n    return Adapter(\n        Sender()\n"
+        "    ).first(\n        Sender().second('ok')\n    )\n")
     (root / "src/gateway/client/value_utils.py").write_text(
         "from demo import PublicPort\n" +
         "import demo.records.entry_shape as shape\n\n" +
@@ -109,7 +111,8 @@ def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
         "import unittest\nfrom demo.records.sender import Sender\n\n" +
         "class TestSender(unittest.TestCase):\n" +
         "    def test_first(self) -> None:\n" +
-        "        self.assertEqual(Sender().first('ok'), 'ready:ok')\n")
+        "        self.assertEqual(\n            Sender().first('ok'),\n"
+        "            'ready:ok'\n        )\n")
     logs = root / ".quard/logs/install-probes"
     logs.mkdir(parents=True)
     plugins, catalog = (discover_plugins(root, logs) if probe_plugins else

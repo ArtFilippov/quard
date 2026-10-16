@@ -31,6 +31,7 @@ WORKERS = {
     "_free_function_placement_worker.py": "free-function-placement",
     "_leading_underscores_worker.py": "leading-underscores",
     "_tuple_signatures_worker.py": "tuple-signatures",
+    "_stairfmt_worker.py": "stairfmt",
     "_cached_property_migration_worker.py": "cached-property-migration",
     "_encapsulated_only_worker.py": "encapsulated-only",
     "_constructor_purity_worker.py": "constructor-purity",

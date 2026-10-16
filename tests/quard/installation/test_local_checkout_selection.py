@@ -44,7 +44,8 @@ class TestLocalCheckoutSelection(unittest.TestCase):
             setting = consumer / ".quard/config.toml"
             setting.write_text(setting.read_text(encoding="utf-8").replace(
                 "cached_property_migration = true\n", "").replace(
-                "tuple_signatures = false\n", ""), encoding="utf-8")
+                "tuple_signatures = false\n", "").replace(
+                "stairfmt = true\n", ""), encoding="utf-8")
             command(["git", "init", "-b", "main"], consumer)
             command(["git", "submodule", "add", origin.as_uri(), "tools/analyzer"], consumer)
             tool = consumer / "tools/analyzer"

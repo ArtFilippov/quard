@@ -235,6 +235,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `tach = true` | `tach`, `tach-external` (two separate native results) |
 | `dependency_types` | `dependency-types` (generated architecture only) |
 | `tuple_signatures = true` | `tuple-signatures` |
+| `stairfmt = true` | `stairfmt` (layout of composed calls) |
 
 Pylint's production and test profiles remain required. `dependency_types` defaults
 to `true` on generated projects and `false` on reviewed projects, including upgrades.
@@ -295,6 +296,29 @@ configs without this setting. Consumers can explicitly set it to `false` to skip
 the job without a manifest or diagnostics. Only Quard's own `.quard/config.toml`
 sets it to `false` during development: the checkout's existing tuple signatures
 remain technical debt until after the first stable release.
+
+### Stairfmt
+
+The independent `stairfmt` job checks composed Python calls in discovered production
+and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST005`
+violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
+stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. The job is
+enabled by default on new and existing consumer installations, including configs
+without the setting. Set `[checks] stairfmt = false` to skip its manifest, execution
+and diagnostics. The Quard checkout alone sets it to `false` while its existing
+source layout is migrated.
+
+From the consumer root, run `python quard/stairfmt.py --fix --project .` to format
+the same discovered, non-excluded `.py` files. Explicit file or directory arguments
+select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
+the formatted source and preserves safely fixed files even if others need manual work.
+Comments within calls, complex nested expressions and tab-indented calls can prevent
+automatic formatting; the result lists remaining positions, reasons and suggested
+manual corrections. Each fix run prints a summary and saves its own JSON report under
+`.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest
+Quard check report intact. A clean fix exits 0, remaining violations exit 1, and
+read/parse or configuration failures exit 2. See [PROFILE.md](PROFILE.md#tools-and-scope)
+for rule scope.
 
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:
