@@ -17,7 +17,7 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
     Returns:
         unittest.TestSuite: The suite with all mirrored tests included.
     """
-    del pattern
+    del loader, pattern
     root = Path(__file__).resolve().parent / "quard"
     sys.path.insert(0, str(root.parents[1] / "src"))
     for group in ("contract_analysis", "folder_analysis", "test_placement_analysis",
@@ -30,6 +30,6 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
                     "free_function_placement", "leading_underscores",
                     "cached_property_migration"):
         directory = root / group
-        suite.addTests(loader.discover(str(directory), pattern="test*.py",
-                                       top_level_dir=str(directory)))
+        suite.addTests(unittest.TestLoader().discover(str(directory), pattern="test*.py",
+                                                      top_level_dir=str(directory)))
     return suite

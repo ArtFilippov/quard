@@ -72,7 +72,7 @@ class TestFreeFunctionPlacement(unittest.TestCase):
             self.assertIs(getattr(offline_fixtures, name),
                           getattr(offline_fixture_utils, name))
         loader = unittest.TestLoader()
-        with patch.object(loader, "discover", return_value=unittest.TestSuite()) as discover:
+        with patch.object(unittest.TestLoader, "discover", return_value=unittest.TestSuite()) as discover:
             suite = discovery_utils.load_tests(loader, unittest.TestSuite(), None)
         self.assertEqual(suite.countTestCases(), 0)
         groups = {Path(call.args[0]).name for call in discover.call_args_list}
