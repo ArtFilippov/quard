@@ -115,7 +115,7 @@
   "reportCallInDefaultInitializer": "error",
   "reportDuplicateImport": "error",
   "reportImplicitOverride": "error",
-  "reportImplicitStringConcatenation": "error",
+  "reportImplicitStringConcatenation": "none",
   "reportImportCycles": "none",
   "reportMissingModuleSource": "error",
   "reportMissingSuperCall": "error",

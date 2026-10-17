@@ -302,7 +302,8 @@ remain technical debt until after the first stable release.
 The independent `stairfmt` job checks composed Python calls in discovered production
 and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST010`
 violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
-stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. The job is
+stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. `ST011`
+checks ordinary overlong string literals, including files with no calls. The job is
 enabled by default on new and existing consumer installations, including configs
 without the setting. Set `[checks] stairfmt = false` to skip its manifest, execution
 and diagnostics. The Quard checkout alone sets it to `false` while its existing
@@ -328,6 +329,16 @@ summary and saves its own JSON report under
 Quard check report intact. A clean fix exits 0, remaining violations exit 1, and
 read/parse or configuration failures exit 2. See [PROFILE.md](PROFILE.md#tools-and-scope)
 for rule scope.
+
+Set `[stairfmt] string_limit = 160` to change the independent default limit for
+visible characters inside an ordinary quoted literal (quotes and indentation do not
+count). Fix splits eligible literals at words or within long words into adjacent
+quoted pieces inside parentheses, preserving their value and AST. This includes
+fields of multi-field dictionaries, even in files without calls. Call arguments,
+docstrings, protected inline expressions, and raw, bytes, triple-quoted and f-string
+literals are excluded. Generated Pyright disables `reportImplicitStringConcatenation`;
+Pylint retains `implicit-str-concat`, which still flags same-line concatenation but
+does not flag Stairfmt's multiline pieces.
 
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:

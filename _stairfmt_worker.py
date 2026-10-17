@@ -30,14 +30,14 @@ def main() -> int:
         paths = json.loads(args.manifest.read_text(encoding="utf-8"))
         if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
             raise ValueError("Stairfmt manifest must list Python paths")
-        limit = validate_stairfmt(read_settings(Path.cwd()).get("stairfmt", {}))
+        limits = validate_stairfmt(read_settings(Path.cwd()).get("stairfmt", {}))
         for path in paths:
             try:
                 source = Path(path).read_text(encoding="utf-8")
                 tree = ast.parse(source, filename=path)
                 findings.extend({"path": path, "line": issue.line, "column": issue.col,
                                  "rule": issue.code, "message": issue.message + suggestion}
-                                 for issue in issues_for(tree, source, limit))
+                                 for issue in issues_for(tree, source, **limits))
             except (OSError, UnicodeError, SyntaxError) as exc:
                 rule = "STAIRFMT_PARSE_ERROR" if isinstance(exc, SyntaxError) else "STAIRFMT_EXECUTION_ERROR"
                 error = error or rule

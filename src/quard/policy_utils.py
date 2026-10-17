@@ -67,7 +67,7 @@ TEST_ARCH_DISABLED = [
     "W9010", "W9011", "W9012", "W9013", "W9015", "W9102", "W9202", "W9301", "W9601",
 ]
 PYRIGHT_EXTRA = [
-    "reportCallInDefaultInitializer", "reportImplicitOverride", "reportImplicitStringConcatenation",
+    "reportCallInDefaultInitializer", "reportImplicitOverride",
     "reportMissingSuperCall", "reportPropertyTypeMismatch", "reportUninitializedInstanceVariable",
     "reportUnnecessaryTypeIgnoreComment", "reportUnreachable", "reportUnusedCallResult",
     "reportMissingModuleSource",
@@ -110,16 +110,18 @@ def read_settings(root: Path) -> dict[str, Any]:
     return data
 
 
-def validate_stairfmt(data: object) -> int:
+def validate_stairfmt(data: object) -> dict[str, int]:
     if not isinstance(data, dict):
-        raise QuardError("INVALID_STAIRFMT", "[stairfmt] expects inline_limit only.")
+        raise QuardError("INVALID_STAIRFMT", "[stairfmt] expects inline_limit and string_limit.")
     data = cast(dict[str, Any], data)
-    if set(data) - {"inline_limit"}:
-        raise QuardError("INVALID_STAIRFMT", "[stairfmt] expects inline_limit only.")
-    limit = data.get("inline_limit", 240)
-    if type(limit) is not int or limit < 1:
-        raise QuardError("INVALID_STAIRFMT", "[stairfmt] inline_limit must be a positive integer.")
-    return limit
+    if set(data) - {"inline_limit", "string_limit"}:
+        raise QuardError("INVALID_STAIRFMT", "[stairfmt] expects inline_limit and string_limit.")
+    limits = {"inline_limit": data.get("inline_limit", 240),
+              "string_limit": data.get("string_limit", 160)}
+    for name, limit in limits.items():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise QuardError("INVALID_STAIRFMT", f"[stairfmt] {name} must be a positive integer.")
+    return limits
 
 
 def validate_limits(data: object) -> dict[str, dict[str, int]]:
@@ -258,7 +260,7 @@ def base_pylint(plugins: list[str], scope: dict[str, list[str]]) -> dict[str, An
 
 
 def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]],
-                   contract_folders: bool = False) -> dict[str, Any]:
+                    contract_folders: bool = False, managed: bool = False) -> dict[str, Any]:
     config: dict[str, Any] = {
         "include": ["src"] + (["tests"] if any(path.startswith("tests/") for path in files["tests"]) else []),
         "exclude": exclude_globs(scope), "ignore": exclude_globs(scope),
@@ -270,6 +272,7 @@ def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]],
         "reportImportCycles": "none",
     }
     config.update({name: "error" for name in PYRIGHT_EXTRA})
+    config["reportImplicitStringConcatenation"] = "none" if managed else "error"
     # Explicitly enable replacements for disabled Pylint rules, including tests.
     for name in ("reportDuplicateImport", "reportUndefinedVariable", "reportUnboundVariable", "reportPossiblyUnboundVariable"):
         config[name] = "error"
@@ -353,7 +356,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         # Initialize missing sections only. Reinstallation preserves native policy,
         # reviewed layers, stubPath and other project-specific settings.
         tool.setdefault("pylint", base_pylint(plugins, scope))
-        tool.setdefault("pyright", pyright_config(scope, files, read_checks(root)["contract_folders"]))
+        tool.setdefault("pyright", pyright_config(scope, files, read_checks(root)["contract_folders"], managed))
         tool.setdefault("pydoclint", pydoclint_config(scope))
         if not managed:
             tool.setdefault("clean-arch", clean_config())
@@ -389,6 +392,8 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]
     if "pyright" in tool:
+        if managed:
+            tool["pyright"]["reportImplicitStringConcatenation"] = "none"
         tool["pyright"]["exclude"] = exclude_globs(scope)
         tool["pyright"]["ignore"] = exclude_globs(scope)
         discovered = pyright_config(scope, files, read_checks(root)["contract_folders"])

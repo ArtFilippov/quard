@@ -198,6 +198,14 @@ violations baseline.
   `ST010` checks tabs in indentation on all selected `.py` lines, even without
   calls. Fix uses `--indent` (default four spaces) for block indentation and
   preserves tabs in string and comment text.
+   `ST011` checks ordinary quoted literal tokens longer than 160 visible source
+   characters by default (`[stairfmt] string_limit`), excluding quotes and
+   indentation, even without calls. Fix wraps eligible strings in parentheses
+   with adjacent multiline pieces, splitting at word boundaries where possible
+   and preserving value and AST. It excludes call arguments, docstrings, protected
+   inline expressions, raw, bytes, triple-quoted and f-string literals. Generated
+   Pyright sets `reportImplicitStringConcatenation = none`; Pylint keeps
+   `implicit-str-concat` enabled (same-line concatenation still fails).
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and

@@ -224,11 +224,79 @@ def _container_issues(node: ast.AST) -> list[Issue]:
     return []
 
 
-def issues_for(tree: ast.AST, source: str = "", limit: int = 240) -> list[Issue]:
+def _strings(tree: ast.AST, source: str, limit: int
+             ) -> list[tuple[Issue, tokenize.TokenInfo, ast.Constant]]:
+    """Select ordinary string tokens outside protected and call expressions."""
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    lines = source.splitlines(keepends=True)
+    selected: list[tuple[Issue, tokenize.TokenInfo, ast.Constant]] = []
+    constants = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type != tokenize.STRING or "\n" in token.string:
+            continue
+        match = re.match(r"(?i)([rubf]*)(['\"])(.*)\2$", token.string, re.DOTALL)
+        if match is None or any(letter in match.group(1).lower() for letter in "rbf"):
+            continue
+        if token.string[len(match.group(1)):].startswith(match.group(2) * 3):
+            continue
+        if len(match.group(3)) <= limit:
+            continue
+        start = _index(lines, token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode("utf-8")))
+        end = start + len(token.string)
+        for node in constants:
+            if (node.lineno is None or node.col_offset is None
+                    or node.end_lineno is None or node.end_col_offset is None):
+                raise ValueError("строковый литерал без позиции в AST")
+            left = _index(lines, node.lineno, node.col_offset)
+            right = _index(lines, node.end_lineno, node.end_col_offset)
+            if not left <= start < end <= right:
+                continue
+            ancestry = _ancestors(node, parents)
+            if any(isinstance(part, (ast.Call, ast.JoinedStr)) or _protected(part)
+                   for part in ancestry):
+                break
+            if (isinstance(parents.get(node), ast.Expr)
+                    and any(isinstance(parent, (ast.Module, ast.ClassDef,
+                                                ast.FunctionDef, ast.AsyncFunctionDef))
+                            and parent.body and parent.body[0] is parents[node]
+                            for parent in ancestry)):
+                break
+            selected.append((Issue(token.start[0], token.start[1] + 1, "ST011",
+                                   f"строковый литерал длиной {len(match.group(3))} превышает предел {limit}"),
+                             token, node))
+            break
+    return selected
+
+
+def _pieces(value: str, limit: int) -> list[str]:
+    pieces: list[str] = []
+    while value:
+        length = 0
+        for index in range(1, len(value) + 1):
+            if len(repr(value[:index])) - 2 > limit:
+                break
+            length = index
+        if not length:
+            return []
+        if length < len(value):
+            boundary = max((index + 1 for index, char in enumerate(value[:length])
+                            if char.isspace()), default=0)
+            if boundary:
+                length = boundary
+        pieces.append(repr(value[:length]))
+        value = value[length:]
+    return pieces
+
+
+def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
+               string_limit: int = 160) -> list[Issue]:
     issues: list[Issue] = []
     lines = source.splitlines(keepends=True)
     if source and isinstance(tree, ast.Module):
         issues.extend(_indentation(source, 4)[0])
+        issues.extend(issue for issue, _, _ in _strings(tree, source, string_limit))
     for root in _roots(tree):
         issues.extend(_issue_list(root))
         if source:
@@ -244,7 +312,7 @@ def issues_for(tree: ast.AST, source: str = "", limit: int = 240) -> list[Issue]
                 if isinstance(node, ast.JoinedStr):
                     return
                 if _protected(node):
-                    issues.extend(_inline_issues(node, source, limit))
+                    issues.extend(_inline_issues(node, source, inline_limit))
                     return
                 issues.extend(_container_issues(node))
                 for child in ast.iter_child_nodes(node):
@@ -470,7 +538,8 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
     return False
 
 
-def format_source(source: str, indent_size: int = 4, inline_limit: int = 240) -> tuple[str, list[str]]:
+def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
+                  string_limit: int = 160) -> tuple[str, list[str]]:
     tree = ast.parse(source)
     _, normalized = _indentation(source, indent_size)
     if normalized != source:
@@ -478,6 +547,31 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240) ->
             raise ValueError("нормализация отступов меняет структуру AST")
         source = normalized
         tree = ast.parse(source)
+    lines = source.splitlines(keepends=True)
+    selected = {node: token for _, token, node in _strings(tree, source, string_limit)}
+    for node, token in sorted(selected.items(), key=lambda item: item[1].start, reverse=True):
+        if not isinstance(node.value, str) or node.lineno is None or node.col_offset is None or (
+                node.end_lineno is None or node.end_col_offset is None):
+            raise ValueError("строковый литерал без значения или позиции в AST")
+        pieces = _pieces(node.value, string_limit)
+        if len(pieces) < 2:
+            continue
+        start = _index(lines, node.lineno, node.col_offset)
+        end = _index(lines, node.end_lineno, node.end_col_offset)
+        if _has_comments(source, start, end, lines):
+            continue
+        indent = _leading_indent(lines[token.start[0] - 1])
+        if node.kind == "u":
+            pieces[0] = "u" + pieces[0]
+        replacement = "(\n" + "".join(indent + " " * indent_size + piece + "\n"
+                                      for piece in pieces) + indent + ")"
+        candidate = source[:start] + replacement + source[end:]
+        try:
+            if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
+                source = candidate
+        except SyntaxError:
+            pass
+    tree = ast.parse(source)
     renderer = Renderer(source, indent_size, inline_limit)
     lines = source.splitlines(keepends=True)
     edits: list[tuple[int, int, str]] = []
@@ -556,6 +650,8 @@ def _paths(root: Path, inputs: list[str]) -> list[Path]:
 
 
 def _advice(reason: str) -> str:
+    if "строковый литерал" in reason:
+        return "Запустите --fix для переноса строкового литерала по частям."
     if "упростите выражение" in reason:
         return "Упростите выражение: сократите его длину или разделите разветвления вызовов."
     if "комментарий внутри вызова" in reason:
@@ -567,7 +663,8 @@ def _advice(reason: str) -> str:
     return "Расставьте вызовы вручную и повторите --fix."
 
 
-def _report(root: Path, paths: list[Path], fix: bool, indent: int, limit: int) -> dict[str, object]:
+def _report(root: Path, paths: list[Path], fix: bool, indent: int,
+            limits: dict[str, int]) -> dict[str, object]:
     changed: list[str] = []
     remaining: list[dict[str, object]] = []
     warnings: list[dict[str, object]] = []
@@ -578,7 +675,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int, limit: int) -
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=name)
             if fix:
-                formatted, skipped = format_source(source, indent, limit)
+                formatted, skipped = format_source(source, indent, **limits)
                 for warning in skipped:
                     position, separator, reason = warning.partition(": ")
                     warnings.append({"path": name, "line": int(position) if separator and
@@ -590,7 +687,8 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int, limit: int) -
                 tree = ast.parse(formatted, filename=name)
             remaining.extend({"path": name, "line": issue.line, "column": issue.col,
                               "rule": issue.code, "message": issue.message,
-                               "suggestion": _advice(issue.message)} for issue in issues_for(tree, formatted if fix else source, limit))
+                               "suggestion": _advice(issue.message)} for issue in issues_for(
+                                   tree, formatted if fix else source, **limits))
         except (OSError, UnicodeError, SyntaxError, ValueError, TypeError, IndexError) as exc:
             errors.append({"path": name, "message": str(exc),
                            "suggestion": "Исправьте файл или доступ к нему и повторите --fix."})
@@ -632,8 +730,8 @@ def main(argv: list[str] | None = None) -> int:
         with repo_lock(root):
             try:
                 paths = _paths(root, args.paths)
-                limit = validate_stairfmt(read_settings(root).get("stairfmt", {}))
-                report = _report(root, paths, args.fix, args.indent, limit)
+                limits = validate_stairfmt(read_settings(root).get("stairfmt", {}))
+                report = _report(root, paths, args.fix, args.indent, limits)
             except (QuardError, OSError, UnicodeError, ValueError) as exc:
                 report = {"schema_version": "quard-stairfmt-fix/v1", "status": "error",
                           "exit_code": 2, "changed_files": [], "remaining": [], "warnings": [],
