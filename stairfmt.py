@@ -83,7 +83,7 @@ def _ancestors(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> list[ast.AST]:
 
 def _protected(node: ast.AST) -> bool:
     return isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp,
-                             ast.GeneratorExp, ast.BinOp, ast.BoolOp, ast.IfExp,
+                             ast.GeneratorExp, ast.BoolOp, ast.IfExp,
                              ast.Compare, ast.NamedExpr)) or isinstance(node, ast.Dict) and len(node.keys) == 1
 
 
@@ -99,7 +99,10 @@ def _has_nested_call(node: ast.AST) -> bool:
 
 
 def _multiline(node: ast.AST) -> bool:
-    return (_has_nested_call(node)
+    return (isinstance(node, ast.BinOp) and (_multiline(node.left) or _multiline(node.right))
+            or isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
+            and _structured(node)
+            or _has_nested_call(node)
             or isinstance(node, ast.Tuple) and len(node.elts) > 1
             or isinstance(node, ast.Dict) and len(node.keys) > 1
             or isinstance(node, (ast.Tuple, ast.List, ast.Set, ast.Dict))
@@ -165,14 +168,26 @@ def _issue_list(root: ast.Call) -> list[Issue]:
                     "закрывающая скобка многострочного вызова должна быть на отдельной строке"
                 ))
 
-    for line, candidates in grouped.items():
-        for call in sorted(candidates, key=lambda n: n.func.end_col_offset)[1:]:
+    parents = {child: parent for parent in ast.walk(root)
+               for child in ast.iter_child_nodes(parent)}
+    for candidates in grouped.values():
+        ordered = sorted(candidates, key=lambda n: n.func.end_col_offset)
+        previous = ordered[0]
+        for call in ordered[1:]:
             if _first_dot(call):
+                previous = call
+                continue
+            if previous is not None and any(
+                isinstance(ancestor, ast.BinOp) and previous in ast.walk(ancestor.left)
+                and call in ast.walk(ancestor.right)
+                for ancestor in _ancestors(call, parents)):
+                previous = call
                 continue
             issues.append(Issue(
                 call.func.end_lineno, call.func.end_col_offset + 1, "ST001",
                 "следующий вызов функции/конструктора должен начинаться с новой строки"
             ))
+            previous = call
     return issues
 
 
@@ -181,8 +196,9 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
     if segment is None:
         return []
     issues: list[Issue] = []
-    length = len(re.sub(r"\s*\n\s*", " ", segment))
-    if length > limit or "\n" in segment:
+    lengths = [len(line.strip()) for line in segment.splitlines()]
+    length = max(lengths, default=0)
+    if length > limit or "\n" in segment and not isinstance(node, ast.BinOp):
         issues.append(Issue(node.lineno, node.col_offset + 1, "ST006",
                             f"упростите выражение: длина {length} превышает предел {limit} "
                             if length > limit else "упростите выражение: оно должно быть в одной строке"))
@@ -224,6 +240,11 @@ def _container_issues(node: ast.AST) -> list[Issue]:
     return []
 
 
+def _structured(node: ast.AST) -> bool:
+    return any(isinstance(part, ast.Dict) and len(part.keys) > 1
+               for part in ast.walk(node))
+
+
 def _strings(tree: ast.AST, source: str, limit: int
              ) -> list[tuple[Issue, tokenize.TokenInfo, ast.Constant]]:
     """Select ordinary string tokens outside protected and call expressions."""
@@ -254,7 +275,7 @@ def _strings(tree: ast.AST, source: str, limit: int
             if not left <= start < end <= right:
                 continue
             ancestry = _ancestors(node, parents)
-            if any(isinstance(part, (ast.Call, ast.JoinedStr)) or _protected(part)
+            if any(isinstance(part, (ast.Call, ast.JoinedStr, ast.BinOp)) or _protected(part)
                    for part in ancestry):
                 break
             if (isinstance(parents.get(node), ast.Expr)
@@ -312,12 +333,38 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                 if isinstance(node, ast.JoinedStr):
                     return
                 if _protected(node):
-                    issues.extend(_inline_issues(node, source, inline_limit))
+                    if not _structured(node):
+                        layout = _layout_issues(node, source, inline_limit)
+                        issues.extend(issue for issue in _inline_issues(node, source, inline_limit)
+                                      if not layout or issue.code != "ST006"
+                                      or "длина" in issue.message)
+                        issues.extend(layout)
+                    else:
+                        issues.extend(issue for issue in _inline_issues(node, source, inline_limit)
+                                      if issue.code == "ST007" or issue.code == "ST006"
+                                      and "длина" in issue.message)
+                        for part in ast.walk(node):
+                            if isinstance(part, ast.Dict):
+                                issues.extend(_container_issues(part))
+                        issues.extend(_layout_issues(node, source, inline_limit))
                     return
+                if isinstance(node, ast.BinOp):
+                    issues.extend(_inline_issues(node, source, inline_limit))
+                    issues.extend(_layout_issues(node, source, inline_limit))
                 issues.extend(_container_issues(node))
                 for child in ast.iter_child_nodes(node):
                     visit(child)
             visit(root)
+    if isinstance(tree, ast.Module):
+        parents = {child: parent for parent in ast.walk(tree)
+                   for child in ast.iter_child_nodes(parent)}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.BinOp) or not _visible(node) or any(
+                    isinstance(part, ast.Call) or _protected(part)
+                    for part in _ancestors(node, parents)):
+                continue
+            issues.extend(_inline_issues(node, source, inline_limit))
+            issues.extend(_layout_issues(node, source, inline_limit))
     return sorted(issues, key=lambda i: (i.line, i.col, i.code))
 
 
@@ -350,10 +397,18 @@ class Renderer:
 
     def supported_arg(self, arg: ast.AST) -> bool:
         if _protected(arg):
+            if isinstance(arg, ast.DictComp):
+                return self.supported_arg(arg.value)
+            if isinstance(arg, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+                return self.supported_arg(arg.elt)
             return "\n" not in self.compact(arg) and (
                 len(self.compact(arg)) <= self.limit or "\n" not in self.segment(arg))
+        if isinstance(arg, ast.BinOp):
+            return self.supported_arg(arg.left) and self.supported_arg(arg.right)
         if isinstance(arg, ast.Call):
             return self.supported(arg)
+        if isinstance(arg, (ast.Subscript, ast.Attribute)):
+            return "\n" not in self.segment(arg)
         if isinstance(arg, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
             if isinstance(arg, ast.Dict):
                 return (all(key is None or self.supported_arg(key) for key in arg.keys)
@@ -372,6 +427,10 @@ class Renderer:
                 and all(self.supported_arg(kw.value) for kw in call.keywords))
 
     def render_arg(self, arg: ast.AST, indent: str) -> str:
+        if isinstance(arg, ast.BinOp):
+            return self.binary(arg, indent)
+        if isinstance(arg, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            return self.comprehension(arg, indent)
         if _protected(arg):
             return self.compact(arg)
         if isinstance(arg, ast.Call):
@@ -395,6 +454,47 @@ class Renderer:
                                         container_mode=True)
             return opening + result[1:-1] + closing
         return self.segment(arg)
+
+    def binary(self, node: ast.BinOp, indent: str) -> str:
+        lines = self.source.splitlines(keepends=True)
+        left = _index(lines, node.left.end_lineno, node.left.end_col_offset)
+        right = _index(lines, node.right.lineno, node.right.col_offset)
+        between = self.source[left:right]
+        if "#" in between:
+            raise ValueError("комментарий между операндами бинарного выражения")
+        prefix = self.render_arg(node.left, indent)
+        suffix = self.render_arg(node.right, indent)
+        # Retain parentheses around operands, rather than reconstructing precedence.
+        gap = re.sub(r"\s*\n\s*", " ", between)
+        if isinstance(node.right, ast.Call) and "\n" in suffix and "(" not in gap:
+            gap = gap.rstrip() + "\n" + indent
+        return prefix + gap + suffix + self.source[
+            _index(lines, node.right.end_lineno, node.right.end_col_offset):
+            _index(lines, node.end_lineno, node.end_col_offset)]
+
+    def comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+                      indent: str) -> str:
+        if isinstance(node, ast.DictComp):
+            element = self.render_arg(node.value, indent + self.step)
+            if "\n" not in element:
+                return self.compact(node)
+            element = self.compact(node.key) + ": " + element
+            opening, closing = "{", "}"
+        else:
+            element = self.render_arg(node.elt, indent + self.step)
+            if "\n" not in element:
+                return self.compact(node)
+            opening, closing = ("(", ")") if isinstance(node, ast.GeneratorExp) else (
+                ("[", "]") if isinstance(node, ast.ListComp) else ("{", "}"))
+        clauses = []
+        for clause in node.generators:
+            text = ("async for " if clause.is_async else "for ") + self.compact(clause.target)
+            text += " in " + self.compact(clause.iter)
+            text += "".join(" if " + self.compact(condition) for condition in clause.ifs)
+            clauses.append(text)
+        prefix = indent + self.step
+        return (opening + "\n" + prefix + element + "\n"
+                + "\n".join(prefix + clause for clause in clauses) + "\n" + indent + closing)
 
     def render_args(self, call: ast.Call, name: str, indent: str) -> str:
         args = sorted([*call.args, *call.keywords], key=lambda a: (a.lineno, a.col_offset))
@@ -432,7 +532,11 @@ class Renderer:
                 flush()
                 rendered.append(child_indent + value)
             else:
-                pending.append(value)
+                if (rendered and not pending and index and isinstance(args[index - 1], ast.BinOp)
+                        and "\n" in values[index - 1] and "\n" not in value):
+                    rendered[-1] += " " + value
+                else:
+                    pending.append(value)
             # Separate adjacent values; a singleton tuple needs its own comma.
             if index < len(args) - 1 and isolated:
                 rendered[-1] += ","
@@ -470,6 +574,34 @@ class Renderer:
         if in_call or inline:
             return output
         return "(\n" + chain_indent + output + "\n" + indent + ")"
+
+
+def _layout_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
+    lines = source.splitlines(keepends=True)
+    left = _index(lines, node.lineno, node.col_offset)
+    right = _index(lines, node.end_lineno, node.end_col_offset)
+    if _has_comments(source, left, right, lines):
+        return []
+    renderer = Renderer(source, 4, limit)
+    if not renderer.supported_arg(node):
+        return []
+    indent = (" " * node.col_offset if isinstance(node, ast.BinOp)
+              else _leading_indent(lines[node.lineno - 1]))
+    try:
+        expected = renderer.render_arg(node, indent)
+        if source[left:right] == expected or "\n" not in source[left:right] + expected:
+            return []
+        try:
+            candidate = ast.parse(source[:left] + expected + source[right:])
+        except SyntaxError:
+            candidate = ast.parse(source[:left] + "(" + expected + ")" + source[right:])
+        if ast.dump(candidate, include_attributes=False) != ast.dump(
+                ast.parse(source), include_attributes=False):
+            return []
+    except (SyntaxError, ValueError):
+        return []
+    return [Issue(node.lineno, node.col_offset + 1, "ST012",
+                  "исправимый перенос составного выражения не соответствует канонической раскладке")]
 
 
 def _index(lines: list[str], lineno: int, byte_col: int) -> int:
@@ -576,7 +708,33 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
     lines = source.splitlines(keepends=True)
     edits: list[tuple[int, int, str]] = []
     warnings: list[str] = []
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not _visible(node) or any(
+                isinstance(part, ast.Call) or _protected(part)
+                for part in _ancestors(node, parents)):
+            continue
+        left = _index(lines, node.lineno, node.col_offset)
+        right = _index(lines, node.end_lineno, node.end_col_offset)
+        if (any(start <= left < end for start, end, _ in edits)
+                or _has_comments(source, left, right, lines)
+                or not renderer.supported_arg(node)):
+            continue
+        try:
+            replacement = renderer.render_arg(node, " " * node.col_offset)
+            if replacement != source[left:right]:
+                try:
+                    _ = ast.parse(source[:left] + replacement + source[right:])
+                except SyntaxError:
+                    replacement = "(" + replacement + ")"
+                edits.append((left, right, replacement))
+        except (SyntaxError, ValueError) as exc:
+            warnings.append(f"{node.lineno}: пропущено: {exc}")
     for root in _roots(tree):
+        if any(left <= _index(lines, root.lineno, root.col_offset) < right
+               for left, right, _ in edits):
+            continue
         findings = issues_for(root, source, inline_limit)
         if not findings:
             continue
@@ -589,7 +747,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         def collect(call: ast.Call) -> None:
             left = _index(lines, call.lineno, call.col_offset)
             right = _index(lines, call.end_lineno, call.end_col_offset)
-            if (any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009"}
+            if (any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
                     or issue.code == "ST006" and "одной строке" in issue.message
                     for issue in issues_for(call, source, inline_limit))
                     and not _has_comments(source, left, right, lines)
@@ -606,8 +764,12 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                     collect(child)
 
         if blocked or not renderer.supported(root):
-            if not blocked:
-                warnings.append(f"{root.lineno}: пропущено: сложное выражение внутри вызова")
+            if not blocked and any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
+                                   for issue in findings):
+                unsupported = next((arg for arg in [*root.args, *(kw.value for kw in root.keywords)]
+                                    if not renderer.supported_arg(arg)), root.func)
+                warnings.append(f"{root.lineno}: пропущено: {type(unsupported).__name__} "
+                                "нельзя безопасно разложить внутри вызова")
             for child in _visible(root)[1:]:
                 if not any(start <= edit[0] < end for edit in edits):
                     collect(child)

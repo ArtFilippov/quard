@@ -300,7 +300,7 @@ remain technical debt until after the first stable release.
 ### Stairfmt
 
 The independent `stairfmt` job checks composed Python calls in discovered production
-and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST010`
+and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST012`
 violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
 stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. `ST011`
 checks ordinary overlong string literals, including files with no calls. The job is
@@ -323,13 +323,19 @@ Remove the retired `max_line_length` setting from any existing
 `.quard/config.toml` and run `apply.py`: until then install, apply and check reject
 the configuration with exit 2. No automatic migration is performed. See
 [ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
-Comprehensions, single-field dictionaries and lambda expressions remain inline; their
-calls do not trigger staircase layout findings. The same applies to inline operators.
+Simple comprehensions, single-field dictionaries and lambda expressions remain inline;
+their calls do not trigger staircase layout findings. Multi-field dictionaries expand
+even within comprehensions: each field and successive `for` clause starts on its own
+line; filters stay with their clause. Binary call operands use the same layout inside
+and outside calls; sibling operands do not trigger `ST001`. A simple argument after
+a multiline binary expression may share its final line. `ST012` identifies fixable
+noncanonical expression breaks.
 Set `[stairfmt] inline_limit = 240` in `.quard/config.toml` to change the default
-expression-length limit. An over-limit expression or a second call-bearing branch
-along one path receives simplify-expression advice instead of being split. Ordinary
-container elements share a line, nested containers start new lines, and multi-field
-dictionaries use one field per line. Comments inside checked calls receive a positioned
+expression-line limit. An over-limit expression line (`ST006`) or a second call-bearing
+branch along one path (`ST007`) receives simplify-expression advice independently of
+safe layout fixes. Ordinary container elements share a line, nested containers start
+new lines, and multi-field dictionaries use one field per line. Comments inside checked
+calls receive a positioned
 finding and are preserved; independent safe edits still proceed. Each fix run prints a
 summary and saves its own JSON report under
 `.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest

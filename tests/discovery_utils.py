@@ -28,7 +28,7 @@ def load_tests(loader: unittest.TestLoader, suite: unittest.TestSuite,
                   "installation", "outer_classes", "architecture_compatibility",
                    "architecture_draft", "report_parsing",
                     "free_function_placement", "leading_underscores",
-                    "cached_property_migration"):
+                    "cached_property_migration", "stairfmt"):
         directory = root / group
         suite.addTests(unittest.TestLoader().discover(str(directory), pattern="test*.py",
                                                       top_level_dir=str(directory)))

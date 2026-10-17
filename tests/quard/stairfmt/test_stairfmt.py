@@ -248,6 +248,72 @@ class TestStairfmt(unittest.TestCase):
                           (self.root / report["report_path"]).is_file()),
                          (0, "passed", 1, 0, [], [], True))
 
+    def test_benchmark_composition_converges_with_simplification_left(self):
+        source = '''import json
+def run(path, self, test, populations):
+    _ = (path / "run.json").write_text(json.dumps({
+        "detector": self.detector.__class__.__name__,
+        "test_dataset": self.datasets[2].__class__.__name__,
+        "test_ids": [item.name() for item in test],
+        "test_labels": [item.label() for item in test],
+        "test_count": len(test),
+        "trajectories": {
+            split: [{"id": item.name(), "path": f"trajectories/{split}/{index}"}
+                    for index, item in enumerate(population)]
+            for split, population in zip(("train", "validation", "test"), populations,
+                                        strict=True)
+        },
+    }, indent=2) + "\\n", encoding="utf-8")
+'''
+        fixed, report = self.formatted(source)
+        self.assertEqual((ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed)),
+                          {item['rule'] for item in report['remaining']}, report['warnings'],
+                          '        ) + "\\n", encoding="utf-8"' in fixed,
+                          '                        for index, item in enumerate(population)' in fixed,
+                          self.formatted(fixed)[0] == fixed,
+                          {item['rule'] for item in self.checked(fixed)['remaining']}),
+                         (True, {'ST007'}, [], True, True, True, {'ST007'}))
+
+    def test_binary_operand_layout_converges_for_four_call_combinations(self):
+        sources = ('x = (g(1) +\n     h(2))\n',
+                   'x = f(g(1, 2) + h(3), 5)\n',
+                   'x = f(g(1) + h(2, 3), 5)\n',
+                   'x = (g(1, 2) + h(3, 4))\n')
+        results = [self.formatted(source) for source in sources]
+        self.assertEqual([(ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed)),
+                           report['remaining'], report['warnings'],
+                           self.formatted(fixed)[0] == fixed)
+                          for source, (fixed, report) in zip(sources, results)],
+                         [(True, [], [], True)] * 4)
+
+    def test_noncanonical_binary_break_has_st012_not_sibling_st001(self):
+        source = 'x = (g(1) +\n     h(2))\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], ['ST012'])
+
+    def test_multiline_expression_limit_is_per_line(self):
+        source = 'x = f((g(a) +\n       h(a)), 3)\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
+                          if item['rule'] in {'ST006', 'ST007'}], [])
+
+    def test_report_dictionary_keeps_subscript_value(self):
+        source = 'x = report({"rate": state[4].get_last_lr()[0], "count": 2})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          '"rate": state[4].get_last_lr()[0]' in fixed,
+                          self.formatted(fixed)[0] == fixed), ([], [], True, True))
+
+    def test_comprehension_clauses_and_filter_follow_expanded_dictionary(self):
+        source = ('x = f([{"a": item.name(), "b": 2} for group in groups '
+                  'for item in group if item.active])\n')
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          '        for group in groups\n        for item in group if item.active' in fixed,
+                          self.formatted(fixed)[0] == fixed), ([], [], True, True))
+
+    def test_fixable_comprehension_break_reports_st012(self):
+        source = 'x = f([\n    item for item in values\n])\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], ['ST012'])
+
     def test_explicit_paths_obey_discovered_scope(self):
         self.put("src/demo/generated/ignored.py", "x = f(g(1), h(2))\n")
         self.put("src/demo/working.py", "x = f(g(1), h(2))\n")

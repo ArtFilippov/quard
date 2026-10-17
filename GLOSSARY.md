@@ -12,12 +12,19 @@ C0301 is disabled in both profiles; Quard does not impose a universal width.
 _Avoid_: Treating Stairfmt's expression or string limits as a line limit
 
 **Stairfmt expression limit**:
-The maximum visible expression text kept inline in Stairfmt's supported layout
-scope (`inline_limit`, default 240). Over-limit protected expressions require
+The maximum visible text on each expression line in Stairfmt's supported layout
+scope (`inline_limit`, default 240). Over-limit expressions require
 simplification; ordinary string tokens have their own `string_limit` (default
 160). Neither limit measures all physical source lines. See
 [ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
 _Avoid_: Pylint max-line-length
+
+**Canonical composed layout**:
+The stable result of Stairfmt fix for supported calls and binary operands, including
+multi-field dictionaries inside comprehensions. `ST012` marks safe, fixable breaks
+that differ from this layout; `ST006` and `ST007` independently mark expressions
+that still need simplification.
+_Avoid_: Treating an unfixed simplification finding as a reason to skip layout
 
 ## Clone analysis
 

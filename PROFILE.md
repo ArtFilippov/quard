@@ -187,14 +187,19 @@ violations baseline.
   each unsupported edit and remaining finding, and archives a fix report separately
   from the check report. `[checks] stairfmt = false` skips the job; only Quard's own
   checkout opts out during source migration. Findings exit 1; read, parse and worker
-  failures exit 2. Inline comprehensions, single-field dictionaries, lambdas and
-  operators keep calls on their own expression line; `[stairfmt] inline_limit`
-  defaults to 240 characters of expression text. `ST006` requires simplification
-  when that limit or inline layout is exceeded; `ST007` requires simplification
+  failures exit 2. Simple comprehensions, single-field dictionaries and lambdas
+  keep calls inline; multi-field dictionaries expand even inside comprehensions,
+  with successive `for` clauses on separate lines and filters inline. Binary call
+  operands follow the same layout inside and outside calls; sibling operands do
+  not raise `ST001`. A simple argument may share the final line of a multiline
+  binary operand. `[stairfmt] inline_limit` defaults to 240 characters per
+  expression line. `ST006` requires simplification when that limit or an unfixable
+  inline layout is exceeded; `ST007` requires simplification
   when more than one call-bearing branch occurs along a root-to-leaf path.
   `ST008` positions comments inside checked calls without deleting them, and
   `ST009` checks multi-field dictionaries and ordinary versus nested container
-  elements.
+  elements. `ST012` identifies fixable noncanonical breaks. Fix applies independent
+  safe layout edits even when `ST006` or `ST007` remains.
   `ST010` checks tabs in indentation on all selected `.py` lines, even without
   calls. Fix uses `--indent` (default four spaces) for block indentation and
   preserves tabs in string and comment text.
