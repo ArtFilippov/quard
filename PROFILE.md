@@ -195,6 +195,9 @@ violations baseline.
   `ST008` positions comments inside checked calls without deleting them, and
   `ST009` checks multi-field dictionaries and ordinary versus nested container
   elements.
+  `ST010` checks tabs in indentation on all selected `.py` lines, even without
+  calls. Fix uses `--indent` (default four spaces) for block indentation and
+  preserves tabs in string and comment text.
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and

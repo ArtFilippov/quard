@@ -300,7 +300,7 @@ remain technical debt until after the first stable release.
 ### Stairfmt
 
 The independent `stairfmt` job checks composed Python calls in discovered production
-and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST009`
+and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST010`
 violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
 stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. The job is
 enabled by default on new and existing consumer installations, including configs
@@ -312,6 +312,9 @@ From the consumer root, run `python quard/stairfmt.py --fix --project .` to form
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
+`ST010` detects indentation tabs independently of call layout. Fix normalizes block
+indentation to `--indent` spaces (four by default), including files without calls,
+while leaving tabs inside literals and comments untouched.
 Comprehensions, single-field dictionaries and lambda expressions remain inline; their
 calls do not trigger staircase layout findings. The same applies to inline operators.
 Set `[stairfmt] inline_limit = 240` in `.quard/config.toml` to change the default

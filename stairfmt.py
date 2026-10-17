@@ -10,6 +10,7 @@ Rules:
 - Simple arguments may share a line (e.g. Point(\n    x, y\n)).
 - A single non-call argument MUST remain inline (e.g. Point(x)).
 - The closing parenthesis of a multiline call is on its own line.
+- Indentation uses spaces, with tabs reported independently of call layout.
 
 --check works broadly; --fix is conservative (simple nested calls, constructors,
 method chains and argument lists). Unsupported constructs and comments are
@@ -226,6 +227,8 @@ def _container_issues(node: ast.AST) -> list[Issue]:
 def issues_for(tree: ast.AST, source: str = "", limit: int = 240) -> list[Issue]:
     issues: list[Issue] = []
     lines = source.splitlines(keepends=True)
+    if source and isinstance(tree, ast.Module):
+        issues.extend(_indentation(source, 4)[0])
     for root in _roots(tree):
         issues.extend(_issue_list(root))
         if source:
@@ -412,6 +415,49 @@ def _leading_indent(line: str) -> str:
     return line[:len(line) - len(line.lstrip(" \t"))]
 
 
+def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
+    """Locate indentation tabs and render block depths without touching literals."""
+    lines = source.splitlines(keepends=True)
+    depths: dict[int, int] = {}
+    protected: set[int] = set()
+    fstrings: list[int] = []
+    prefixes = [""]
+    logical = True
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.INDENT:
+            prefixes.append(token.string)
+        elif token.type == tokenize.DEDENT:
+            prefixes.pop()
+        elif token.type == tokenize.NEWLINE:
+            logical = True
+        elif token.type == tokenize.STRING:
+            protected.update(range(token.start[0] + 1, token.end[0] + 1))
+        elif token.type == tokenize.FSTRING_START:
+            fstrings.append(token.start[0])
+        elif token.type == tokenize.FSTRING_END:
+            protected.update(range(fstrings.pop() + 1, token.end[0] + 1))
+        if (logical and token.type not in (tokenize.INDENT, tokenize.DEDENT,
+                                           tokenize.NEWLINE, tokenize.NL, tokenize.COMMENT,
+                                           tokenize.ENDMARKER)):
+            depths[token.start[0]] = len(prefixes) - 1
+            logical = False
+
+    issues: list[Issue] = []
+    for number, line in enumerate(lines, 1):
+        if number in protected:
+            continue
+        prefix = _leading_indent(line)
+        if "\t" in prefix:
+            issues.append(Issue(number, prefix.index("\t") + 1, "ST010",
+                                "табуляция в отступе: используйте пробелы"))
+        if number in depths:
+            replacement = " " * (depths[number] * size)
+        else:
+            replacement = prefix.expandtabs(size) if "\t" in prefix else prefix
+        lines[number - 1] = replacement + line[len(prefix):]
+    return issues, "".join(lines)
+
+
 def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
@@ -426,6 +472,12 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
 
 def format_source(source: str, indent_size: int = 4, inline_limit: int = 240) -> tuple[str, list[str]]:
     tree = ast.parse(source)
+    _, normalized = _indentation(source, indent_size)
+    if normalized != source:
+        if ast.dump(ast.parse(normalized), include_attributes=False) != ast.dump(tree, include_attributes=False):
+            raise ValueError("нормализация отступов меняет структуру AST")
+        source = normalized
+        tree = ast.parse(source)
     renderer = Renderer(source, indent_size, inline_limit)
     lines = source.splitlines(keepends=True)
     edits: list[tuple[int, int, str]] = []
@@ -449,12 +501,11 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240) ->
                     and not _has_comments(source, left, right, lines)
                     and renderer.supported(call)):
                 indent = _leading_indent(lines[call.lineno - 1])
-                if "\t" not in indent:
-                    try:
-                        edits.append((left, right, renderer.render_call(call, indent)))
-                        return
-                    except ValueError:
-                        pass
+                try:
+                    edits.append((left, right, renderer.render_call(call, indent)))
+                    return
+                except ValueError:
+                    pass
             for child in _visible(call)[1:]:
                 if child is not call and not any(
                     left <= edit[0] < right for edit in edits):
@@ -512,7 +563,7 @@ def _advice(reason: str) -> str:
     if "сложное выражение" in reason:
         return "Расставьте вложенные вызовы вручную, сохранив смысл выражения."
     if "табуляция" in reason:
-        return "Замените табуляцию в отступе пробелами и повторите --fix."
+        return "Запустите --fix для замены табуляции в отступе пробелами."
     return "Расставьте вызовы вручную и повторите --fix."
 
 
