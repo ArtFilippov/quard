@@ -316,6 +316,13 @@ the formatted source and preserves safely fixed files even if others need manual
 `ST010` detects indentation tabs independently of call layout. Fix normalizes block
 indentation to `--indent` spaces (four by default), including files without calls,
 while leaving tabs inside literals and comments untouched.
+Pylint's physical `line-too-long` (C0301) check is disabled in both profiles;
+`max_module_lines` and unrelated native checks remain active. Stairfmt governs its
+documented expression, indentation and string scope, not every physical line.
+Remove the retired `max_line_length` setting from any existing
+`.quard/config.toml` and run `apply.py`: until then install, apply and check reject
+the configuration with exit 2. No automatic migration is performed. See
+[ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
 Comprehensions, single-field dictionaries and lambda expressions remain inline; their
 calls do not trigger staircase layout findings. The same applies to inline operators.
 Set `[stairfmt] inline_limit = 240` in `.quard/config.toml` to change the default

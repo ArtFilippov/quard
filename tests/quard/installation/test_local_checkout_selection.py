@@ -40,12 +40,14 @@ class TestLocalCheckoutSelection(unittest.TestCase):
             command(["git", "clone", "--shared", str(ROOT), str(origin)], base)
             revision = command(["git", "rev-parse", "HEAD"], origin)
             adoption_consumer(consumer)
-            # The pinned older checkout cannot parse switches introduced after its revision.
+            # The pinned older checkout still requires its retired line limit.
             setting = consumer / ".quard/config.toml"
             setting.write_text(setting.read_text(encoding="utf-8").replace(
                 "cached_property_migration = true\n", "").replace(
                 "tuple_signatures = false\n", "").replace(
-                "stairfmt = true\n", ""), encoding="utf-8")
+                "stairfmt = true\n", "").replace(
+                "max_module_lines = 400", "max_line_length = 100\nmax_module_lines = 400"),
+                encoding="utf-8")
             command(["git", "init", "-b", "main"], consumer)
             command(["git", "submodule", "add", origin.as_uri(), "tools/analyzer"], consumer)
             tool = consumer / "tools/analyzer"

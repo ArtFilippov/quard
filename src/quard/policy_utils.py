@@ -21,7 +21,6 @@ from quard.pylint_config_utils import (LEGACY_PLUGIN, official_plugins,
                                       policy_notes as render_policy_notes)
 
 LIMIT_MAP = {
-    "max_line_length": ("format", "max-line-length"),
     "max_module_lines": ("format", "max-module-lines"),
     "max_statements": ("design", "max-statements"),
     "max_complexity": ("design", "max-complexity"),
@@ -40,6 +39,7 @@ LIMIT_MAP = {
     "max_try_statements": ("broad_try_clause", "max-try-statements"),
 }
 PRODUCTION_DISABLED = {
+    "line-too-long": "Stairfmt owns supported layout; physical line length is not a style limit.",
     "missing-module-docstring": "User policy: docstrings are optional.",
     "missing-class-docstring": "User policy: docstrings are optional.",
     "missing-function-docstring": "User policy: docstrings are optional.",
@@ -135,6 +135,9 @@ def validate_limits(data: object) -> dict[str, dict[str, int]]:
     production, tests = data["production"], data["tests"]
     if not isinstance(production, dict) or not isinstance(tests, dict):
         raise QuardError("INVALID_LIMITS", "Readability profiles must be TOML tables.")
+    if "max_line_length" in production or "max_line_length" in tests:
+        raise QuardError("INVALID_LIMITS", "max_line_length is no longer supported; remove it from "
+                         + ".quard/config.toml and run quard/apply.py.")
     if set(production) != set(LIMIT_MAP) or set(tests) - set(LIMIT_MAP):
         raise QuardError("INVALID_LIMITS", f"Supported parameters: {', '.join(sorted(LIMIT_MAP))}")
     profiles = {"production": production, "tests": {**production, **tests}}
@@ -388,7 +391,11 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         disabled = control.setdefault("disable", [])
         if "W9201" not in disabled:
             disabled.append("W9201")
+    disabled = tool["pylint"].setdefault("messages_control", {}).setdefault("disable", [])
+    if "line-too-long" not in disabled:
+        disabled.append("line-too-long")
     apply_limits(tool["pylint"], limits["production"])
+    tool["pylint"].get("format", {}).pop("max-line-length", None)
     # Scope is shared, while unrelated native settings are preserved on apply.
     tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]
     if "pyright" in tool:

@@ -1,7 +1,6 @@
 # Edit .quard/readability.toml, then run: uv run --locked --group dev python quard/apply.py
-# Length means Pylint's own metrics, NOT an AST-independent line count.
+# Pylint's own metrics; physical line length is not limited.
 [production]
-max_line_length = 100
 max_module_lines = 400
 max_statements = 30
 max_complexity = 8

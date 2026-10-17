@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -31,10 +32,9 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
 
     def test_limits_exact(self):
         data = self.policy().limits()
-        self.assertEqual(len(data["production"]), 17)
+        self.assertEqual(len(data["production"]), 16)
         self.assertEqual(data["production"]["max_statements"], 30)
         self.assertEqual(data["tests"]["max_statements"], 60)
-        self.assertEqual(data["tests"]["max_line_length"], 100)
         mapping = _policy.clean_config()["layer_map"]
         self.assertIn("Domain", mapping)
         self.assertIn("domain", mapping["Domain"])
@@ -143,6 +143,49 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
                                                   "max_complexity = 8\nmax_comlexity = 8"))
         with self.assertRaises(QuardError):
             self.policy().limits()
+
+    def test_retired_line_limit_fails_validation(self):
+        path = self.root / ".quard/config.toml"
+        path.write_text(path.read_text().replace("max_module_lines = 400",
+                                                  "max_line_length = 100\nmax_module_lines = 400"))
+        with self.assertRaises(QuardError) as failure:
+            self.policy().apply()
+        self.assertEqual((failure.exception.code, "remove it" in str(failure.exception)),
+                         ("INVALID_LIMITS", True))
+
+    def test_retired_line_limit_fails_apply_and_check_with_exit_two(self):
+        path = self.root / ".quard/config.toml"
+        path.write_text(path.read_text().replace("max_module_lines = 400",
+                                                  "max_line_length = 100\nmax_module_lines = 400"))
+        applied = subprocess.run([sys.executable, str(QUARD / "apply.py"), "--project",
+                                  str(self.root), "--json"], capture_output=True, text=True,
+                                 check=False)
+        checked = subprocess.run([sys.executable, str(QUARD / "check.py"), "--project",
+                                  str(self.root), "--json"], capture_output=True, text=True,
+                                 check=False)
+        report = json.loads((self.root / ".quard/reports/latest.json").read_text())
+        self.assertEqual((applied.returncode, json.loads(applied.stdout)["code"],
+                          checked.returncode, report["exit_code"],
+                          "INVALID_LIMITS" in {item["rule"] for item in report["diagnostics"]}),
+                         (2, "INVALID_LIMITS", 2, 2, True))
+
+    def test_apply_removes_old_native_limit_and_disables_only_physical_length(self):
+        project = self.root / "pyproject.toml"
+        project.write_text(project.read_text().replace("max-module-lines = 400",
+                                                        "max-line-length = 100\nmax-module-lines = 400"))
+        project.write_text(project.read_text().replace(', "line-too-long"', ''))
+        drift = self.policy().limit_drift()
+        self.policy().apply()
+        production = load_toml(project)["tool"]["pylint"]
+        tests = load_toml(self.root / ".quard/pylint-tests.toml")["tool"]["pylint"]
+        self.assertEqual(("max-line-length" in production["format"],
+                          "max-line-length" in tests["format"],
+                          "production.physical_line_length" in drift,
+                          production["format"]["max-module-lines"],
+                          tests["format"]["max-module-lines"],
+                          all("line-too-long" in profile["messages_control"]["disable"]
+                              for profile in (production, tests))),
+                         (False, False, True, 400, 800, True))
 
     def test_inconsistent_limits_rejected(self):
         path = self.root / ".quard/config.toml"

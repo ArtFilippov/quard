@@ -4,6 +4,21 @@ Quard distinguishes source evidence from the units used to decide whether two
 pieces of consumer code are duplicated. See [domain context](CONTEXT.md) for
 the detailed policy.
 
+## Source layout
+
+**Physical line length**:
+The width of one source line, regardless of the expression it contains. Pylint
+C0301 is disabled in both profiles; Quard does not impose a universal width.
+_Avoid_: Treating Stairfmt's expression or string limits as a line limit
+
+**Stairfmt expression limit**:
+The maximum visible expression text kept inline in Stairfmt's supported layout
+scope (`inline_limit`, default 240). Over-limit protected expressions require
+simplification; ordinary string tokens have their own `string_limit` (default
+160). Neither limit measures all physical source lines. See
+[ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
+_Avoid_: Pylint max-line-length
+
 ## Clone analysis
 
 **Clone pass**:

@@ -206,6 +206,9 @@ violations baseline.
    inline expressions, raw, bytes, triple-quoted and f-string literals. Generated
    Pyright sets `reportImplicitStringConcatenation = none`; Pylint keeps
    `implicit-str-concat` enabled (same-line concatenation still fails).
+   Pylint C0301 (`line-too-long`) is disabled in both production and test profiles:
+   Stairfmt limits supported expressions and ordinary strings, not all physical
+   lines. Module length and other Pylint format and design checks remain enabled.
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and
@@ -884,13 +887,15 @@ then run `quard/apply.py` in the consumer environment. Edit `[scope]` there too;
 unapplied scope fails with `SCOPE_NOT_APPLIED`.
 Unapplied limits fail with `READABILITY_NOT_APPLIED`; invalid TOML, unknown names,
 booleans/nonpositive limits and contradictory bounds are errors.
+Existing `max_line_length` is rejected with exit 2; remove it and apply the
+new native profiles. A missing C0301 disable or stale native `max-line-length`
+also counts as unapplied policy.
 
 Default values below apply to **new** installations. Existing consumer values win.
 Tests inherit unspecified production limits.
 
 | Setting | Production | Tests |
 |---|---:|---:|
-| max_line_length | 100 | 100 |
 | max_module_lines | 400 | 800 |
 | max_statements | 30 | 60 |
 | max_complexity | 8 | 10 |

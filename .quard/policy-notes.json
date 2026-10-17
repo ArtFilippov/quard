@@ -45,6 +45,7 @@
     "pylint.extensions.while_used"
   ],
   "production_disabled": {
+    "line-too-long": "Stairfmt owns supported layout; physical line length is not a style limit.",
     "missing-class-docstring": "User policy: docstrings are optional.",
     "missing-function-docstring": "User policy: docstrings are optional.",
     "missing-module-docstring": "User policy: docstrings are optional.",

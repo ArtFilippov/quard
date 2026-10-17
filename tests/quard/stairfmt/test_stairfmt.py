@@ -118,6 +118,39 @@ class TestStairfmt(unittest.TestCase):
                          (ast.dump(ast.parse(source)), ast.dump(ast.parse(source)),
                           [], [], fixed, True))
 
+    def test_four_cases_with_tabs_comments_inline_calls_and_long_string(self):
+        source = ('import json\n\n# note: keep this comment\n'
+                  'def lambda_case(values):\n'
+                  '\treturn list(map(lambda item: str(item), values))\n\n'
+                  'def comprehension_case(values):\n'
+                  '\treturn tuple(item.strip() for item in values if item.startswith("x"))\n\n'
+                  'def expression_case(path):\n'
+                  '\treturn path.write_text(json.dumps({"x": int(path.name)}) + "\\n", '
+                  'encoding="utf-8")\n\n'
+                  'def fstring_case(value):\n\treturn str(f"{value.upper()}")\n\n'
+                  'description = "' + 'a long phrase ' * 15 + '"\n')
+        self.put('src/demo/working.py', source)
+        initial = self.checked(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        again, repeat, _ = self.run_fix('src/demo/working.py')
+        files = discover_files(self.root, read_scope(self.root))
+        directory = self.root / '.quard/reports/run'
+        job = next(item for item in make_jobs(self.root, directory, files, True, [])
+                   if item['name'] == 'stairfmt')
+        result = execute_job(job, self.root, directory, 30)
+        archived = json.loads((self.root / report['report_path']).read_text(encoding='utf-8'))
+        self.assertEqual(({'ST010', 'ST011'} <= {item['rule'] for item in initial['remaining']},
+                          any(item['rule'] == 'ST001' for item in initial['remaining']),
+                          code, report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed)),
+                          '# note: keep this comment' in fixed, '\treturn' in fixed,
+                          'lambda item: str(item)' in fixed, again, repeat['changed_files'],
+                          archived['exit_code'], result['status'], result['exit_code'],
+                          result['diagnostics']),
+                         (True, True, 0, [], [], True, True, False, True, 0, [], 0,
+                          'passed', 0, []))
+
     def test_single_field_dictionary_and_comprehension_stay_inline(self):
         source = 'value = f({"key": g(1)}, [h(item) for item in values])\n'
         fixed, report = self.formatted(source)

@@ -8,9 +8,8 @@ pyright = true
 pydoclint = true
 duplicate_detection = true
 
-# Pylint's own metrics, not an AST-independent line count.
+# Pylint's own metrics; physical line length is not limited.
 [readability.production]
-max_line_length = 100
 max_module_lines = 400
 max_statements = 30
 max_complexity = 8
