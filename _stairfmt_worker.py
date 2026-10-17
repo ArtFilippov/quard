@@ -10,6 +10,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from stairfmt import issues_for
+from quard._common import QuardError
+from quard.policy_utils import read_settings, validate_stairfmt
 
 
 def main() -> int:
@@ -28,17 +30,19 @@ def main() -> int:
         paths = json.loads(args.manifest.read_text(encoding="utf-8"))
         if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
             raise ValueError("Stairfmt manifest must list Python paths")
+        limit = validate_stairfmt(read_settings(Path.cwd()).get("stairfmt", {}))
         for path in paths:
             try:
-                tree = ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
+                source = Path(path).read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=path)
                 findings.extend({"path": path, "line": issue.line, "column": issue.col,
                                  "rule": issue.code, "message": issue.message + suggestion}
-                                for issue in issues_for(tree))
+                                 for issue in issues_for(tree, source, limit))
             except (OSError, UnicodeError, SyntaxError) as exc:
                 rule = "STAIRFMT_PARSE_ERROR" if isinstance(exc, SyntaxError) else "STAIRFMT_EXECUTION_ERROR"
                 error = error or rule
                 findings.append({"path": path, "rule": rule, "message": str(exc)})
-    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+    except (OSError, UnicodeError, ValueError, TypeError, QuardError) as exc:
         error = "STAIRFMT_EXECUTION_ERROR"
         findings.append({"rule": error, "message": str(exc)})
     print(json.dumps({"quard_stairfmt_adapter": 1, "diagnostics": findings,

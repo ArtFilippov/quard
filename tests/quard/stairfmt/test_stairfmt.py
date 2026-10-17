@@ -1,6 +1,7 @@
 """Autonomous regressions for checking and fixing Stairfmt compositions."""
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import subprocess
@@ -46,8 +47,21 @@ class TestStairfmt(unittest.TestCase):
         command = subprocess.run([sys.executable, "-B", str(QUARD / "stairfmt.py"), "--fix",
                                   "--project", str(self.root), *paths], cwd=self.root,
                                  capture_output=True, text=True, check=False)
-        report = json.loads((self.root / ".quard/reports/stairfmt/latest.json").read_text(encoding="utf-8"))
+        report = json.loads((self.root / ".quard/reports/stairfmt/latest.json").read_text(
+            encoding="utf-8"))
         return command.returncode, report, command.stdout
+
+    def formatted(self, source: str) -> tuple[str, dict[str, Any]]:
+        self.put("src/demo/working.py", source)
+        _, report, _ = self.run_fix("src/demo/working.py")
+        return (self.root / "src/demo/working.py").read_text(encoding="utf-8"), report
+
+    def checked(self, source: str) -> dict[str, Any]:
+        self.put("src/demo/working.py", source)
+        command = subprocess.run([sys.executable, "-B", str(QUARD / "stairfmt.py"), "--check",
+                                  "--project", str(self.root), "--json", "src/demo/working.py"],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        return json.loads(command.stdout)
 
     def test_enabled_job_reports_positions_and_fix_command(self):
         self.put("src/demo/domain/api.py", "x = f(g(1), h(2))\n")
@@ -75,7 +89,8 @@ class TestStairfmt(unittest.TestCase):
                           {item["rule"] for item in result["diagnostics"]},
                           all(item["is_infrastructure_error"] for item in result["diagnostics"]
                               if item["rule"] == "STAIRFMT_PARSE_ERROR")),
-                         ("error", 2, {"ST001", "ST002", "ST004", "STAIRFMT_PARSE_ERROR"}, True), result)
+                          ("error", 2, {"ST001", "ST002", "ST004", "STAIRFMT_PARSE_ERROR"},
+                           True), result)
 
     def test_partial_fix_reports_failure_and_keeps_success(self):
         self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
@@ -85,7 +100,111 @@ class TestStairfmt(unittest.TestCase):
                           report["warnings"][0]["line"], len(report["remaining"]),
                           "комментарий" in output,
                           "x = f(\n" in (self.root / "src/demo/working.py").read_text()),
-                         (1, "violations", ["src/demo/working.py"], 1, 3, True, True))
+                          (1, "violations", ["src/demo/working.py"], 1, 4, True, True))
+
+    def test_parent_issue_repro_is_parseable_and_clean_after_fix(self):
+        source = ('import json\n\ndef lambda_case(values):\n'
+                  '    return list(map(lambda item: str(item), values))\n\n'
+                  'def comprehension_case(values):\n'
+                  '    return tuple(item.strip() for item in values if item.startswith("x"))\n\n'
+                  'def expression_case(path):\n'
+                  '    return path.write_text(json.dumps({"x": int(path.name)}) + "\\n", '
+                  'encoding="utf-8")\n\n'
+                  'def fstring_case(value):\n    return str(f"{value.upper()}")\n')
+        fixed, report = self.formatted(source)
+        self.assertEqual((ast.dump(ast.parse(source)), ast.dump(ast.parse(fixed)),
+                          report["remaining"], report["warnings"],
+                          self.formatted(fixed)[0], 'f"{value.upper()}"' in fixed),
+                         (ast.dump(ast.parse(source)), ast.dump(ast.parse(source)),
+                          [], [], fixed, True))
+
+    def test_single_field_dictionary_and_comprehension_stay_inline(self):
+        source = 'value = f({"key": g(1)}, [h(item) for item in values])\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report["remaining"], '{"key": g(1)}' in fixed,
+                          '[h(item) for item in values]' in fixed), ([], True, True))
+
+    def test_multiline_protected_expressions_collapse_without_ast_change(self):
+        source = ('value = f(\n    {\n        "key": g(1)\n    },\n'
+                  '    [\n        h(item) for item in values\n    ]\n)\n')
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed)),
+                          '{ "key": g(1) }' in fixed,
+                          '[ h(item) for item in values ]' in fixed),
+                         ([], [], True, True, True))
+
+    def test_multifield_dictionary_and_nested_containers_have_distinct_lines(self):
+        source = 'value = f({"a": g(1), "b": h(2)}, [[1, 2], 3, 4], {5, 6})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report["remaining"], report["warnings"],
+                          '"a": g(1),\n' in fixed, '"b": h(2)' in fixed,
+                          '1, 2\n' in fixed, '3, 4' in fixed,
+                          self.formatted(fixed)[0] == fixed),
+                         ([], [], True, True, True, True, True))
+
+    def test_clean_call_with_comment_is_positioned_violation(self):
+        source = 'value = f(\n    1,  # keep\n    2\n)\n'
+        self.assertEqual([(item["rule"], item["line"]) for item in self.checked(source)["remaining"]
+                          if item["rule"] == 'ST008'], [('ST008', 2)])
+
+    def test_limit_measures_expression_not_physical_line(self):
+        source = 'prefix = f(' + ' ' * 70 + 'lambda x: g(x))\n'
+        setting = self.root / '.quard/config.toml'
+        setting.write_text(setting.read_text(encoding='utf-8')
+                           + '\n[stairfmt]\ninline_limit = 16\n',
+                           encoding='utf-8')
+        fixed, report = self.formatted(source)
+        self.assertEqual(([(item['rule'], item['line']) for item in report['remaining']],
+                          'lambda x: g(x)' in fixed), ([], True))
+
+    def test_over_limit_expression_remains_inline_with_simplification_advice(self):
+        source = 'value = f(lambda x: g(x) + h(x))\n'
+        self.put('src/demo/long.py', source)
+        setting = self.root / '.quard/config.toml'
+        setting.write_text(setting.read_text(encoding='utf-8')
+                           + '\n[stairfmt]\ninline_limit = 12\n',
+                           encoding='utf-8')
+        code, report, _ = self.run_fix('src/demo/long.py')
+        self.assertEqual((code, report['exit_code'], report['remaining'][0]['rule'],
+                          'Упростите' in report['remaining'][0]['suggestion'],
+                          'lambda x: g(x) + h(x)' in (self.root / 'src/demo/long.py').read_text()),
+                         (1, 1, 'ST006', True, True))
+
+    def test_second_branch_on_one_path_requires_simplification(self):
+        source = 'value = f(lambda x: combine(g(a(x), b(x)), h(x)))\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
+                          if item['rule'] == 'ST007'], ['ST007'])
+
+    def test_one_branch_can_have_many_call_bearing_children(self):
+        source = 'value = f(lambda x: combine(g(x), h(x), j(x), k(x)))\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
+                          if item['rule'] == 'ST007'], [])
+
+    def test_fstring_calls_do_not_count_as_inline_branches(self):
+        source = 'value = f(lambda x: wrap(f"{g(x)} {h(x)}", k(x)))\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
+                          if item['rule'] == 'ST007'], [])
+
+    def test_multifield_dictionary_without_child_calls_is_formatted(self):
+        source = 'value = f({"a": 1, "b": 2})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          '"a": 1,\n' in fixed), ([], [], True))
+
+    def test_calls_in_list_follow_staircase_without_container_findings(self):
+        source = 'value = f([g(1), h(2), 3])\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          'g(1),\n' in fixed, 'h(2),\n' in fixed),
+                         ([], [], True, True))
+
+    def test_independent_branch_is_fixed_while_comment_survives(self):
+        source = 'value = f(g(h(1)), k(2),  # keep\n    j(3))\n'
+        fixed, _ = self.formatted(source)
+        self.assertEqual((ast.dump(ast.parse(fixed)), '# keep' in fixed,
+                          'g(\n' in fixed, self.formatted(fixed)[0] == fixed),
+                         (ast.dump(ast.parse(source)), True, True, True))
 
     def test_successful_fix_is_clean_and_idempotent(self):
         self.put("src/demo/working.py", "x = f(g(h(1)), k(2))\n")

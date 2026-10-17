@@ -620,7 +620,7 @@ def parse_stairfmt(text: str, root: Path) -> tuple[list[dict[str, Any]], str | N
     items = []
     for entry in obj["diagnostics"]:
         if not isinstance(entry, dict) or entry.get("rule") not in errors | {
-                "ST001", "ST002", "ST003", "ST004", "ST005"}:
+                "ST001", "ST002", "ST003", "ST004", "ST005", "ST006", "ST007", "ST008", "ST009"}:
             raise ValueError("Malformed Stairfmt diagnostic")
         rule = entry["rule"]
         if (not isinstance(entry.get("message"), str)

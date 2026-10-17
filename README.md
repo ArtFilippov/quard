@@ -300,7 +300,7 @@ remain technical debt until after the first stable release.
 ### Stairfmt
 
 The independent `stairfmt` job checks composed Python calls in discovered production
-and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST005`
+and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST009`
 violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
 stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. The job is
 enabled by default on new and existing consumer installations, including configs
@@ -312,9 +312,15 @@ From the consumer root, run `python quard/stairfmt.py --fix --project .` to form
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
-Comments within calls, complex nested expressions and tab-indented calls can prevent
-automatic formatting; the result lists remaining positions, reasons and suggested
-manual corrections. Each fix run prints a summary and saves its own JSON report under
+Comprehensions, single-field dictionaries and lambda expressions remain inline; their
+calls do not trigger staircase layout findings. The same applies to inline operators.
+Set `[stairfmt] inline_limit = 240` in `.quard/config.toml` to change the default
+expression-length limit. An over-limit expression or a second call-bearing branch
+along one path receives simplify-expression advice instead of being split. Ordinary
+container elements share a line, nested containers start new lines, and multi-field
+dictionaries use one field per line. Comments inside checked calls receive a positioned
+finding and are preserved; independent safe edits still proceed. Each fix run prints a
+summary and saves its own JSON report under
 `.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest
 Quard check report intact. A clean fix exits 0, remaining violations exit 1, and
 read/parse or configuration failures exit 2. See [PROFILE.md](PROFILE.md#tools-and-scope)

@@ -179,7 +179,7 @@ violations baseline.
   lacks the setting; only the Quard checkout explicitly sets `tuple_signatures = false`
   until after the first stable release. Unknown aliases and unannotated values are
   not inferred. Parse and worker failures exit 2; findings exit 1.
-* **Stairfmt (default-on, optional)**: `ST001`–`ST005` check layout of composed
+* **Stairfmt (default-on, optional)**: `ST001`–`ST009` check layout of composed
   calls in discovered production and test `.py` files, independently of LCOM4
   selection. Companion stubs and calls inside f-strings are not checked. The
   checker preserves its native positioned rule IDs and suggests the separate
@@ -187,7 +187,14 @@ violations baseline.
   each unsupported edit and remaining finding, and archives a fix report separately
   from the check report. `[checks] stairfmt = false` skips the job; only Quard's own
   checkout opts out during source migration. Findings exit 1; read, parse and worker
-  failures exit 2.
+  failures exit 2. Inline comprehensions, single-field dictionaries, lambdas and
+  operators keep calls on their own expression line; `[stairfmt] inline_limit`
+  defaults to 240 characters of expression text. `ST006` requires simplification
+  when that limit or inline layout is exceeded; `ST007` requires simplification
+  when more than one call-bearing branch occurs along a root-to-leaf path.
+  `ST008` positions comments inside checked calls without deleting them, and
+  `ST009` checks multi-field dictionaries and ordinary versus nested container
+  elements.
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and

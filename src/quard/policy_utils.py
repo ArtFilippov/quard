@@ -101,12 +101,25 @@ def read_settings(root: Path) -> dict[str, Any]:
                         + "to migrate existing settings before checking or applying.")
     data = load_toml(path)
     if not {"checks", "readability", "scope"} <= set(data) or set(data) - {
-            "checks", "readability", "scope", "duplication"}:
+            "checks", "readability", "scope", "duplication", "stairfmt"}:
         raise QuardError("INVALID_CONFIG",
                         "config.toml expects [checks], [readability], [scope] and "
-                        + "optional [duplication].")
+                        + "optional [duplication] and [stairfmt].")
     _ = validate_duplication(data.get("duplication", {}))
+    _ = validate_stairfmt(data.get("stairfmt", {}))
     return data
+
+
+def validate_stairfmt(data: object) -> int:
+    if not isinstance(data, dict):
+        raise QuardError("INVALID_STAIRFMT", "[stairfmt] expects inline_limit only.")
+    data = cast(dict[str, Any], data)
+    if set(data) - {"inline_limit"}:
+        raise QuardError("INVALID_STAIRFMT", "[stairfmt] expects inline_limit only.")
+    limit = data.get("inline_limit", 240)
+    if type(limit) is not int or limit < 1:
+        raise QuardError("INVALID_STAIRFMT", "[stairfmt] inline_limit must be a positive integer.")
+    return limit
 
 
 def validate_limits(data: object) -> dict[str, dict[str, int]]:

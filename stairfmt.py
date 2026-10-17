@@ -23,6 +23,7 @@ import ast
 from datetime import datetime, timezone
 import io
 import json
+import re
 import sys
 import tokenize
 import uuid
@@ -33,10 +34,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from quard._common import QuardError, atomic_write, project_dir, repo_lock, write_json
 from quard._policy import discover_files, read_scope
+from quard.policy_utils import read_settings, validate_stairfmt
 
 
 @dataclass(frozen=True)
 class Issue:
+    """One source-positioned Stairfmt layout violation."""
+
     line: int
     col: int
     code: str
@@ -59,6 +63,8 @@ def _roots(tree: ast.AST) -> list[ast.Call]:
         if not isinstance(node, ast.Call) or _under_fstring(node, parents):
             continue
         parent = parents.get(node)
+        if any(_protected(ancestor) for ancestor in _ancestors(node, parents)):
+            continue
         while parent is not None and not isinstance(parent, ast.Call):
             parent = parents.get(parent)
         if parent is None:
@@ -66,30 +72,39 @@ def _roots(tree: ast.AST) -> list[ast.Call]:
     return result
 
 
-def _calls(root: ast.Call) -> list[ast.Call]:
-    # Don't treat calls embedded inside f-strings as separately formattable.
-    result: list[ast.Call] = []
-
-    def walk(node: ast.AST) -> None:
-        if isinstance(node, ast.JoinedStr):
-            return
-        if isinstance(node, ast.Call):
-            result.append(node)
-        for child in ast.iter_child_nodes(node):
-            walk(child)
-
-    walk(root)
+def _ancestors(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> list[ast.AST]:
+    result: list[ast.AST] = []
+    while node in parents:
+        node = parents[node]
+        result.append(node)
     return result
 
 
+def _protected(node: ast.AST) -> bool:
+    return isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp,
+                             ast.GeneratorExp, ast.BinOp, ast.BoolOp, ast.IfExp,
+                             ast.Compare, ast.NamedExpr)) or isinstance(node, ast.Dict) and len(node.keys) == 1
+
+
+def _visible(node: ast.AST) -> list[ast.Call]:
+    if isinstance(node, ast.JoinedStr) or _protected(node):
+        return []
+    return ([node] if isinstance(node, ast.Call) else []) + [call for child in ast.iter_child_nodes(node)
+                                                           for call in _visible(child)]
+
+
 def _has_nested_call(node: ast.AST) -> bool:
-    return any(isinstance(part, ast.Call) for part in ast.walk(node))
+    return bool(_visible(node))
 
 
 def _multiline(node: ast.AST) -> bool:
     return (_has_nested_call(node)
-            or any(isinstance(part, ast.Tuple) and len(part.elts) > 1
-                   for part in ast.walk(node)))
+            or isinstance(node, ast.Tuple) and len(node.elts) > 1
+            or isinstance(node, ast.Dict) and len(node.keys) > 1
+            or isinstance(node, (ast.Tuple, ast.List, ast.Set, ast.Dict))
+            and not _protected(node) and any(
+                isinstance(part, (ast.Tuple, ast.List, ast.Set, ast.Dict)) or _multiline(part)
+                for part in ast.iter_child_nodes(node)))
 
 
 def _first_dot(call: ast.Call) -> bool:
@@ -100,7 +115,7 @@ def _first_dot(call: ast.Call) -> bool:
 
 def _issue_list(root: ast.Call) -> list[Issue]:
     issues: list[Issue] = []
-    calls = _calls(root)
+    calls = _visible(root)
     grouped: dict[int, list[ast.Call]] = {}
     for call in calls:
         # The END position of the callable (rather than Call.lineno) points to
@@ -160,15 +175,88 @@ def _issue_list(root: ast.Call) -> list[Issue]:
     return issues
 
 
-def issues_for(tree: ast.AST) -> list[Issue]:
-    issues = [issue for root in _roots(tree) for issue in _issue_list(root)]
+def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        return []
+    issues: list[Issue] = []
+    length = len(re.sub(r"\s*\n\s*", " ", segment))
+    if length > limit or "\n" in segment:
+        issues.append(Issue(node.lineno, node.col_offset + 1, "ST006",
+                            f"упростите выражение: длина {length} превышает предел {limit} "
+                            if length > limit else "упростите выражение: оно должно быть в одной строке"))
+
+    def bearing(part: ast.AST) -> bool:
+        return (not isinstance(part, ast.JoinedStr)
+                and (isinstance(part, ast.Call) or any(bearing(child) for child in ast.iter_child_nodes(part))))
+
+    def branches(part: ast.AST, count: int) -> bool:
+        if isinstance(part, ast.JoinedStr):
+            return False
+        children = list(ast.iter_child_nodes(part))
+        if sum(bearing(child) for child in children) >= 2:
+            count += 1
+        return count > 1 or any(branches(child, count) for child in children)
+
+    if branches(node, 0):
+        issues.append(Issue(node.lineno, node.col_offset + 1, "ST007",
+                            "упростите выражение: несколько уровней разветвления вызовов"))
+    return issues
+
+
+def _container_issues(node: ast.AST) -> list[Issue]:
+    if isinstance(node, ast.Dict) and len(node.keys) > 1:
+        fields = [key if key is not None else value for key, value in zip(node.keys, node.values)]
+        if len({field.lineno for field in fields}) != len(fields) or node.end_lineno == fields[-1].end_lineno:
+            return [Issue(node.lineno, node.col_offset + 1, "ST009",
+                          "каждое поле словаря должно быть на отдельной строке")]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        children = node.elts
+        for index, child in enumerate(children[1:], 1):
+            nested = (isinstance(child, (ast.List, ast.Tuple, ast.Set, ast.Dict))
+                      or isinstance(children[index - 1], (ast.List, ast.Tuple, ast.Set, ast.Dict))
+                      or _has_nested_call(child) or _has_nested_call(children[index - 1]))
+            if (nested and child.lineno == children[index - 1].lineno or
+                    not nested and child.lineno != children[index - 1].lineno):
+                return [Issue(child.lineno, child.col_offset + 1, "ST009",
+                              "обычные элементы должны делить строку, вызовы и вложенные контейнеры — начинаться с новой")]
+    return []
+
+
+def issues_for(tree: ast.AST, source: str = "", limit: int = 240) -> list[Issue]:
+    issues: list[Issue] = []
+    lines = source.splitlines(keepends=True)
+    for root in _roots(tree):
+        issues.extend(_issue_list(root))
+        if source:
+            start = _index(lines, root.lineno, root.col_offset)
+            end = _index(lines, root.end_lineno, root.end_col_offset)
+            for token in tokenize.generate_tokens(io.StringIO(source).readline):
+                if token.type == tokenize.COMMENT:
+                    pos = _index(lines, token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode("utf-8")))
+                    if start <= pos < end:
+                        issues.append(Issue(token.start[0], token.start[1] + 1, "ST008",
+                                            "комментарий внутри вызова: перенесите его за пределы вызова"))
+            def visit(node: ast.AST) -> None:
+                if isinstance(node, ast.JoinedStr):
+                    return
+                if _protected(node):
+                    issues.extend(_inline_issues(node, source, limit))
+                    return
+                issues.extend(_container_issues(node))
+                for child in ast.iter_child_nodes(node):
+                    visit(child)
+            visit(root)
     return sorted(issues, key=lambda i: (i.line, i.col, i.code))
 
 
 class Renderer:
-    def __init__(self, source: str, indent_size: int) -> None:
+    """Render supported call trees with their inline-expression boundaries."""
+
+    def __init__(self, source: str, indent_size: int, inline_limit: int) -> None:
         self.source = source
         self.step = " " * indent_size
+        self.limit = inline_limit
 
     def segment(self, node: ast.AST) -> str:
         segment = ast.get_source_segment(self.source, node)
@@ -179,10 +267,26 @@ class Renderer:
     def simple(self, node: ast.AST) -> bool:
         return not _has_nested_call(node) and "\n" not in self.segment(node)
 
+    def compact(self, node: ast.AST) -> str:
+        segment = self.segment(node)
+        if "\n" not in segment:
+            return segment
+        if any(isinstance(part, (ast.Constant, ast.JoinedStr))
+               and "\n" in (ast.get_source_segment(self.source, part) or "")
+               for part in ast.walk(node)):
+            return segment
+        return re.sub(r"\s*\n\s*", " ", segment)
+
     def supported_arg(self, arg: ast.AST) -> bool:
+        if _protected(arg):
+            return "\n" not in self.compact(arg) and (
+                len(self.compact(arg)) <= self.limit or "\n" not in self.segment(arg))
         if isinstance(arg, ast.Call):
             return self.supported(arg)
-        if isinstance(arg, ast.Tuple) and self.segment(arg).startswith("("):
+        if isinstance(arg, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
+            if isinstance(arg, ast.Dict):
+                return (all(key is None or self.supported_arg(key) for key in arg.keys)
+                        and all(self.supported_arg(value) for value in arg.values))
             return all(self.supported_arg(item) for item in arg.elts)
         return self.simple(arg)
 
@@ -197,13 +301,28 @@ class Renderer:
                 and all(self.supported_arg(kw.value) for kw in call.keywords))
 
     def render_arg(self, arg: ast.AST, indent: str) -> str:
+        if _protected(arg):
+            return self.compact(arg)
         if isinstance(arg, ast.Call):
             return self.render_call(arg, indent, in_call=True)
-        if isinstance(arg, ast.Tuple) and self.segment(arg).startswith("("):
-            return self.render_values(arg.elts, "", indent, tuple_mode=True)
         if isinstance(arg, ast.keyword):
             prefix = f"{arg.arg}=" if arg.arg is not None else "**"
             return prefix + self.render_arg(arg.value, indent)
+        if isinstance(arg, ast.Dict):
+            if not arg.keys:
+                return "{}"
+            fields = [f"{self.render_arg(key, indent + self.step)}: {self.render_arg(value, indent + self.step)}"
+                      if key is not None else "**" + self.render_arg(value, indent + self.step)
+                      for key, value in zip(arg.keys, arg.values)]
+            return "{\n" + ",\n".join(indent + self.step + field for field in fields) + "\n" + indent + "}"
+        if isinstance(arg, (ast.Tuple, ast.List, ast.Set)):
+            opening, closing = ("(", ")") if isinstance(arg, ast.Tuple) else (
+                ("[", "]") if isinstance(arg, ast.List) else ("{", "}"))
+            if not arg.elts:
+                return opening + closing
+            result = self.render_values(arg.elts, "", indent, tuple_mode=isinstance(arg, ast.Tuple),
+                                        container_mode=True)
+            return opening + result[1:-1] + closing
         return self.segment(arg)
 
     def render_args(self, call: ast.Call, name: str, indent: str) -> str:
@@ -211,13 +330,18 @@ class Renderer:
         return self.render_values(args, name, indent)
 
     def render_values(self, args: Sequence[ast.AST], name: str, indent: str,
-                      tuple_mode: bool = False) -> str:
+                      tuple_mode: bool = False, container_mode: bool = False) -> str:
         if not args:
             return name + "()"
         child_indent = indent + self.step
         values = [self.render_arg(arg, child_indent) for arg in args]
-        force_break = (len(args) > 1 or any(_has_nested_call(arg) or "\n" in value
-                                            for arg, value in zip(args, values)))
+        def separate(arg: ast.AST, value: str) -> bool:
+            return (_has_nested_call(arg) or "\n" in value
+                    or (container_mode or _multiline(arg))
+                    and isinstance(arg, (ast.List, ast.Tuple, ast.Set, ast.Dict)) and not _protected(arg))
+
+        force_break = (len(args) > 1 or any(separate(arg, value)
+                                             for arg, value in zip(args, values)))
         if not force_break:
             return f"{name}({values[0]}{',' if tuple_mode else ''})"
 
@@ -232,20 +356,20 @@ class Renderer:
                 pending.clear()
 
         for index, (arg, value) in enumerate(zip(args, values)):
-            separate = _has_nested_call(arg) or "\n" in value
-            if separate:
+            isolated = separate(arg, value)
+            if isolated:
                 flush()
                 rendered.append(child_indent + value)
             else:
                 pending.append(value)
             # Separate adjacent values; a singleton tuple needs its own comma.
-            if index < len(args) - 1 and separate:
+            if index < len(args) - 1 and isolated:
                 rendered[-1] += ","
             elif index < len(args) - 1:
                 # The comma between simple arguments is supplied by join().
                 # If the next argument is a nested call, add a trailing comma
                 # to the last simple argument on its line instead.
-                if _has_nested_call(args[index + 1]) or "\n" in values[index + 1]:
+                if separate(args[index + 1], values[index + 1]):
                     flush()
                     rendered[-1] += ","
         flush()
@@ -300,44 +424,62 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
     return False
 
 
-def format_source(source: str, indent_size: int = 4) -> tuple[str, list[str]]:
+def format_source(source: str, indent_size: int = 4, inline_limit: int = 240) -> tuple[str, list[str]]:
     tree = ast.parse(source)
-    renderer = Renderer(source, indent_size)
+    renderer = Renderer(source, indent_size, inline_limit)
     lines = source.splitlines(keepends=True)
     edits: list[tuple[int, int, str]] = []
     warnings: list[str] = []
     for root in _roots(tree):
-        if not _issue_list(root):
+        findings = issues_for(root, source, inline_limit)
+        if not findings:
             continue
         start = _index(lines, root.lineno, root.col_offset)
         end = _index(lines, root.end_lineno, root.end_col_offset)
-        if _has_comments(source, start, end, lines):
+        blocked = _has_comments(source, start, end, lines)
+        if blocked:
             warnings.append(f"{root.lineno}: пропущено: комментарий внутри вызова")
-            continue
-        if not renderer.supported(root):
-            warnings.append(f"{root.lineno}: пропущено: сложное выражение внутри вызова")
-            continue
-        indent = _leading_indent(lines[root.lineno - 1])
-        if "\t" in indent:
-            warnings.append(f"{root.lineno}: пропущено: табуляция вместо пробелов")
-            continue
-        try:
-            replacement = renderer.render_call(root, indent)
-        except ValueError as e:
-            warnings.append(f"{root.lineno}: пропущено: {e}")
-            continue
-        edits.append((start, end, replacement))
+
+        def collect(call: ast.Call) -> None:
+            left = _index(lines, call.lineno, call.col_offset)
+            right = _index(lines, call.end_lineno, call.end_col_offset)
+            if (any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009"}
+                    or issue.code == "ST006" and "одной строке" in issue.message
+                    for issue in issues_for(call, source, inline_limit))
+                    and not _has_comments(source, left, right, lines)
+                    and renderer.supported(call)):
+                indent = _leading_indent(lines[call.lineno - 1])
+                if "\t" not in indent:
+                    try:
+                        edits.append((left, right, renderer.render_call(call, indent)))
+                        return
+                    except ValueError:
+                        pass
+            for child in _visible(call)[1:]:
+                if child is not call and not any(
+                    left <= edit[0] < right for edit in edits):
+                    collect(child)
+
+        if blocked or not renderer.supported(root):
+            if not blocked:
+                warnings.append(f"{root.lineno}: пропущено: сложное выражение внутри вызова")
+            for child in _visible(root)[1:]:
+                if not any(start <= edit[0] < end for edit in edits):
+                    collect(child)
+        else:
+            collect(root)
 
     formatted = source
+    # Test each edit independently so an unsafe branch cannot undo safe peers.
     for start, end, replacement in sorted(edits, reverse=True):
-        formatted = formatted[:start] + replacement + formatted[end:]
-
-    # Last line of defense: never silently change the AST.
-    try:
-        if ast.dump(ast.parse(formatted), include_attributes=False) != ast.dump(tree, include_attributes=False):
-            return source, ["изменение отменено: результат меняет структуру AST"]
-    except SyntaxError:
-        return source, ["изменение отменено: результат синтаксически некорректен"]
+        candidate = formatted[:start] + replacement + formatted[end:]
+        try:
+            if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
+                formatted = candidate
+            else:
+                warnings.append("изменение отменено: результат меняет структуру AST")
+        except SyntaxError:
+            warnings.append("изменение отменено: результат синтаксически некорректен")
     return formatted, warnings
 
 
@@ -363,6 +505,8 @@ def _paths(root: Path, inputs: list[str]) -> list[Path]:
 
 
 def _advice(reason: str) -> str:
+    if "упростите выражение" in reason:
+        return "Упростите выражение: сократите его длину или разделите разветвления вызовов."
     if "комментарий внутри вызова" in reason:
         return "Перенесите комментарий за пределы вызова или расставьте вызовы вручную."
     if "сложное выражение" in reason:
@@ -372,7 +516,7 @@ def _advice(reason: str) -> str:
     return "Расставьте вызовы вручную и повторите --fix."
 
 
-def _report(root: Path, paths: list[Path], fix: bool, indent: int) -> dict[str, object]:
+def _report(root: Path, paths: list[Path], fix: bool, indent: int, limit: int) -> dict[str, object]:
     changed: list[str] = []
     remaining: list[dict[str, object]] = []
     warnings: list[dict[str, object]] = []
@@ -383,7 +527,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int) -> dict[str, 
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=name)
             if fix:
-                formatted, skipped = format_source(source, indent)
+                formatted, skipped = format_source(source, indent, limit)
                 for warning in skipped:
                     position, separator, reason = warning.partition(": ")
                     warnings.append({"path": name, "line": int(position) if separator and
@@ -395,7 +539,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int) -> dict[str, 
                 tree = ast.parse(formatted, filename=name)
             remaining.extend({"path": name, "line": issue.line, "column": issue.col,
                               "rule": issue.code, "message": issue.message,
-                              "suggestion": _advice(issue.message)} for issue in issues_for(tree))
+                               "suggestion": _advice(issue.message)} for issue in issues_for(tree, formatted if fix else source, limit))
         except (OSError, UnicodeError, SyntaxError, ValueError, TypeError, IndexError) as exc:
             errors.append({"path": name, "message": str(exc),
                            "suggestion": "Исправьте файл или доступ к нему и повторите --fix."})
@@ -437,7 +581,8 @@ def main(argv: list[str] | None = None) -> int:
         with repo_lock(root):
             try:
                 paths = _paths(root, args.paths)
-                report = _report(root, paths, args.fix, args.indent)
+                limit = validate_stairfmt(read_settings(root).get("stairfmt", {}))
+                report = _report(root, paths, args.fix, args.indent, limit)
             except (QuardError, OSError, UnicodeError, ValueError) as exc:
                 report = {"schema_version": "quard-stairfmt-fix/v1", "status": "error",
                           "exit_code": 2, "changed_files": [], "remaining": [], "warnings": [],
