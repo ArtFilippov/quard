@@ -76,6 +76,13 @@ class TestStairfmtStrings(unittest.TestCase):
                           self.formatted(fixed)[0] == fixed),
                          ([('ST011', 1), ('ST011', 2), ('ST011', 2)], True, [], True))
 
+    def test_two_long_literals_in_separate_statements_are_fixed(self):
+        source = 'first = "' + 'a' * 161 + '"\nsecond = "' + 'b' * 161 + '"\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['exit_code'], report['remaining'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (0, [], True))
+
     def test_enabled_job_reports_long_literal_without_calls(self):
         self.put('value = "' + 'a word ' * 26 + '"\n')
         files = discover_files(self.root, read_scope(self.root))

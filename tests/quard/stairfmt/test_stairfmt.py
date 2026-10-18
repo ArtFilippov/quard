@@ -300,6 +300,21 @@ def run(path, self, test, populations):
                           for source, (fixed, report) in zip(sources, results)],
                          [(True, [], [], True)] * 4)
 
+    def test_unparenthesized_binary_converges_in_one_pass(self):
+        source = 'x = g(1, 2) + h(3, 4)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], self.formatted(fixed)[0] == fixed), ([], True))
+
+    def test_subscripted_binary_converges_in_one_pass(self):
+        source = 'x = (f(g(1, 2)[0]) + h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], self.formatted(fixed)[0] == fixed), ([], True))
+
+    def test_keyword_binary_converges_in_one_pass(self):
+        source = 'x = f(key=g(1, 2) + h(3), other=0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], self.formatted(fixed)[0] == fixed), ([], True))
+
     def test_noncanonical_binary_break_has_st012_not_sibling_st001(self):
         source = 'x = (g(1) +\n     h(2))\n'
         self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], ['ST012'])
@@ -340,6 +355,24 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           '"rate": state[4].get_last_lr()[0]' in fixed,
                           self.formatted(fixed)[0] == fixed), ([], [], True, True))
+
+    def test_nested_call_under_subscript_is_fixed(self):
+        source = 'x = f(g(1, 2)[0], 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0] == fixed), ([], [], True))
+
+    def test_nested_call_under_attribute_is_fixed(self):
+        source = 'x = f(g(1, 2).attr, 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0] == fixed), ([], [], True))
+
+    def test_multifield_dictionary_inside_single_field_dictionary_is_fixed(self):
+        source = 'x = f({"a": {"x": 1, "y": 2}})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0] == fixed), ([], [], True))
 
     def test_comprehension_clauses_and_filter_follow_expanded_dictionary(self):
         source = ('x = f([{"a": item.name(), "b": 2} for group in groups '

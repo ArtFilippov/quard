@@ -324,7 +324,8 @@ Remove the retired `max_line_length` setting from any existing
 `.quard/config.toml` and run `apply.py`: until then install, apply and check reject
 the configuration with exit 2. No automatic migration is performed. See
 [ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
-Simple comprehensions, single-field dictionaries and lambda expressions remain inline;
+Simple comprehensions, single-field dictionaries without nested multi-field dictionaries,
+and lambda expressions remain inline;
 their calls do not trigger staircase layout findings. Multi-field dictionaries expand
 even within comprehensions: each field starts on its own line. For an expanded
 dictionary key, the first `for` stays with the element, subsequent `for` clauses

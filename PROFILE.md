@@ -187,10 +187,11 @@ violations baseline.
   each unsupported edit and remaining finding, and archives a fix report separately
   from the check report. `[checks] stairfmt = false` skips the job; only Quard's own
   checkout opts out during source migration. Findings exit 1; read, parse and worker
-  failures exit 2. Simple comprehensions, single-field dictionaries and lambdas
-  keep calls inline; multi-field dictionaries expand even inside comprehensions,
-  with successive `for` clauses on separate lines and filters inline. An expanded
-  dictionary key keeps its first `for` with the element and indents subsequent
+  failures exit 2. Simple comprehensions, single-field dictionaries without nested
+  multi-field dictionaries and lambdas keep calls inline; multi-field dictionaries
+  expand even inside comprehensions, with successive `for` clauses on separate
+  lines and filters inline. An expanded dictionary key keeps its first `for` with
+  the element and indents subsequent
   clauses four spaces deeper each time; expanded values retain their existing
   own-line clause layout. Binary call operands follow the same layout inside and
   outside calls while retaining original outer parentheses; sibling operands do

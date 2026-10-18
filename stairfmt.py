@@ -85,7 +85,9 @@ def _ancestors(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> list[ast.AST]:
 def _protected(node: ast.AST) -> bool:
     return isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp,
                              ast.GeneratorExp, ast.BoolOp, ast.IfExp,
-                             ast.Compare, ast.NamedExpr)) or isinstance(node, ast.Dict) and len(node.keys) == 1
+                             ast.Compare, ast.NamedExpr)) or (isinstance(node, ast.Dict)
+                                                              and len(node.keys) == 1
+                                                              and not _structured(node))
 
 
 def _visible(node: ast.AST) -> list[ast.Call]:
@@ -358,12 +360,13 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                     if start <= pos < end:
                         issues.append(Issue(token.start[0], token.start[1] + 1, "ST008",
                                             "комментарий внутри вызова: перенесите его за пределы вызова"))
-            def visit(node: ast.AST) -> None:
+            def visit(node: ast.AST, parent: ast.AST) -> None:
                 if isinstance(node, ast.JoinedStr):
                     return
                 if _protected(node):
                     if not _structured(node):
-                        layout = _layout_issues(node, source, inline_limit)
+                        layout = _layout_issues(node, source, inline_limit,
+                                                _leading_indent(lines[node.lineno - 1]))
                         issues.extend(issue for issue in _inline_issues(node, source, inline_limit)
                                       if not layout or issue.code != "ST006"
                                       or "длина" in issue.message)
@@ -375,15 +378,19 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                         for part in ast.walk(node):
                             if isinstance(part, ast.Dict):
                                 issues.extend(_container_issues(part))
-                        issues.extend(_layout_issues(node, source, inline_limit))
+                        issues.extend(_layout_issues(node, source, inline_limit,
+                                                     _leading_indent(lines[node.lineno - 1])))
                     return
                 if isinstance(node, ast.BinOp):
                     issues.extend(_inline_issues(node, source, inline_limit))
-                    issues.extend(_layout_issues(node, source, inline_limit))
+                    indent = (_leading_indent(lines[node.lineno - 1])
+                              if isinstance(parent, (ast.keyword, ast.Dict))
+                              else " " * node.col_offset)
+                    issues.extend(_layout_issues(node, source, inline_limit, indent))
                 issues.extend(_container_issues(node))
                 for child in ast.iter_child_nodes(node):
-                    visit(child)
-            visit(root)
+                    visit(child, node)
+            visit(root, root)
     if isinstance(tree, ast.Module):
         parents = {child: parent for parent in ast.walk(tree)
                    for child in ast.iter_child_nodes(parent)}
@@ -393,7 +400,8 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                     for part in _ancestors(node, parents)):
                 continue
             issues.extend(_inline_issues(node, source, inline_limit))
-            issues.extend(_layout_issues(node, source, inline_limit))
+            issues.extend(_layout_issues(node, source, inline_limit,
+                                         " " * node.col_offset))
     return sorted(issues, key=lambda i: (i.line, i.col, i.code))
 
 
@@ -437,6 +445,9 @@ class Renderer:
         if isinstance(arg, ast.Call):
             return self.supported(arg)
         if isinstance(arg, (ast.Subscript, ast.Attribute)):
+            if _has_nested_call(arg):
+                return (_has_nested_call(arg.value) and self.supported_arg(arg.value)
+                        and (isinstance(arg, ast.Attribute) or self.simple(arg.slice)))
             return "\n" not in self.segment(arg)
         if isinstance(arg, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
             if isinstance(arg, ast.Dict):
@@ -464,6 +475,14 @@ class Renderer:
             return self.compact(arg)
         if isinstance(arg, ast.Call):
             return self.render_call(arg, indent, in_call=True)
+        if isinstance(arg, (ast.Subscript, ast.Attribute)) and _has_nested_call(arg.value):
+            lines = self.source.splitlines(keepends=True)
+            left = _index(lines, arg.lineno, arg.col_offset)
+            start = _index(lines, arg.value.lineno, arg.value.col_offset)
+            end = _index(lines, arg.value.end_lineno, arg.value.end_col_offset)
+            right = _index(lines, arg.end_lineno, arg.end_col_offset)
+            return (self.source[left:start] + self.render_arg(arg.value, indent)
+                    + self.source[end:right])
         if isinstance(arg, ast.keyword):
             prefix = f"{arg.arg}=" if arg.arg is not None else "**"
             return prefix + self.render_arg(arg.value, indent)
@@ -635,7 +654,7 @@ class Renderer:
         return "(\n" + chain_indent + output + "\n" + indent + ")"
 
 
-def _layout_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
+def _layout_issues(node: ast.AST, source: str, limit: int, indent: str) -> list[Issue]:
     lines = source.splitlines(keepends=True)
     left = _index(lines, node.lineno, node.col_offset)
     right = _index(lines, node.end_lineno, node.end_col_offset)
@@ -644,8 +663,6 @@ def _layout_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
     renderer = Renderer(source, 4, limit)
     if not renderer.supported_arg(node):
         return []
-    indent = (" " * node.col_offset if isinstance(node, ast.BinOp)
-              else _leading_indent(lines[node.lineno - 1]))
     try:
         expected = renderer.render_arg(node, indent)
         if (_without_endings(source[left:right]) == _without_endings(expected)
@@ -790,7 +807,9 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                     if token.type == tokenize.STRING and start <= _index(
                         lines, token.start[0], len(lines[token.start[0] - 1][
                             :token.start[1]].encode("utf-8"))) < end]
-        pieces = [_pieces(token.string, string_limit) if token in tokens else [token.string]
+        pieces = [_pieces(token.string, string_limit) if any(
+            token.start == selected.start and token.string == selected.string
+            for selected in tokens) else [token.string]
                   for token in literals]
         if any(not part for part in pieces):
             warnings.append(f"{node.lineno}: пропущено: нет безопасной границы для строкового литерала")
@@ -803,6 +822,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         try:
             if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
                 source = candidate
+                lines = source.splitlines(keepends=True)
             else:
                 warnings.append(f"{node.lineno}: пропущено: перенос меняет структуру AST")
         except SyntaxError:
@@ -830,7 +850,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                 try:
                     _ = ast.parse(source[:left] + replacement + source[right:])
                 except SyntaxError:
-                    replacement = "(" + replacement + ")"
+                    replacement = "(" + renderer.render_arg(node, " " * (node.col_offset + 1)) + ")"
                 edits.append((left, right, _local_endings(source, left, right, replacement)))
         except (SyntaxError, ValueError) as exc:
             warnings.append(f"{node.lineno}: пропущено: {exc}")
