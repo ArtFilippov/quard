@@ -968,6 +968,8 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
 def _display(report: dict[str, object]) -> None:
     print(f"STAIRFMT {str(report['status']).upper()}: изменено {len(report['changed_files'])}; "
           f"осталось {len(report['remaining'])} нарушений, {len(report['errors'])} ошибок")
+    for path in report["changed_files"]:
+        print(f"CHANGED: {path}")
     for warning in report["warnings"]:
         print(f"{warning['path']}:{warning['line'] or '?'}: {warning['reason']} — "
               f"{warning['suggestion']}")
@@ -1008,8 +1010,25 @@ def main(argv: list[str] | None = None) -> int:
                 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
                 archive = root / ".quard/reports/stairfmt" / f"{run_id}.json"
                 report["report_path"] = archive.relative_to(root).as_posix()
-                write_json(archive, report, root)
-                write_json(root / ".quard/reports/stairfmt/latest.json", report, root)
+                try:
+                    write_json(archive, report, root)
+                except (QuardError, OSError, UnicodeError, ValueError) as exc:
+                    del report["report_path"]
+                    report["status"] = "error"
+                    report["exit_code"] = 2
+                    report["errors"].append({"path": archive.relative_to(root).as_posix(),
+                                             "message": f"Не удалось сохранить архив отчёта: {exc}",
+                                             "suggestion": "Проверьте хранилище отчётов и повторите команду."})
+                else:
+                    latest = root / ".quard/reports/stairfmt/latest.json"
+                    try:
+                        write_json(latest, report, root)
+                    except (QuardError, OSError, UnicodeError, ValueError) as exc:
+                        report["status"] = "error"
+                        report["exit_code"] = 2
+                        report["errors"].append({"path": latest.relative_to(root).as_posix(),
+                                                 "message": f"latest.json не обновлён: {exc}",
+                                                 "suggestion": "Используйте архив отчёта и проверьте хранилище."})
     except (QuardError, OSError, UnicodeError, ValueError) as exc:
         report = {"schema_version": "quard-stairfmt-fix/v1", "status": "error", "exit_code": 2,
                   "changed_files": [], "remaining": [], "warnings": [],

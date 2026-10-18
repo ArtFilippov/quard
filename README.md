@@ -344,7 +344,12 @@ finding and are preserved; independent safe edits still proceed. Each fix run pr
 summary and saves its own JSON report under
 `.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest
 Quard check report intact. A clean fix exits 0, remaining violations exit 1, and
-read/parse or configuration failures exit 2. See [PROFILE.md](PROFILE.md#tools-and-scope)
+read/parse, configuration or report-storage failures exit 2. If report storage fails
+after edits, the edits remain and the command lists the changed files. An archive
+failure leaves no `report_path` in the output; a `latest.json` update failure keeps
+the usable `report_path` and explicitly reports that latest was not updated. The
+archive describes the fix result before that latest-update failure, while the command
+exits 2. See [PROFILE.md](PROFILE.md#tools-and-scope)
 for rule scope.
 
 Set `[stairfmt] string_limit = 160` to change the independent default limit for

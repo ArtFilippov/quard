@@ -449,6 +449,41 @@ def run(path, self, test, populations):
         self.assertEqual((command.returncode, report["exit_code"],
                           (self.root / report["report_path"]).is_file()), (0, 0, True))
 
+    def test_archive_failure_keeps_applied_edits_and_reports_storage_error(self):
+        self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
+        directory = self.root / ".quard/reports"
+        directory.mkdir(parents=True)
+        (directory / "stairfmt").write_bytes(b"blocked archive")
+        command = subprocess.run([sys.executable, "-B", str(QUARD / "stairfmt.py"), "--fix",
+                                  "--project", str(self.root), "--json", "src/demo/working.py"],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        report = json.loads(command.stdout)
+        self.assertEqual((command.returncode, report["exit_code"], report["status"],
+                          report["changed_files"], "report_path" in report,
+                          "архив" in report["errors"][-1]["message"].lower(),
+                          (directory / "stairfmt").read_bytes(),
+                          (self.root / "src/demo/working.py").read_bytes()),
+                         (2, 2, "error", ["src/demo/working.py"], False, True,
+                          b"blocked archive", b"x = f(\n    g(1),\n    h(2)\n)\n"))
+
+    def test_latest_failure_keeps_applied_edits_and_usable_archive(self):
+        self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
+        directory = self.root / ".quard/reports/stairfmt"
+        (directory / "latest.json").mkdir(parents=True)
+        command = subprocess.run([sys.executable, "-B", str(QUARD / "stairfmt.py"), "--fix",
+                                  "--project", str(self.root), "src/demo/working.py"],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        archives = [path for path in directory.glob("*.json") if path.is_file()]
+        report = json.loads(archives[0].read_text(encoding="utf-8")) if archives else {}
+        self.assertEqual((command.returncode, "CHANGED: src/demo/working.py" in command.stdout,
+                          "latest.json" in command.stdout, "не обновл" in command.stdout,
+                          f"REPORT: {report.get('report_path')}" in command.stdout,
+                          report.get("changed_files"), report.get("exit_code"),
+                          len(archives), (directory / "latest.json").is_dir(),
+                          (self.root / "src/demo/working.py").read_bytes()),
+                         (2, True, True, True, True, ["src/demo/working.py"], 0, 1, True,
+                          b"x = f(\n    g(1),\n    h(2)\n)\n"))
+
     def test_fix_reports_parse_failure_without_hiding_peer_edits(self):
         self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
         self.put("src/demo/broken.py", "def x(:\n")
