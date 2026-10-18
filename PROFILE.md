@@ -197,15 +197,18 @@ violations baseline.
   outside calls while retaining original outer parentheses; sibling operands do
   not raise `ST001`. A simple argument may share the final line of a multiline
   binary operand. `[stairfmt] inline_limit` defaults to 240 characters per
-  expression line. `ST006` requires simplification when that limit or an unfixable
+  protected inline or binary expression line, not simple calls or identifiers.
+  `ST006` requires simplification when that limit or an unfixable
   inline layout is exceeded; `ST007` requires simplification
   when more than one call-bearing branch occurs along a root-to-leaf path.
-  `ST008` positions comments inside checked calls without deleting them, and
+  `ST008` positions comments inside checked calls without deleting them; fix skips
+  an unsafe edit with a warning even when bare CR precedes the call.
   `ST009` checks multi-field dictionaries and ordinary versus nested container
   elements. `ST012` identifies fixable noncanonical breaks. Fix applies independent
   safe layout edits even when `ST006` or `ST007` remains.
-  `ST010` checks noncanonical indentation, including tabs and form feeds, on all
-  selected `.py` lines, even without calls. Fix uses four spaces for block
+  `ST010` checks block indentation across selected `.py` files and supported call
+  continuations, including tabs and form feeds; space-only continuations in lists
+  and function signatures are outside its scope. Fix uses four spaces for block
   indentation and preserves tabs in string and comment text. Both check and fix
   reject `--indent` values other than 4
   before editing (exit 2).

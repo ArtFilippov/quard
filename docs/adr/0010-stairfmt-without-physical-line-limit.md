@@ -1,8 +1,9 @@
 # Let Stairfmt own supported layout without a physical-line limit
 
 Stairfmt formats composed calls, block indentation and eligible ordinary string
-literals; its `inline_limit` measures expression text and its `string_limit`
-measures visible literal content. Protected inline expressions, comments, calls
+literals; its `inline_limit` measures supported protected inline and binary
+expression text, not simple calls, and its `string_limit` measures visible literal
+content. Protected inline expressions, comments, calls
 inside f-strings, stubs and excluded literal kinds do not all receive a width
 rewrite. A universal physical-line limit would flag these deliberately unchanged
 lines and conflict with safe, AST-preserving formatting.

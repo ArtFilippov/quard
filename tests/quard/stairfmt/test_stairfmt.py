@@ -648,6 +648,25 @@ def run(path, self, test, populations):
         self.assertEqual((code, report['remaining'], path.read_bytes()),
                           (0, [], b'before = 1\rvalue = f(\n    g(1),\n    h(2)\n)\n'))
 
+    def test_bare_cr_inside_call_comment_blocks_fix_with_warning(self):
+        path = self.root / 'src/demo/working.py'
+        source = b'a=0\rx=f(1, #keep\r 2)\r'
+        path.write_bytes(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, path.read_bytes(), report['changed_files'],
+                          [item['rule'] for item in report['remaining']],
+                          [item['reason'] for item in report['warnings']]),
+                         (1, source, [], ['ST002', 'ST008', 'ST010', 'ST004'],
+                          ['пропущено: комментарий внутри вызова']))
+
+    def test_bare_cr_type_ignore_inside_call_is_preserved(self):
+        path = self.root / 'src/demo/working.py'
+        source = b'a=0\rx=f(1, # type: ignore\r 2)\r'
+        path.write_bytes(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, path.read_bytes(), report['changed_files'],
+                          len(report['warnings'])), (1, source, [], 1))
+
     def test_mixed_endings_string_split_keeps_neighboring_endings(self):
         path = self.root / 'src/demo/working.py'
         source = b'# LF stays\nvalue = "' + b'a word ' * 26 + b'"\r\n# LF remains\n'

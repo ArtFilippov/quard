@@ -434,12 +434,11 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                               for issue in _call_indent_issues(call, lines, parents))
             start = _index(lines, root.lineno, root.col_offset)
             end = _index(lines, root.end_lineno, root.end_col_offset)
-            for token in tokenize.generate_tokens(io.StringIO(source).readline):
-                if token.type == tokenize.COMMENT:
-                    pos = _index(lines, token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode("utf-8")))
-                    if start <= pos < end:
-                        issues.append(Issue(token.start[0], token.start[1] + 1, "ST008",
-                                            "комментарий внутри вызова: перенесите его за пределы вызова"))
+            for token in _comment_tokens(source):
+                pos = _index(lines, token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode("utf-8")))
+                if start <= pos < end:
+                    issues.append(Issue(token.start[0], token.start[1] + 1, "ST008",
+                                        "комментарий внутри вызова: перенесите его за пределы вызова"))
             def visit(node: ast.AST, parent: ast.AST) -> None:
                 if _interpolated(node):
                     return
@@ -901,13 +900,19 @@ def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
     return issues, "".join(lines)
 
 
+def _comment_tokens(source: str) -> list[tokenize.TokenInfo]:
+    """Match AST line positions when Python source uses bare carriage returns."""
+    normalized = re.sub(r"\r(?!\n)", "\n", source)
+    return [token for token in tokenize.generate_tokens(io.StringIO(normalized).readline)
+            if token.type == tokenize.COMMENT]
+
+
 def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
     try:
-        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
-            if tok.type == tokenize.COMMENT:
-                pos = _index(lines, tok.start[0], len(lines[tok.start[0] - 1][:tok.start[1]].encode("utf-8")))
-                if start <= pos < end:
-                    return True
+        for token in _comment_tokens(source):
+            pos = _index(lines, token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode("utf-8")))
+            if start <= pos < end:
+                return True
     except tokenize.TokenError:
         return True
     return False

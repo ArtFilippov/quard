@@ -314,11 +314,12 @@ From the consumer root, run `python quard/stairfmt.py --fix --project .` to form
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
-An empty `.py` scope passes with zero checked files. `ST010` detects noncanonical
-indentation, including tabs and form feeds, independently of call layout. Fix
-normalizes block indentation to four spaces, including files without calls,
-while leaving tabs inside literals and comments
-untouched. `--indent` accepts only 4; other widths fail with exit 2 before source
+An empty `.py` scope passes with zero checked files. `ST010` checks block
+indentation and supported call continuations, including tabs and form feeds.
+Fix normalizes block indentation to four spaces, including files without calls,
+while leaving tabs inside literals and comment text untouched. Space-only
+continuations in lists and function signatures are outside `ST010`'s scope.
+`--indent` accepts only 4; other widths fail with exit 2 before source
 edits, in both check and fix.
 Pylint's physical `line-too-long` (C0301) check is disabled in both profiles;
 `max_module_lines` and unrelated native checks remain active. Stairfmt governs its
@@ -339,12 +340,15 @@ operands do not trigger `ST001`. A simple argument after
 a multiline binary expression may share its final line. `ST012` identifies fixable
 noncanonical expression breaks.
 Set `[stairfmt] inline_limit = 240` in `.quard/config.toml` to change the default
-expression-line limit. An over-limit expression line (`ST006`) or a second call-bearing
-branch along one path (`ST007`) receives simplify-expression advice independently of
-safe layout fixes. Ordinary container elements share a line, nested containers start
+limit for protected inline and binary expression lines; simple calls and identifiers
+are not checked against it. An over-limit supported expression line (`ST006`)
+or a second call-bearing branch along one path (`ST007`) receives
+simplify-expression advice independently of safe layout fixes. Ordinary container
+elements share a line, nested containers start
 new lines, and multi-field dictionaries use one field per line. Comments inside checked
-calls receive a positioned
-finding and are preserved; independent safe edits still proceed. Each fix run prints a
+calls receive a positioned finding and are preserved; unsafe call edits are skipped
+with a warning, including when bare CR precedes the call. Independent safe edits
+still proceed. Each fix run prints a
 summary and saves its own JSON report under
 `.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest
 Quard check report intact. A clean fix exits 0, remaining violations exit 1, and
