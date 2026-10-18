@@ -316,8 +316,9 @@ the same discovered, non-excluded `.py` files. Explicit file or directory argume
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
 An empty `.py` scope passes with zero checked files. `ST010` checks block
-indentation and supported call continuations, including tabs and form feeds.
-Fix normalizes block indentation to four spaces, including files without calls,
+indentation, supported call continuations, and separate fields and closers of
+multi-field dictionaries, including tabs and form feeds. Fix normalizes block
+indentation to four spaces, including files without calls,
 while leaving tabs inside literals and comment text untouched. Space-only
 continuations in lists and function signatures are outside `ST010`'s scope.
 `--indent` accepts only 4; other widths fail with exit 2 before source
@@ -332,8 +333,10 @@ the configuration with exit 2. No automatic migration is performed. See
 Simple comprehensions, single-field dictionaries without nested multi-field dictionaries,
 and lambda expressions remain inline; their calls do not trigger staircase layout
 findings. Multi-field dictionaries expand even outside calls and within comprehensions:
-each field starts on its own line. For an expanded
-dictionary key, the first `for` stays with the element, subsequent `for` clauses
+each field starts on its own line, four spaces deeper than the opening line;
+the closing brace aligns with that line. Indentation-only fixes preserve comments
+on their source lines. For an expanded dictionary key, the first `for` stays with
+the element, subsequent `for` clauses
 increase indentation by four spaces each, and filters stay with their clause.
 Expanded values retain their own-line clauses. Binary call operands use the same
 layout inside and outside calls, retaining original outer parentheses; sibling

@@ -426,7 +426,10 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
     parents = {child: parent for parent in ast.walk(tree)
                for child in ast.iter_child_nodes(parent)}
     if source and isinstance(tree, ast.Module):
-        issues.extend(_indentation(source, 4)[0])
+        indentation, _ = _indentation(source, 4)
+        issues.extend(indentation)
+        issues.extend(issue for issue in _dictionary_indentation(tree, source)[0]
+                      if issue.line not in {item.line for item in indentation})
         issues.extend(issue for issue, _, _ in _strings(tree, source, string_limit))
     for root in _roots(tree):
         issues.extend(_issue_list(root, lines))
@@ -901,6 +904,42 @@ def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
     return issues, "".join(lines)
 
 
+def _dictionary_indentation(tree: ast.AST, source: str) -> tuple[list[Issue], str]:
+    """Align separate fields and closers with each multi-field dictionary's opening line."""
+    original = _lines(source)
+    lines = original.copy()
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    issues: list[Issue] = []
+    for node in ast.walk(tree):
+        if (not isinstance(node, ast.Dict) or len(node.keys) < 2
+                or _under_interpolation(node, parents)):
+            continue
+        fields = [key if key is not None else value for key, value in zip(node.keys, node.values)]
+        if (fields[0].lineno <= node.lineno
+                or any(field.lineno <= _end_line(node.values[index - 1])
+                       for index, field in enumerate(fields[1:], 1))
+                or node.end_lineno <= _end_line(node.values[-1])
+                or _without_endings(original[node.lineno - 1])[
+                    _column(original, node.lineno, node.col_offset):].strip().split("#", 1)[0]):
+            continue
+        indent = _leading_indent(lines[node.lineno - 1])
+        numbers = []
+        for index, field in enumerate(fields):
+            start = node.lineno if index == 0 else _end_line(node.values[index - 1])
+            numbers.append(next(number for number in range(start + 1, field.lineno + 1)
+                                if lines[number - 1].strip()
+                                and not lines[number - 1].lstrip().startswith("#")))
+        for number, expected in ([(number, indent + "    ") for number in numbers]
+                                 + [(node.end_lineno, indent)]):
+            line = lines[number - 1]
+            prefix = _leading_indent(line)
+            if prefix != expected:
+                issues.append(Issue(number, 1, "ST010", "неканонический отступ поля или скобки словаря"))
+                lines[number - 1] = expected + line[len(prefix):]
+    return issues, "".join(lines)
+
+
 def _comment_tokens(source: str) -> list[tokenize.TokenInfo]:
     """Match AST line positions when Python source uses bare carriage returns."""
     normalized = re.sub(r"\r(?!\n)", "\n", source)
@@ -1107,7 +1146,11 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                 warnings.append(f"{node.lineno}: пропущено: перенос меняет структуру AST")
         except SyntaxError:
             warnings.append(f"{node.lineno}: пропущено: нет безопасного синтаксического переноса строки")
-    return source, warnings
+    indented = _dictionary_indentation(ast.parse(source), source)[1]
+    if (indented != source and ast.dump(ast.parse(indented), include_attributes=False)
+            != ast.dump(ast.parse(source), include_attributes=False)):
+        raise ValueError("нормализация отступов словаря меняет структуру AST")
+    return indented, warnings
 
 
 def _paths(root: Path, inputs: list[str]) -> list[Path]:

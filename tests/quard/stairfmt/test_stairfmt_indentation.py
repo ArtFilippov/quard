@@ -119,6 +119,52 @@ class TestStairfmtIndentation(unittest.TestCase):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          ([3], 0, [], True))
 
+    def test_multifield_dictionary_fields_and_closer_have_canonical_indentation(self):
+        source = 'data = {\n  "a": 1,  # keep\n    "b": 2\n  }\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        again, repeat = self.run_fix('src/demo/working.py')
+        self.assertEqual(([(item['rule'], item['line']) for item in found['remaining']],
+                          code, report['remaining'], report['warnings'], fixed,
+                          again, repeat['changed_files']),
+                         ([('ST010', 2), ('ST010', 4)], 0, [], [],
+                          'data = {\n    "a": 1,  # keep\n    "b": 2\n}\n', 0, []))
+
+    def test_nested_dictionary_indentation_converges_in_one_pass(self):
+        source = ('if ready:\n    data = {\n      "a": {\n        "x": 1,\n'
+                  '         "y": 2\n      },\n      "b": 3\n    }\n')
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        again, repeat = self.run_fix('src/demo/working.py')
+        self.assertEqual(([(item['rule'], item['line']) for item in found['remaining']],
+                          code, report['remaining'], fixed, again, repeat['changed_files']),
+                         ([('ST010', number) for number in (3, 4, 5, 6, 7)], 0, [],
+                          'if ready:\n    data = {\n        "a": {\n            "x": 1,\n'
+                          '            "y": 2\n        },\n        "b": 3\n    }\n', 0, []))
+
+    def test_single_field_dictionary_remains_outside_indent_rule(self):
+        source = 'data = {\n  "a": 1\n  }\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        self.assertEqual((found['remaining'], code, report['changed_files']), ([], 0, []))
+
+    def test_tabbed_dictionary_field_has_one_indentation_finding(self):
+        found = self.checked('data = {\n\t"a": 1,\n    "b": 2\n}\n')
+        self.assertEqual([(item['rule'], item['line']) for item in found['remaining']],
+                         [('ST010', 2)])
+
+    def test_parenthesized_dictionary_key_aligns_its_field_not_its_contents(self):
+        source = 'data = {\n  # keep\n  (\n    "a"\n  ): 1,\n  "b": 2\n}\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        self.assertEqual(([(item['rule'], item['line']) for item in found['remaining']],
+                          code, report['remaining'], fixed),
+                         ([('ST010', 3), ('ST010', 6)], 0, [],
+                          'data = {\n  # keep\n    (\n    "a"\n  ): 1,\n    "b": 2\n}\n'))
+
     def test_form_feed_and_tab_in_indent_are_reported_and_removed(self):
         source = 'if True:\n\f\tvalue = 1\n'
         found = self.checked(source)

@@ -208,8 +208,9 @@ violations baseline.
   container elements inside calls. Standalone dictionary fixes preserve comments by
   skipping unsafe edits with a warning. `ST012` identifies fixable noncanonical
   breaks. Fix applies independent safe layout edits even when `ST006` or `ST007` remains.
-  `ST010` checks block indentation across selected `.py` files and supported call
-  continuations, including tabs and form feeds; space-only continuations in lists
+  `ST010` checks block indentation across selected `.py` files, supported call
+  continuations, and separate fields and closers of multi-field dictionaries,
+  including tabs and form feeds; space-only continuations in lists
   and function signatures are outside its scope. Fix uses four spaces for block
   indentation and preserves tabs in string and comment text. Both check and fix
   reject `--indent` values other than 4
