@@ -72,6 +72,53 @@ class TestStairfmtIndentation(unittest.TestCase):
                           (self.root / 'src/demo/working.py').read_text(encoding='utf-8')),
                          (['ST010'], 0, [], 'if True:\n    value = 1\n'))
 
+    def test_noncanonical_continuation_indent_is_reported(self):
+        report = self.checked('value = f(\n  a,\n  b\n)\n')
+        self.assertEqual([item['rule'] for item in report['remaining']], ['ST010', 'ST010'])
+
+    def test_continuation_and_closing_indent_converge_after_fix(self):
+        source = 'if True:\n    value = f(\n      a,\n      b\n      )\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        again, repeat = self.run_fix('src/demo/working.py')
+        self.assertEqual(([item['rule'] for item in found['remaining']], code,
+                          report['remaining'], fixed, again, repeat['changed_files']),
+                         (['ST010', 'ST010', 'ST010'], 0, [],
+                          'if True:\n    value = f(\n        a, b\n    )\n', 0, []))
+
+    def test_parenthesized_call_continuation_indent_is_fixed(self):
+        source = 'value = (f(\n  a, b\n))\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        again, repeat = self.run_fix('src/demo/working.py')
+        self.assertEqual(([item['rule'] for item in found['remaining']], code,
+                          report['remaining'], fixed, again, repeat['changed_files']),
+                         (['ST010'], 0, [], 'value = (f(\n    a, b\n))\n', 0, []))
+
+    def test_binary_operands_use_expression_indentation(self):
+        source = 'x = (g(\n  1, 2\n) +\n     h(\n         3, 4\n     ))\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        again, repeat = self.run_fix('src/demo/working.py')
+        self.assertEqual(([item['line'] for item in found['remaining']
+                           if item['rule'] == 'ST010'], code, report['remaining'], fixed,
+                          again, repeat['changed_files']),
+                         ([2, 3], 0, [],
+                          'x = (g(\n         1, 2\n     ) +\n     h(\n         3, 4\n     ))\n', 0, []))
+
+    def test_parenthesized_nested_call_has_its_own_indentation(self):
+        source = 'value = outer(\n    (inner(\n      a, b\n    ))\n)\n'
+        found = self.checked(source)
+        code, report = self.run_fix('src/demo/working.py')
+        fixed = (self.root / 'src/demo/working.py').read_text(encoding='utf-8')
+        self.assertEqual(([item['line'] for item in found['remaining']
+                           if item['rule'] == 'ST010'], code, report['remaining'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([3], 0, [], True))
+
     def test_form_feed_and_tab_in_indent_are_reported_and_removed(self):
         source = 'if True:\n\f\tvalue = 1\n'
         found = self.checked(source)

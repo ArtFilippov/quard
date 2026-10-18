@@ -141,6 +141,29 @@ def _field_pair(previous: ast.Call, call: ast.Call, parents: dict[ast.AST, ast.A
         for node in _ancestors(call, parents))
 
 
+def _call_indent_issues(call: ast.Call, lines: list[str], parents: dict[ast.AST, ast.AST]) -> list[Issue]:
+    """Compare continuation indentation with the call's enclosing expression."""
+    ancestors = [node for node in _ancestors(call, parents)
+                 if isinstance(node, (ast.Call, ast.BinOp))]
+    context = ancestors[0] if ancestors else call
+    # Nested binary alignment belongs to the enclosing expression's ST012 layout.
+    if isinstance(context, ast.BinOp) and len(ancestors) > 1:
+        return []
+    indent = (" " * (_column(lines, call.lineno, call.col_offset) - 1)
+              if isinstance(context, ast.BinOp) else _leading_indent(lines[call.lineno - 1]))
+    arguments = [*call.args, *call.keywords]
+    issues: list[Issue] = []
+    for number in {arg.lineno for arg in arguments if arg.lineno > call.func.end_lineno}:
+        if _leading_indent(lines[number - 1]) != indent + "    ":
+            issues.append(Issue(number, 1, "ST010",
+                                "неканонический отступ аргумента: используйте четыре пробела"))
+    if (arguments and call.end_lineno > max(arg.end_lineno for arg in arguments)
+            and _leading_indent(lines[call.end_lineno - 1]) != indent):
+        issues.append(Issue(call.end_lineno, 1, "ST010",
+                            "неканонический отступ закрывающей скобки вызова"))
+    return issues
+
+
 def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
     issues: list[Issue] = []
     calls = _visible(root)
@@ -401,9 +424,14 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
     if source and isinstance(tree, ast.Module):
         issues.extend(_indentation(source, 4)[0])
         issues.extend(issue for issue, _, _ in _strings(tree, source, string_limit))
+        parents = {child: parent for parent in ast.walk(tree)
+                   for child in ast.iter_child_nodes(parent)}
     for root in _roots(tree):
         issues.extend(_issue_list(root, lines))
         if source:
+            if isinstance(tree, ast.Module):
+                issues.extend(issue for call in _visible(root)
+                              for issue in _call_indent_issues(call, lines, parents))
             start = _index(lines, root.lineno, root.col_offset)
             end = _index(lines, root.end_lineno, root.end_col_offset)
             for token in tokenize.generate_tokens(io.StringIO(source).readline):
@@ -977,7 +1005,9 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         if any(left <= _index(lines, root.lineno, root.col_offset) < right
                for left, right, _ in edits):
             continue
-        findings = issues_for(root, source, inline_limit)
+        findings = (issues_for(root, source, inline_limit)
+                    + [issue for call in _visible(root)
+                       for issue in _call_indent_issues(call, lines, parents)])
         if not findings:
             continue
         start = _index(lines, root.lineno, root.col_offset)
@@ -994,9 +1024,10 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             right = _index(lines, call.end_lineno, call.end_col_offset)
             if any(start < right and left < end for start, end, _ in edits):
                 return
-            if (any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
-                    or issue.code == "ST006" and "одной строке" in issue.message
-                    for issue in issues_for(call, source, inline_limit))
+            if ((any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
+                     or issue.code == "ST006" and "одной строке" in issue.message
+                     for issue in issues_for(call, source, inline_limit))
+                 or _call_indent_issues(call, lines, parents))
                     and not _has_comments(source, left, right, lines)
                     and renderer.supported(call)):
                 indent = _leading_indent(lines[call.lineno - 1])
