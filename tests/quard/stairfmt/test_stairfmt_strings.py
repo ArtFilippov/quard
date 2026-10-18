@@ -102,7 +102,16 @@ class TestStairfmtStrings(unittest.TestCase):
                           all(len(token.string[1:-1]) <= 160 for token in
                               tokenize.generate_tokens(io.StringIO(fixed).readline)
                               if token.type == tokenize.STRING)),
-                         (True, [], True, True))
+                          (True, [], True, True))
+
+    def test_form_feed_inside_literal_does_not_create_source_line(self):
+        source = 'value = "hello\f\tworld"\nx = f(g(1), h(2))\n'
+        findings = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual((findings['errors'],
+                          {item['rule'] for item in findings['remaining']}, report['errors'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], {'ST001', 'ST002', 'ST004'}, [], True, fixed))
 
     def test_escaped_long_literal_keeps_exact_spelling(self):
         source = 'value = "' + (r'one\ntwo\x20three\u0041\U0001F642 ' * 10) + '"\n'

@@ -188,7 +188,19 @@ class TestStairfmt(unittest.TestCase):
         self.assertEqual(([(item['rule'], item['line']) for item in initial['remaining']],
                           fixed, report['remaining'], clean['remaining'], repeat,
                           ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed))),
-                         ([('ST009', 2)], expected, [], [], expected, True))
+                          ([('ST009', 2)], expected, [], [], expected, True))
+
+    def test_noncanonical_container_siblings_and_singletons_are_detected(self):
+        sources = ('x = f(\n    {\n        "a": g(\n            1, 2\n        ), "b": 3\n    }\n)\n',
+                   'x = f(\n    [\n        g(\n            1, 2\n        ), h(3)\n    ]\n)\n',
+                   'x = f(\n    [g(1)]\n)\n', 'x = f(\n    (g(1),)\n)\n')
+        results = []
+        for source in sources:
+            findings = self.checked(source)['remaining']
+            fixed, report = self.formatted(source)
+            results.append(('ST009' in {item['rule'] for item in findings},
+                            report['remaining'], report['warnings'], self.formatted(fixed)[0] == fixed))
+        self.assertEqual(results, [(True, [], [], True)] * len(sources))
 
     def test_clean_call_with_comment_is_positioned_violation(self):
         source = 'value = f(\n    1,  # keep\n    2\n)\n'
@@ -298,7 +310,36 @@ def run(path, self, test, populations):
                            report['remaining'], report['warnings'],
                            self.formatted(fixed)[0] == fixed)
                           for source, (fixed, report) in zip(sources, results)],
-                         [(True, [], [], True)] * 4)
+                          [(True, [], [], True)] * 4)
+
+    def test_multiline_binary_with_two_following_arguments_converges(self):
+        source = 'x = f(g(1) + h(2, 3), 0, 1)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_parenthesized_binary_operand_converges(self):
+        source = 'x = (g(1, 2) + h(3, 4)) * z(5, 6)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(({'ST012', 'ST001', 'ST002', 'ST004'}
+                          .isdisjoint({item['rule'] for item in report['remaining']}),
+                          report['warnings'], ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), (True, [], True, fixed))
+
+    def test_comprehension_iterable_dictionary_converges(self):
+        source = 'x = f([v for v in {"a": g(1), "b": h(2)}])\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_trailing_type_ignore_stays_on_its_statement(self):
+        source = 'x = f(g(1), h(2))  # type: ignore[call-arg]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((ast.parse(fixed, type_comments=True).type_ignores[0].lineno,
+                          fixed.splitlines()[0].endswith('# type: ignore[call-arg]'),
+                          bool(report['remaining'])), (1, True, True))
 
     def test_unparenthesized_binary_converges_in_one_pass(self):
         source = 'x = g(1, 2) + h(3, 4)\n'
@@ -436,7 +477,14 @@ def run(path, self, test, populations):
                           again, repeat['changed_files'], path.read_bytes()),
                          (0, [], [], b'# LF stays\nfirst = f(\n    g(1),\n    h(2)\n)\n'
                           b'# CRLF stays\r\nsecond = f(\r\n    g(3),\r\n'
-                          b'    h(4)\r\n)\r\n# LF stays too\n', 0, [], fixed))
+                           b'    h(4)\r\n)\r\n# LF stays too\n', 0, [], fixed))
+
+    def test_bare_cr_before_lf_call_does_not_change_inserted_line_endings(self):
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(b'before = 1\rvalue = f(g(1), h(2))\n')
+        code, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['remaining'], path.read_bytes()),
+                          (0, [], b'before = 1\rvalue = f(\n    g(1),\n    h(2)\n)\n'))
 
     def test_mixed_endings_string_split_keeps_neighboring_endings(self):
         path = self.root / 'src/demo/working.py'

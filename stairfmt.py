@@ -199,7 +199,7 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
     if segment is None:
         return []
     issues: list[Issue] = []
-    lengths = [len(line.strip()) for line in segment.splitlines()]
+    lengths = [len(line.strip()) for line in _lines(segment)]
     length = max(lengths, default=0)
     if length > limit or "\n" in segment and not isinstance(node, ast.BinOp):
         issues.append(Issue(node.lineno, node.col_offset + 1, "ST006",
@@ -224,20 +224,31 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
     return issues
 
 
+def _end_line(node: ast.expr) -> int:
+    if node.end_lineno is None:
+        raise ValueError("выражение без конечной строки в AST")
+    return node.end_lineno
+
+
 def _container_issues(node: ast.AST) -> list[Issue]:
     if isinstance(node, ast.Dict) and len(node.keys) > 1:
         fields = [key if key is not None else value for key, value in zip(node.keys, node.values)]
-        if (len({field.lineno for field in fields}) != len(fields)
+        if (any(field.lineno <= _end_line(node.values[index - 1])
+                for index, field in enumerate(fields[1:], 1))
                 or node.end_lineno == node.values[-1].end_lineno):
             return [Issue(node.lineno, node.col_offset + 1, "ST009",
                           "поля словаря и закрывающая скобка должны быть на отдельных строках")]
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         children = node.elts
+        if (len(children) == 1 and _has_nested_call(children[0])
+                and node.end_lineno == children[0].end_lineno):
+            return [Issue(node.lineno, node.col_offset + 1, "ST009",
+                          "вызов и закрывающая скобка контейнера должны быть на разных строках")]
         for index, child in enumerate(children[1:], 1):
             nested = (isinstance(child, (ast.List, ast.Tuple, ast.Set, ast.Dict))
                       or isinstance(children[index - 1], (ast.List, ast.Tuple, ast.Set, ast.Dict))
                       or _has_nested_call(child) or _has_nested_call(children[index - 1]))
-            if (nested and child.lineno == children[index - 1].lineno or
+            if (nested and child.lineno <= _end_line(children[index - 1]) or
                     not nested and child.lineno != children[index - 1].lineno):
                 return [Issue(child.lineno, child.col_offset + 1, "ST009",
                               "обычные элементы должны делить строку, вызовы и вложенные контейнеры — начинаться с новой")]
@@ -260,7 +271,7 @@ def _strings(tree: ast.AST, source: str, limit: int
     """Select ordinary string tokens outside protected and call expressions."""
     parents = {child: parent for parent in ast.walk(tree)
                for child in ast.iter_child_nodes(parent)}
-    lines = source.splitlines(keepends=True)
+    lines = _lines(source)
     selected: list[tuple[Issue, tokenize.TokenInfo, ast.Constant]] = []
     constants = [node for node in ast.walk(tree)
                  if isinstance(node, ast.Constant) and isinstance(node.value, str)]
@@ -345,7 +356,7 @@ def _pieces(token: str, limit: int) -> list[str]:
 def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                string_limit: int = 160) -> list[Issue]:
     issues: list[Issue] = []
-    lines = source.splitlines(keepends=True)
+    lines = _lines(source)
     if source and isinstance(tree, ast.Module):
         issues.extend(_indentation(source, 4)[0])
         issues.extend(issue for issue, _, _ in _strings(tree, source, string_limit))
@@ -386,7 +397,8 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                     indent = (_leading_indent(lines[node.lineno - 1])
                               if isinstance(parent, (ast.keyword, ast.Dict))
                               else " " * node.col_offset)
-                    issues.extend(_layout_issues(node, source, inline_limit, indent))
+                    if not isinstance(parent, ast.BinOp):
+                        issues.extend(_layout_issues(node, source, inline_limit, indent))
                 issues.extend(_container_issues(node))
                 for child in ast.iter_child_nodes(node):
                     visit(child, node)
@@ -396,7 +408,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                    for child in ast.iter_child_nodes(parent)}
         for node in ast.walk(tree):
             if not isinstance(node, ast.BinOp) or not _visible(node) or any(
-                    isinstance(part, ast.Call) or _protected(part)
+                    isinstance(part, (ast.Call, ast.BinOp)) or _protected(part)
                     for part in _ancestors(node, parents)):
                 continue
             issues.extend(_inline_issues(node, source, inline_limit))
@@ -435,9 +447,10 @@ class Renderer:
     def supported_arg(self, arg: ast.AST) -> bool:
         if _protected(arg):
             if isinstance(arg, ast.DictComp):
-                return self.supported_arg(arg.key) and self.supported_arg(arg.value)
+                return (self.supported_arg(arg.key) and self.supported_arg(arg.value)
+                        and self.supported_clauses(arg))
             if isinstance(arg, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
-                return self.supported_arg(arg.elt)
+                return self.supported_arg(arg.elt) and self.supported_clauses(arg)
             return "\n" not in self.compact(arg) and (
                 len(self.compact(arg)) <= self.limit or "\n" not in self.segment(arg))
         if isinstance(arg, ast.BinOp):
@@ -455,6 +468,12 @@ class Renderer:
                         and all(self.supported_arg(value) for value in arg.values))
             return all(self.supported_arg(item) for item in arg.elts)
         return self.simple(arg)
+
+    def supported_clauses(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp
+                          ) -> bool:
+        return all(self.supported_arg(clause.iter)
+                   and all(self.supported_arg(test) for test in clause.ifs)
+                   for clause in node.generators)
 
     def supported(self, call: ast.Call) -> bool:
         if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Call):
@@ -476,7 +495,7 @@ class Renderer:
         if isinstance(arg, ast.Call):
             return self.render_call(arg, indent, in_call=True)
         if isinstance(arg, (ast.Subscript, ast.Attribute)) and _has_nested_call(arg.value):
-            lines = self.source.splitlines(keepends=True)
+            lines = _lines(self.source)
             left = _index(lines, arg.lineno, arg.col_offset)
             start = _index(lines, arg.value.lineno, arg.value.col_offset)
             end = _index(lines, arg.value.end_lineno, arg.value.end_col_offset)
@@ -504,7 +523,9 @@ class Renderer:
         return self.segment(arg)
 
     def binary(self, node: ast.BinOp, indent: str) -> str:
-        lines = self.source.splitlines(keepends=True)
+        lines = _lines(self.source)
+        begin = _index(lines, node.lineno, node.col_offset)
+        operand = _index(lines, node.left.lineno, node.left.col_offset)
         left = _index(lines, node.left.end_lineno, node.left.end_col_offset)
         right = _index(lines, node.right.lineno, node.right.col_offset)
         between = self.source[left:right]
@@ -516,7 +537,7 @@ class Renderer:
         gap = re.sub(r"\s*\n\s*", " ", between)
         if isinstance(node.right, ast.Call) and "\n" in suffix and "(" not in gap:
             gap = gap.rstrip() + "\n" + indent
-        return prefix + gap + suffix + self.source[
+        return self.source[begin:operand] + prefix + gap + suffix + self.source[
             _index(lines, node.right.end_lineno, node.right.end_col_offset):
             _index(lines, node.end_lineno, node.end_col_offset)]
 
@@ -531,15 +552,16 @@ class Renderer:
             opening, closing = "{", "}"
         else:
             element = self.render_arg(node.elt, indent + self.step)
-            if "\n" not in element:
+            if "\n" not in element and not _structured(node):
                 return self.compact(node)
             opening, closing = ("(", ")") if isinstance(node, ast.GeneratorExp) else (
                 ("[", "]") if isinstance(node, ast.ListComp) else ("{", "}"))
         clauses = []
         for clause in node.generators:
             text = ("async for " if clause.is_async else "for ") + self.compact(clause.target)
-            text += " in " + self.compact(clause.iter)
-            text += "".join(" if " + self.compact(condition) for condition in clause.ifs)
+            text += " in " + self.render_arg(clause.iter, indent + self.step)
+            text += "".join(" if " + self.render_arg(condition, indent + self.step)
+                            for condition in clause.ifs)
             clauses.append(text)
         prefix = indent + self.step
         if isinstance(node, ast.DictComp) and "\n" in key:
@@ -553,7 +575,7 @@ class Renderer:
 
     def render_args(self, call: ast.Call, name: str, indent: str) -> str:
         args = sorted([*call.args, *call.keywords], key=lambda a: (a.lineno, a.col_offset))
-        lines = self.source.splitlines(keepends=True)
+        lines = _lines(self.source)
         wrappers: list[int] = []
         for index, arg in enumerate(args):
             if not isinstance(arg, ast.BinOp):
@@ -598,6 +620,7 @@ class Renderer:
         # An actual nested call must start on a new line: f(\n    g(x)\n).
         rendered: list[str] = []
         pending: list[str] = []
+        attached = False
 
         def flush() -> None:
             if pending:
@@ -610,9 +633,11 @@ class Renderer:
                 flush()
                 rendered.append(child_indent + value)
             else:
-                if (rendered and not pending and index and isinstance(args[index - 1], ast.BinOp)
-                        and "\n" in values[index - 1] and "\n" not in value):
-                    rendered[-1] += " " + value
+                if (rendered and not pending and (attached or index
+                        and isinstance(args[index - 1], ast.BinOp)
+                        and "\n" in values[index - 1]) and "\n" not in value):
+                    rendered[-1] += (", " if attached else " ") + value
+                    attached = True
                 else:
                     pending.append(value)
             # Separate adjacent values; a singleton tuple needs its own comma.
@@ -655,7 +680,7 @@ class Renderer:
 
 
 def _layout_issues(node: ast.AST, source: str, limit: int, indent: str) -> list[Issue]:
-    lines = source.splitlines(keepends=True)
+    lines = _lines(source)
     left = _index(lines, node.lineno, node.col_offset)
     right = _index(lines, node.end_lineno, node.end_col_offset)
     if _has_comments(source, left, right, lines):
@@ -688,6 +713,11 @@ def _index(lines: list[str], lineno: int, byte_col: int) -> int:
     return prefix + len(text.encode("utf-8")[:byte_col].decode("utf-8"))
 
 
+def _lines(source: str) -> list[str]:
+    """Split only at physical Python source line endings."""
+    return re.findall(r"[^\r\n]*(?:\r\n|\r|\n|$)", source)[:-1]
+
+
 def _leading_indent(line: str) -> str:
     return line[:len(line) - len(line.lstrip(" \t"))]
 
@@ -703,10 +733,10 @@ def _ending(line: str) -> str:
 
 def _local_endings(source: str, start: int, end: int, replacement: str) -> str:
     """Keep surviving line endings and give inserted lines nearby source style."""
-    original = source[start:end].splitlines(keepends=True)
-    rendered = replacement.splitlines(keepends=True)
-    lines = source.splitlines(keepends=True)
-    position = source[:start].count("\n")
+    original = _lines(source[start:end])
+    rendered = _lines(replacement)
+    lines = _lines(source)
+    position = len(re.findall(r"\r\n|\r|\n", source[:start]))
     nearby = _ending(lines[position]) if position < len(lines) else ""
     if not nearby:
         nearby = next((_ending(line) for line in reversed(lines[:position]) if _ending(line)), "\n")
@@ -728,7 +758,7 @@ def _local_endings(source: str, start: int, end: int, replacement: str) -> str:
 
 def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
     """Locate indentation tabs and render block depths without touching literals."""
-    lines = source.splitlines(keepends=True)
+    lines = _lines(source)
     depths: dict[int, int] = {}
     protected: set[int] = set()
     fstrings: list[int] = []
@@ -781,6 +811,12 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
     return False
 
 
+def _trailing_directive(source: str, end: int) -> bool:
+    """Keep line-scoped directives attached to the original statement."""
+    return bool(re.search(r"#\s*(?:type:\s*ignore\b|noqa\b)",
+                          re.split(r"\r\n|\r|\n", source[end:], maxsplit=1)[0], re.I))
+
+
 def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                   string_limit: int = 160) -> tuple[str, list[str]]:
     if indent_size != 4:
@@ -792,7 +828,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             raise ValueError("нормализация отступов меняет структуру AST")
         source = normalized
         tree = ast.parse(source)
-    lines = source.splitlines(keepends=True)
+    lines = _lines(source)
     selected: dict[ast.Constant, list[tokenize.TokenInfo]] = {}
     for _, token, node in _strings(tree, source, string_limit):
         selected.setdefault(node, []).append(token)
@@ -800,7 +836,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
     for node, tokens in sorted(selected.items(), key=lambda item: item[1][0].start, reverse=True):
         start = _index(lines, node.lineno, node.col_offset)
         end = _index(lines, node.end_lineno, node.end_col_offset)
-        if _has_comments(source, start, end, lines):
+        if _has_comments(source, start, end, lines) or _trailing_directive(source, end):
             warnings.append(f"{node.lineno}: пропущено: комментарий внутри строкового литерала")
             continue
         literals = [token for token in tokenize.generate_tokens(io.StringIO(source).readline)
@@ -822,27 +858,29 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         try:
             if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
                 source = candidate
-                lines = source.splitlines(keepends=True)
+                lines = _lines(source)
             else:
                 warnings.append(f"{node.lineno}: пропущено: перенос меняет структуру AST")
         except SyntaxError:
             warnings.append(f"{node.lineno}: пропущено: нет безопасного синтаксического переноса строки")
     tree = ast.parse(source)
     renderer = Renderer(source, indent_size, inline_limit)
-    lines = source.splitlines(keepends=True)
+    lines = _lines(source)
     edits: list[tuple[int, int, str]] = []
     parents = {child: parent for parent in ast.walk(tree)
                for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
         if not isinstance(node, ast.BinOp) or not _visible(node) or any(
-                isinstance(part, ast.Call) or _protected(part)
+                isinstance(part, (ast.Call, ast.BinOp)) or _protected(part)
                 for part in _ancestors(node, parents)):
             continue
         left = _index(lines, node.lineno, node.col_offset)
         right = _index(lines, node.end_lineno, node.end_col_offset)
         if (any(start <= left < end for start, end, _ in edits)
                 or _has_comments(source, left, right, lines)
-                or not renderer.supported_arg(node)):
+                or _trailing_directive(source, right)
+                or not renderer.supported_arg(node)
+                or not _layout_issues(node, source, inline_limit, " " * node.col_offset)):
             continue
         try:
             replacement = renderer.render_arg(node, " " * node.col_offset)
@@ -864,6 +902,9 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         start = _index(lines, root.lineno, root.col_offset)
         end = _index(lines, root.end_lineno, root.end_col_offset)
         blocked = _has_comments(source, start, end, lines)
+        if _trailing_directive(source, end):
+            warnings.append(f"{root.lineno}: пропущено: директива привязана к строке вызова")
+            continue
         if blocked:
             warnings.append(f"{root.lineno}: пропущено: комментарий внутри вызова")
 
