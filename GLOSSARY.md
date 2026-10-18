@@ -20,10 +20,13 @@ simplification; ordinary string tokens have their own `string_limit` (default
 _Avoid_: Pylint max-line-length
 
 **Canonical composed layout**:
-The stable result of Stairfmt fix for supported calls and binary operands, including
-multi-field dictionaries inside comprehensions. `ST012` marks safe, fixable breaks
-that differ from this layout; `ST006` and `ST007` independently mark expressions
-that still need simplification.
+The stable result of Stairfmt fix for supported calls and binary operands, retaining
+the source's outer parentheses. Multi-field dictionaries inside comprehensions expand:
+when the key expands, its first `for` shares the element's last line, later clauses
+deepen by four spaces each, and filters stay with their clause; expanded values keep
+their own-line clauses. Single-field keys remain inline. `ST012` marks safe, fixable
+breaks that differ from this layout; `ST006` and `ST007` independently mark expressions
+that still need simplification. Four spaces are the only canonical indentation width.
 _Avoid_: Treating an unfixed simplification finding as a reason to skip layout
 
 ## Clone analysis

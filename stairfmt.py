@@ -245,6 +245,12 @@ def _structured(node: ast.AST) -> bool:
                for part in ast.walk(node))
 
 
+def decode_source(data: bytes) -> tuple[str, str]:
+    """Decode a Python file according to its BOM and encoding declaration."""
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    return data.decode(encoding), encoding
+
+
 def _strings(tree: ast.AST, source: str, limit: int
              ) -> list[tuple[Issue, tokenize.TokenInfo, ast.Constant]]:
     """Select ordinary string tokens outside protected and call expressions."""
@@ -291,23 +297,44 @@ def _strings(tree: ast.AST, source: str, limit: int
     return selected
 
 
-def _pieces(value: str, limit: int) -> list[str]:
+def _pieces(token: str, limit: int) -> list[str]:
+    """Split the spelled body only between complete Python escape sequences."""
+    match = re.match(r"(?i)(u?)(['\"])(.*)\2$", token, re.DOTALL)
+    if match is None:
+        return []
+    prefix, quote, body = match.groups()
+    boundaries: list[int] = []
+    index = 0
+    while index < len(body):
+        if body[index] == "\\":
+            index += 1
+            if index < len(body) and body[index] in "xXuU":
+                index += {"x": 2, "X": 2, "u": 4, "U": 8}[body[index]] + 1
+            elif index < len(body) and body[index] == "N" and "}" in body[index:]:
+                index = body.index("}", index) + 1
+            elif index < len(body) and body[index] in "01234567":
+                first = index
+                index += 1
+                while index < len(body) and index < first + 3 and body[index] in "01234567":
+                    index += 1
+            else:
+                index += 1
+        else:
+            index += 1
+        boundaries.append(index)
     pieces: list[str] = []
-    while value:
-        length = 0
-        for index in range(1, len(value) + 1):
-            if len(repr(value[:index])) - 2 > limit:
-                break
-            length = index
-        if not length:
+    start = 0
+    while start < len(body):
+        eligible = [point for point in boundaries if start < point <= start + limit]
+        if not eligible:
             return []
-        if length < len(value):
-            boundary = max((index + 1 for index, char in enumerate(value[:length])
-                            if char.isspace()), default=0)
-            if boundary:
-                length = boundary
-        pieces.append(repr(value[:length]))
-        value = value[length:]
+        end = eligible[-1]
+        if end < len(body):
+            spaces = [point for point in eligible if body[point - 1].isspace()]
+            if spaces:
+                end = spaces[-1]
+        pieces.append(prefix + quote + body[start:end] + quote)
+        start = end
     return pieces
 
 
@@ -398,7 +425,7 @@ class Renderer:
     def supported_arg(self, arg: ast.AST) -> bool:
         if _protected(arg):
             if isinstance(arg, ast.DictComp):
-                return self.supported_arg(arg.value)
+                return self.supported_arg(arg.key) and self.supported_arg(arg.value)
             if isinstance(arg, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
                 return self.supported_arg(arg.elt)
             return "\n" not in self.compact(arg) and (
@@ -474,11 +501,12 @@ class Renderer:
 
     def comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
                       indent: str) -> str:
+        key = self.render_arg(node.key, indent + self.step) if isinstance(node, ast.DictComp) else ""
         if isinstance(node, ast.DictComp):
-            element = self.render_arg(node.value, indent + self.step)
-            if "\n" not in element:
+            value = self.render_arg(node.value, indent + self.step)
+            if "\n" not in key + value:
                 return self.compact(node)
-            element = self.compact(node.key) + ": " + element
+            element = key + ": " + value
             opening, closing = "{", "}"
         else:
             element = self.render_arg(node.elt, indent + self.step)
@@ -493,19 +521,48 @@ class Renderer:
             text += "".join(" if " + self.compact(condition) for condition in clause.ifs)
             clauses.append(text)
         prefix = indent + self.step
+        if isinstance(node, ast.DictComp) and "\n" in key:
+            first, *rest = clauses
+            lines = [prefix + element + " " + first]
+            lines.extend(prefix + self.step * (index + 1) + clause
+                         for index, clause in enumerate(rest))
+            return opening + "\n" + "\n".join(lines) + "\n" + indent + closing
         return (opening + "\n" + prefix + element + "\n"
                 + "\n".join(prefix + clause for clause in clauses) + "\n" + indent + closing)
 
     def render_args(self, call: ast.Call, name: str, indent: str) -> str:
         args = sorted([*call.args, *call.keywords], key=lambda a: (a.lineno, a.col_offset))
-        return self.render_values(args, name, indent)
+        lines = self.source.splitlines(keepends=True)
+        wrappers: list[int] = []
+        for index, arg in enumerate(args):
+            if not isinstance(arg, ast.BinOp):
+                wrappers.append(0)
+                continue
+            previous = call.func if index == 0 else args[index - 1]
+            following = call if index == len(args) - 1 else args[index + 1]
+            before = self.source[_index(lines, previous.end_lineno, previous.end_col_offset):
+                                 _index(lines, arg.lineno, arg.col_offset)]
+            after = self.source[_index(lines, arg.end_lineno, arg.end_col_offset):
+                                _index(lines, following.end_lineno, following.end_col_offset)
+                                if following is call else _index(lines, following.lineno,
+                                                                 following.col_offset)]
+            opening = len(before) - len(before.rstrip(' ('))
+            closing = len(after) - len(after.lstrip(' )'))
+            wrappers.append(max(0, min((before[-opening:] if opening else '').count('(')
+                                        - (index == 0),
+                                        after[:closing].count(')') - (index == len(args) - 1))))
+        return self.render_values(args, name, indent, wrappers=wrappers)
 
     def render_values(self, args: Sequence[ast.AST], name: str, indent: str,
-                      tuple_mode: bool = False, container_mode: bool = False) -> str:
+                      tuple_mode: bool = False, container_mode: bool = False,
+                      wrappers: Sequence[int] = ()) -> str:
         if not args:
             return name + "()"
         child_indent = indent + self.step
         values = [self.render_arg(arg, child_indent) for arg in args]
+        values = ['(' * wrappers[index] + value + ')' * wrappers[index]
+                  if wrappers and wrappers[index] > 0 else value
+                  for index, value in enumerate(values)]
         def separate(arg: ast.AST, value: str) -> bool:
             return (_has_nested_call(arg) or "\n" in value
                     or (container_mode or _multiline(arg))
@@ -672,6 +729,8 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
 
 def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                   string_limit: int = 160) -> tuple[str, list[str]]:
+    if indent_size != 4:
+        raise ValueError("--indent должен быть равен 4: только четыре пробела каноничны")
     tree = ast.parse(source)
     _, normalized = _indentation(source, indent_size)
     if normalized != source:
@@ -680,34 +739,40 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         source = normalized
         tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
-    selected = {node: token for _, token, node in _strings(tree, source, string_limit)}
-    for node, token in sorted(selected.items(), key=lambda item: item[1].start, reverse=True):
-        if not isinstance(node.value, str) or node.lineno is None or node.col_offset is None or (
-                node.end_lineno is None or node.end_col_offset is None):
-            raise ValueError("строковый литерал без значения или позиции в AST")
-        pieces = _pieces(node.value, string_limit)
-        if len(pieces) < 2:
-            continue
+    selected: dict[ast.Constant, list[tokenize.TokenInfo]] = {}
+    for _, token, node in _strings(tree, source, string_limit):
+        selected.setdefault(node, []).append(token)
+    warnings: list[str] = []
+    for node, tokens in sorted(selected.items(), key=lambda item: item[1][0].start, reverse=True):
         start = _index(lines, node.lineno, node.col_offset)
         end = _index(lines, node.end_lineno, node.end_col_offset)
         if _has_comments(source, start, end, lines):
+            warnings.append(f"{node.lineno}: пропущено: комментарий внутри строкового литерала")
             continue
-        indent = _leading_indent(lines[token.start[0] - 1])
-        if node.kind == "u":
-            pieces[0] = "u" + pieces[0]
+        literals = [token for token in tokenize.generate_tokens(io.StringIO(source).readline)
+                    if token.type == tokenize.STRING and start <= _index(
+                        lines, token.start[0], len(lines[token.start[0] - 1][
+                            :token.start[1]].encode("utf-8"))) < end]
+        pieces = [_pieces(token.string, string_limit) if token in tokens else [token.string]
+                  for token in literals]
+        if any(not part for part in pieces):
+            warnings.append(f"{node.lineno}: пропущено: нет безопасной границы для строкового литерала")
+            continue
+        indent = _leading_indent(lines[node.lineno - 1])
         replacement = "(\n" + "".join(indent + " " * indent_size + piece + "\n"
-                                      for piece in pieces) + indent + ")"
+                                      for group in pieces for piece in group) + indent + ")"
         candidate = source[:start] + replacement + source[end:]
         try:
             if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
                 source = candidate
+            else:
+                warnings.append(f"{node.lineno}: пропущено: перенос меняет структуру AST")
         except SyntaxError:
-            pass
+            warnings.append(f"{node.lineno}: пропущено: нет безопасного синтаксического переноса строки")
     tree = ast.parse(source)
     renderer = Renderer(source, indent_size, inline_limit)
     lines = source.splitlines(keepends=True)
     edits: list[tuple[int, int, str]] = []
-    warnings: list[str] = []
     parents = {child: parent for parent in ast.walk(tree)
                for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
@@ -812,6 +877,8 @@ def _paths(root: Path, inputs: list[str]) -> list[Path]:
 
 
 def _advice(reason: str) -> str:
+    if "нет безопасной границы" in reason:
+        return "Разделите литерал вручную без изменения escape-последовательностей."
     if "строковый литерал" in reason:
         return "Запустите --fix для переноса строкового литерала по частям."
     if "упростите выражение" in reason:
@@ -834,7 +901,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
     for path in paths:
         name = path.relative_to(root).as_posix()
         try:
-            source = path.read_text(encoding="utf-8")
+            source, encoding = decode_source(path.read_bytes())
             tree = ast.parse(source, filename=name)
             if fix:
                 formatted, skipped = format_source(source, indent, **limits)
@@ -844,14 +911,14 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
                                      position.isdecimal() else None, "reason": reason if separator
                                      else warning, "suggestion": _advice(warning)})
                 if formatted != source:
-                    atomic_write(path, formatted, root)
+                    atomic_write(path, formatted.encode(encoding), root)
                     changed.append(name)
                 tree = ast.parse(formatted, filename=name)
             remaining.extend({"path": name, "line": issue.line, "column": issue.col,
                               "rule": issue.code, "message": issue.message,
                                "suggestion": _advice(issue.message)} for issue in issues_for(
                                    tree, formatted if fix else source, **limits))
-        except (OSError, UnicodeError, SyntaxError, ValueError, TypeError, IndexError) as exc:
+        except (OSError, UnicodeError, SyntaxError, LookupError, ValueError, TypeError, IndexError) as exc:
             errors.append({"path": name, "message": str(exc),
                            "suggestion": "Исправьте файл или доступ к нему и повторите --fix."})
     code = 2 if errors else (1 if remaining or warnings else 0)
@@ -882,12 +949,12 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--fix", action="store_true", help="исправить поддерживаемые случаи")
     parser.add_argument("--project", type=Path, default=Path.cwd(), help="корень проекта")
     parser.add_argument("--json", action="store_true", help="вывести полный отчёт JSON")
-    parser.add_argument("--indent", type=int, default=4, help="размер отступа (по умолчанию 4)")
+    parser.add_argument("--indent", type=int, default=4, help="канонический отступ: только 4")
     parser.add_argument("paths", nargs="*", help="файлы .py или каталоги внутри области Quard")
     args = parser.parse_args(argv)
-    if args.indent < 1:
-        parser.error("--indent должен быть положительным")
     try:
+        if args.indent != 4:
+            raise ValueError("--indent должен быть равен 4: только четыре пробела каноничны")
         root = project_dir(args.project)
         with repo_lock(root):
             try:

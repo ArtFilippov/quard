@@ -290,6 +290,31 @@ def run(path, self, test, populations):
         source = 'x = (g(1) +\n     h(2))\n'
         self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], ['ST012'])
 
+    def test_binary_break_reaches_consumer_as_positioned_violation(self):
+        self.put('src/demo/working.py', 'x = (g(1) +\n     h(2))\n')
+        files = discover_files(self.root, read_scope(self.root))
+        directory = self.root / '.quard/reports/run'
+        job = next(item for item in make_jobs(self.root, directory, files, True, [])
+                   if item['name'] == 'stairfmt')
+        result = execute_job(job, self.root, directory, 30)
+        self.assertEqual((result['status'], result['exit_code'],
+                          [(item['rule'], item['line'], item['is_infrastructure_error'])
+                           for item in result['diagnostics']]),
+                         ('violations', 1, [('ST012', 1, False)]))
+
+    def test_short_binary_operands_and_original_parentheses_converge(self):
+        sources = ('x = g(1) + h(2)\n',
+                   'x = (g(1) +\n     h(2))\n',
+                   'x = f(g(1) +\n      h(2), 3)\n',
+                   'x = f((g(1) +\n       h(2)), 3)\n')
+        results: list[tuple[list[object], bool, bool, bool]] = []
+        for source in sources:
+            fixed, report = self.formatted(source)
+            results.append((report['remaining'], ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                            self.formatted(fixed)[0] == fixed,
+                            fixed.count('(') == source.count('(')))
+        self.assertEqual(results, [([], True, True, True)] * len(sources))
+
     def test_multiline_expression_limit_is_per_line(self):
         source = 'x = f((g(a) +\n       h(a)), 3)\n'
         self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
@@ -309,6 +334,25 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           '        for group in groups\n        for item in group if item.active' in fixed,
                           self.formatted(fixed)[0] == fixed), ([], [], True, True))
+
+    def test_multifield_dictionary_comprehension_key_deepens_clauses(self):
+        source = ('x = f({{"a": item, "b": group}: value for group in groups '
+                  'for item in group if item.active for value in item.values})\n')
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          '        }:' in fixed and ' for group in groups\n' in fixed,
+                          '            for item in group if item.active\n' in fixed,
+                          '                for value in item.values\n' in fixed,
+                          self.formatted(fixed)[0] == fixed,
+                          self.checked(fixed)['remaining']),
+                         ([], [], True, True, True, True, True, []))
+
+    def test_single_field_dictionary_comprehension_key_stays_inline(self):
+        source = 'x = f({{"a": item}: value for item in values})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], '{{"a": item}: value for item in values}' in fixed),
+                         ([], True))
 
     def test_fixable_comprehension_break_reports_st012(self):
         source = 'x = f([\n    item for item in values\n])\n'

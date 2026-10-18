@@ -9,7 +9,7 @@ import shlex
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from stairfmt import issues_for
+from stairfmt import decode_source, issues_for
 from quard._common import QuardError
 from quard.policy_utils import read_settings, validate_stairfmt
 
@@ -33,12 +33,12 @@ def main() -> int:
         limits = validate_stairfmt(read_settings(Path.cwd()).get("stairfmt", {}))
         for path in paths:
             try:
-                source = Path(path).read_text(encoding="utf-8")
+                source, _ = decode_source(Path(path).read_bytes())
                 tree = ast.parse(source, filename=path)
                 findings.extend({"path": path, "line": issue.line, "column": issue.col,
                                  "rule": issue.code, "message": issue.message + suggestion}
                                  for issue in issues_for(tree, source, **limits))
-            except (OSError, UnicodeError, SyntaxError) as exc:
+            except (OSError, UnicodeError, SyntaxError, LookupError) as exc:
                 rule = "STAIRFMT_PARSE_ERROR" if isinstance(exc, SyntaxError) else "STAIRFMT_EXECUTION_ERROR"
                 error = error or rule
                 findings.append({"path": path, "rule": rule, "message": str(exc)})

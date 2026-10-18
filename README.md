@@ -314,8 +314,9 @@ the same discovered, non-excluded `.py` files. Explicit file or directory argume
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
 `ST010` detects indentation tabs independently of call layout. Fix normalizes block
-indentation to `--indent` spaces (four by default), including files without calls,
-while leaving tabs inside literals and comments untouched.
+indentation to four spaces, including files without calls, while leaving tabs inside
+literals and comments untouched. `--indent` accepts only 4; other widths fail with
+exit 2 before source edits, in both check and fix.
 Pylint's physical `line-too-long` (C0301) check is disabled in both profiles;
 `max_module_lines` and unrelated native checks remain active. Stairfmt governs its
 documented expression, indentation and string scope, not every physical line.
@@ -325,9 +326,12 @@ the configuration with exit 2. No automatic migration is performed. See
 [ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
 Simple comprehensions, single-field dictionaries and lambda expressions remain inline;
 their calls do not trigger staircase layout findings. Multi-field dictionaries expand
-even within comprehensions: each field and successive `for` clause starts on its own
-line; filters stay with their clause. Binary call operands use the same layout inside
-and outside calls; sibling operands do not trigger `ST001`. A simple argument after
+even within comprehensions: each field starts on its own line. For an expanded
+dictionary key, the first `for` stays with the element, subsequent `for` clauses
+increase indentation by four spaces each, and filters stay with their clause.
+Expanded values retain their own-line clauses. Binary call operands use the same
+layout inside and outside calls, retaining original outer parentheses; sibling
+operands do not trigger `ST001`. A simple argument after
 a multiline binary expression may share its final line. `ST012` identifies fixable
 noncanonical expression breaks.
 Set `[stairfmt] inline_limit = 240` in `.quard/config.toml` to change the default
@@ -345,13 +349,16 @@ for rule scope.
 
 Set `[stairfmt] string_limit = 160` to change the independent default limit for
 visible characters inside an ordinary quoted literal (quotes and indentation do not
-count). Fix splits eligible literals at words or within long words into adjacent
-quoted pieces inside parentheses, preserving their value and AST. This includes
+count). Fix splits eligible literals at safe boundaries into adjacent quoted pieces
+inside parentheses, preserving their value, AST and original escape spelling. If
+an escape sequence cannot be split safely, fix retains `ST011` with a reason. This includes
 fields of multi-field dictionaries, even in files without calls. Call arguments,
 docstrings, protected inline expressions, and raw, bytes, triple-quoted and f-string
 literals are excluded. Generated Pyright disables `reportImplicitStringConcatenation`;
 Pylint retains `implicit-str-concat`, which still flags same-line concatenation but
-does not flag Stairfmt's multiline pieces.
+does not flag Stairfmt's multiline pieces. Source files with a UTF-8 BOM or a
+declared non-UTF-8 encoding are decoded as Python source by both entry points;
+fix retains the original encoding and BOM.
 
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:

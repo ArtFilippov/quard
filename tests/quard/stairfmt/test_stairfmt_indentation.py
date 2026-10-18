@@ -80,7 +80,7 @@ class TestStairfmtIndentation(unittest.TestCase):
                           self.checked(fixed)["remaining"]),
                          (0, "passed", [], True, True, True, True, True, True, 0, [], []))
 
-    def test_indent_fix_respects_explicit_files_and_width(self):
+    def test_noncanonical_indent_width_fails_before_writing_selected_files(self):
         self.put("src/demo/working.py", "if True:\n\tvalue = 1\n")
         self.put("src/demo/other.py", "if True:\n\tvalue = 2\n")
         command = subprocess.run([sys.executable, "-B", str(QUARD / "stairfmt.py"), "--fix",
@@ -91,8 +91,15 @@ class TestStairfmtIndentation(unittest.TestCase):
         self.assertEqual((command.returncode, report["changed_files"],
                           (self.root / "src/demo/working.py").read_text(encoding="utf-8"),
                           (self.root / "src/demo/other.py").read_text(encoding="utf-8")),
-                         (0, ["src/demo/working.py"], "if True:\n  value = 1\n",
+                         (2, [], "if True:\n\tvalue = 1\n",
                           "if True:\n\tvalue = 2\n"))
+
+    def test_noncanonical_indent_width_fails_check_too(self):
+        self.put("src/demo/working.py", "value = 1\n")
+        command = subprocess.run([sys.executable, "-B", str(QUARD / "stairfmt.py"), "--check",
+                                  "--indent", "2", "--project", str(self.root), "--json"],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        self.assertEqual((command.returncode, json.loads(command.stdout)["status"]), (2, "error"))
 
     def test_indent_check_ignores_tabs_inside_literals_and_comments(self):
         source = ('text = """first\n\tsecond\n"""\n'

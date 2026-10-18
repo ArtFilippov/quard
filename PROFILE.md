@@ -179,8 +179,8 @@ violations baseline.
   lacks the setting; only the Quard checkout explicitly sets `tuple_signatures = false`
   until after the first stable release. Unknown aliases and unannotated values are
   not inferred. Parse and worker failures exit 2; findings exit 1.
-* **Stairfmt (default-on, optional)**: `ST001`–`ST009` check layout of composed
-  calls in discovered production and test `.py` files, independently of LCOM4
+* **Stairfmt (default-on, optional)**: `ST001`–`ST012` check supported composed-call
+  layout, indentation and strings in discovered production and test `.py` files, independently of LCOM4
   selection. Companion stubs and calls inside f-strings are not checked. The
   checker preserves its native positioned rule IDs and suggests the separate
   `stairfmt.py --fix --project .` command. That command rechecks its output, reports
@@ -189,8 +189,11 @@ violations baseline.
   checkout opts out during source migration. Findings exit 1; read, parse and worker
   failures exit 2. Simple comprehensions, single-field dictionaries and lambdas
   keep calls inline; multi-field dictionaries expand even inside comprehensions,
-  with successive `for` clauses on separate lines and filters inline. Binary call
-  operands follow the same layout inside and outside calls; sibling operands do
+  with successive `for` clauses on separate lines and filters inline. An expanded
+  dictionary key keeps its first `for` with the element and indents subsequent
+  clauses four spaces deeper each time; expanded values retain their existing
+  own-line clause layout. Binary call operands follow the same layout inside and
+  outside calls while retaining original outer parentheses; sibling operands do
   not raise `ST001`. A simple argument may share the final line of a multiline
   binary operand. `[stairfmt] inline_limit` defaults to 240 characters per
   expression line. `ST006` requires simplification when that limit or an unfixable
@@ -201,19 +204,23 @@ violations baseline.
   elements. `ST012` identifies fixable noncanonical breaks. Fix applies independent
   safe layout edits even when `ST006` or `ST007` remains.
   `ST010` checks tabs in indentation on all selected `.py` lines, even without
-  calls. Fix uses `--indent` (default four spaces) for block indentation and
-  preserves tabs in string and comment text.
+  calls. Fix uses four spaces for block indentation and preserves tabs in string
+  and comment text. Both check and fix reject `--indent` values other than 4
+  before editing (exit 2).
    `ST011` checks ordinary quoted literal tokens longer than 160 visible source
    characters by default (`[stairfmt] string_limit`), excluding quotes and
    indentation, even without calls. Fix wraps eligible strings in parentheses
-   with adjacent multiline pieces, splitting at word boundaries where possible
-   and preserving value and AST. It excludes call arguments, docstrings, protected
+   with adjacent multiline pieces, splitting only at safe source-token boundaries
+   and preserving value, AST and escape spelling. An unsplittable escape retains
+   `ST011` and a reason. It excludes call arguments, docstrings, protected
    inline expressions, raw, bytes, triple-quoted and f-string literals. Generated
    Pyright sets `reportImplicitStringConcatenation = none`; Pylint keeps
    `implicit-str-concat` enabled (same-line concatenation still fails).
    Pylint C0301 (`line-too-long`) is disabled in both production and test profiles:
    Stairfmt limits supported expressions and ordinary strings, not all physical
    lines. Module length and other Pylint format and design checks remain enabled.
+   UTF-8 BOM and declared non-UTF-8 Python source are supported by check and fix;
+   fixes preserve the original encoding and BOM.
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and

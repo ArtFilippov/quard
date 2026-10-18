@@ -97,6 +97,49 @@ class TestStairfmtStrings(unittest.TestCase):
                               if token.type == tokenize.STRING)),
                          (True, [], True, True))
 
+    def test_escaped_long_literal_keeps_exact_spelling(self):
+        source = 'value = "' + (r'one\ntwo\x20three\u0041\U0001F642 ' * 10) + '"\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          fixed.count(r'\x20') == 10, fixed.count(r'\u0041') == 10,
+                          fixed.count(r'\U0001F642') == 10,
+                          self.formatted(fixed)[0] == fixed),
+                         ([], [], True, True, True, True, True))
+
+    def test_undivisible_escape_reports_reason_without_changing_source(self):
+        source = 'value = "\\N{LATIN SMALL LETTER A WITH RING ABOVE}"\n'
+        setting = self.root / '.quard/config.toml'
+        setting.write_text(setting.read_text(encoding='utf-8')
+                           + '\n[stairfmt]\nstring_limit = 12\n', encoding='utf-8')
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['exit_code'], report['remaining'][0]['rule'],
+                          'нет безопасной границы' in report['warnings'][0]['reason']),
+                         (source, 1, 'ST011', True))
+
+    def test_bom_and_declared_encoding_are_preserved_by_both_entry_points(self):
+        results: list[tuple[object, ...]] = []
+        for encoding, prefix in (('utf-8-sig', b'\xef\xbb\xbf'), ('iso-8859-1', b'')):
+            source = '# coding: ' + encoding + '\nvalue = "caf\xe9 ' + 'word ' * 36 + '"\n'
+            path = self.root / 'src/demo/working.py'
+            path.write_bytes(source.encode(encoding))
+            files = discover_files(self.root, read_scope(self.root))
+            directory = self.root / '.quard/reports/run'
+            job = next(item for item in make_jobs(self.root, directory, files, True, [])
+                       if item['name'] == 'stairfmt')
+            result = execute_job(job, self.root, directory, 30)
+            command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--fix',
+                                      '--project', str(self.root), '--json', 'src/demo/working.py'],
+                                     cwd=self.root, capture_output=True, text=True, check=False)
+            fixed = path.read_bytes()
+            again = subprocess.run(command.args, cwd=self.root, capture_output=True,
+                                   text=True, check=False)
+            results.append((result['status'], result['exit_code'], command.returncode,
+                            fixed.startswith(prefix),
+                            ast.dump(ast.parse(fixed.decode(encoding))) == ast.dump(ast.parse(source)),
+                            json.loads(again.stdout)['changed_files']))
+        self.assertEqual(results, [('violations', 1, 0, True, True, [])] * 2)
+
     def test_adjacent_unicode_literal_is_wrapped_as_one_value(self):
         source = 'value = u"prefix " "' + ('word ' * 35) + '"\n'
         fixed, report = self.formatted(source)
@@ -124,8 +167,8 @@ class TestStairfmtStrings(unittest.TestCase):
         setting.write_text(setting.read_text(encoding='utf-8')
                            + '\n[stairfmt]\nstring_limit = 12\n', encoding='utf-8')
         fixed, report = self.formatted('value = "a short phrase with spaces"\n')
-        self.assertEqual((report['remaining'], "'a short '" in fixed,
-                          "'phrase with '" in fixed), ([], True, True))
+        self.assertEqual((report['remaining'], '"a short "' in fixed,
+                          '"phrase with "' in fixed), ([], True, True))
 
     def test_invalid_string_limit_is_a_configuration_error(self):
         setting = self.root / '.quard/config.toml'
