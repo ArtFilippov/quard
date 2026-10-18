@@ -176,6 +176,14 @@ class TestStairfmt(unittest.TestCase):
                           self.formatted(fixed)[0] == fixed),
                          ([], [], True, True, True, True, True))
 
+    def test_callable_dictionary_keys_and_values_converge(self):
+        source = 'x = f({g(1): h(2), j(3): k(4)}, 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], self.formatted(fixed)[0]),
+                         (True, [], [], [], fixed))
+
     def test_multifield_dictionary_closes_after_multiline_value(self):
         source = ('x = f(\n    {\n        "a": 1,\n        "b": g(\n'
                   '            2, 3\n        )}\n)\n')
@@ -326,6 +334,14 @@ def run(path, self, test, populations):
                           .isdisjoint({item['rule'] for item in report['remaining']}),
                           report['warnings'], ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
                           self.formatted(fixed)[0]), (True, [], True, fixed))
+
+    def test_parenthesized_binary_argument_converges_in_one_pass(self):
+        source = 'x = f((g(1, 2) + h(3, 4)), 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed.count('('), report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (source.count('('), [], [], [], fixed, True))
 
     def test_comprehension_iterable_dictionary_converges(self):
         source = 'x = f([v for v in {"a": g(1), "b": h(2)}])\n'

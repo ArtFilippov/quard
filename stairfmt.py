@@ -127,6 +127,14 @@ def _call_column(call: ast.Call, lines: list[str]) -> int:
     return _column(lines, call.func.lineno, call.func.col_offset)
 
 
+def _field_pair(previous: ast.Call, call: ast.Call, parents: dict[ast.AST, ast.AST]) -> bool:
+    """Allow a dictionary field's callable key and value to share a line."""
+    return any(isinstance(node, ast.Dict) and any(
+        key is not None and previous in ast.walk(key) and call in ast.walk(value)
+        for key, value in zip(node.keys, node.values))
+        for node in _ancestors(call, parents))
+
+
 def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
     issues: list[Issue] = []
     calls = _visible(root)
@@ -191,6 +199,9 @@ def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
                 isinstance(ancestor, ast.BinOp) and previous in ast.walk(ancestor.left)
                 and call in ast.walk(ancestor.right)
                 for ancestor in _ancestors(call, parents)):
+                previous = call
+                continue
+            if _field_pair(previous, call, parents):
                 previous = call
                 continue
             issues.append(Issue(
@@ -403,7 +414,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                 if isinstance(node, ast.BinOp):
                     issues.extend(_inline_issues(node, source, inline_limit))
                     indent = (_leading_indent(lines[node.lineno - 1])
-                              if isinstance(parent, (ast.keyword, ast.Dict))
+                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict))
                               else " " * node.col_offset)
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
