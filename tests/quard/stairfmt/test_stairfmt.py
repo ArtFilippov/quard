@@ -176,6 +176,20 @@ class TestStairfmt(unittest.TestCase):
                           self.formatted(fixed)[0] == fixed),
                          ([], [], True, True, True, True, True))
 
+    def test_multifield_dictionary_closes_after_multiline_value(self):
+        source = ('x = f(\n    {\n        "a": 1,\n        "b": g(\n'
+                  '            2, 3\n        )}\n)\n')
+        expected = ('x = f(\n    {\n        "a": 1,\n        "b": g(\n'
+                    '            2, 3\n        )\n    }\n)\n')
+        initial = self.checked(source)
+        fixed, report = self.formatted(source)
+        clean = self.checked(fixed)
+        repeat, _ = self.formatted(fixed)
+        self.assertEqual(([(item['rule'], item['line']) for item in initial['remaining']],
+                          fixed, report['remaining'], clean['remaining'], repeat,
+                          ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed))),
+                         ([('ST009', 2)], expected, [], [], expected, True))
+
     def test_clean_call_with_comment_is_positioned_violation(self):
         source = 'value = f(\n    1,  # keep\n    2\n)\n'
         self.assertEqual([(item["rule"], item["line"]) for item in self.checked(source)["remaining"]

@@ -225,9 +225,10 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
 def _container_issues(node: ast.AST) -> list[Issue]:
     if isinstance(node, ast.Dict) and len(node.keys) > 1:
         fields = [key if key is not None else value for key, value in zip(node.keys, node.values)]
-        if len({field.lineno for field in fields}) != len(fields) or node.end_lineno == fields[-1].end_lineno:
+        if (len({field.lineno for field in fields}) != len(fields)
+                or node.end_lineno == node.values[-1].end_lineno):
             return [Issue(node.lineno, node.col_offset + 1, "ST009",
-                          "каждое поле словаря должно быть на отдельной строке")]
+                          "поля словаря и закрывающая скобка должны быть на отдельных строках")]
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         children = node.elts
         for index, child in enumerate(children[1:], 1):
