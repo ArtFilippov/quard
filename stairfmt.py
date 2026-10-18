@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import ast
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 import io
 import json
 import re
@@ -646,7 +647,8 @@ def _layout_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
               else _leading_indent(lines[node.lineno - 1]))
     try:
         expected = renderer.render_arg(node, indent)
-        if source[left:right] == expected or "\n" not in source[left:right] + expected:
+        if (_without_endings(source[left:right]) == _without_endings(expected)
+                or "\n" not in source[left:right] + expected):
             return []
         try:
             candidate = ast.parse(source[:left] + expected + source[right:])
@@ -670,6 +672,40 @@ def _index(lines: list[str], lineno: int, byte_col: int) -> int:
 
 def _leading_indent(line: str) -> str:
     return line[:len(line) - len(line.lstrip(" \t"))]
+
+
+def _without_endings(source: str) -> str:
+    return source.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _ending(line: str) -> str:
+    match = re.search(r"(?:\r\n|\n|\r)$", line)
+    return match.group() if match else ""
+
+
+def _local_endings(source: str, start: int, end: int, replacement: str) -> str:
+    """Keep surviving line endings and give inserted lines nearby source style."""
+    original = source[start:end].splitlines(keepends=True)
+    rendered = replacement.splitlines(keepends=True)
+    lines = source.splitlines(keepends=True)
+    position = source[:start].count("\n")
+    nearby = _ending(lines[position]) if position < len(lines) else ""
+    if not nearby:
+        nearby = next((_ending(line) for line in reversed(lines[:position]) if _ending(line)), "\n")
+    result = rendered.copy()
+    matcher = SequenceMatcher(None, [_without_endings(line).rstrip("\n") for line in original],
+                              [_without_endings(line).rstrip("\n") for line in rendered],
+                              autojunk=False)
+    for _, first, last, left, right in matcher.get_opcodes():
+        for index in range(left, right):
+            line = rendered[index]
+            ending = _ending(line)
+            if not ending:
+                continue
+            offset = min(first + index - left, last - 1) if last > first else first
+            style = _ending(original[min(offset, len(original) - 1)]) if original else nearby
+            result[index] = line[:-len(ending)] + (style or nearby)
+    return "".join(result)
 
 
 def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
@@ -761,6 +797,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         indent = _leading_indent(lines[node.lineno - 1])
         replacement = "(\n" + "".join(indent + " " * indent_size + piece + "\n"
                                       for group in pieces for piece in group) + indent + ")"
+        replacement = _local_endings(source, start, end, replacement)
         candidate = source[:start] + replacement + source[end:]
         try:
             if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
@@ -788,12 +825,12 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             continue
         try:
             replacement = renderer.render_arg(node, " " * node.col_offset)
-            if replacement != source[left:right]:
+            if _without_endings(replacement) != _without_endings(source[left:right]):
                 try:
                     _ = ast.parse(source[:left] + replacement + source[right:])
                 except SyntaxError:
                     replacement = "(" + replacement + ")"
-                edits.append((left, right, replacement))
+                edits.append((left, right, _local_endings(source, left, right, replacement)))
         except (SyntaxError, ValueError) as exc:
             warnings.append(f"{node.lineno}: пропущено: {exc}")
     for root in _roots(tree):
@@ -819,7 +856,8 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                     and renderer.supported(call)):
                 indent = _leading_indent(lines[call.lineno - 1])
                 try:
-                    edits.append((left, right, renderer.render_call(call, indent)))
+                    edits.append((left, right, _local_endings(
+                        source, left, right, renderer.render_call(call, indent))))
                     return
                 except ValueError:
                     pass

@@ -220,7 +220,8 @@ violations baseline.
    Stairfmt limits supported expressions and ordinary strings, not all physical
    lines. Module length and other Pylint format and design checks remain enabled.
    UTF-8 BOM and declared non-UTF-8 Python source are supported by check and fix;
-   fixes preserve the original encoding and BOM.
+   fixes preserve the original encoding and BOM. CRLF files keep CRLF, and mixed
+   files retain untouched endings while new lines follow the edited region's style.
 * **Cached-property migration (default-on, optional)**: the independent
   `cached-property-migration` job scans discovered production, test and `.pyi`
   files for proven uses of `functools.cached_property`, including direct and

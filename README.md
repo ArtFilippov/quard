@@ -358,7 +358,9 @@ literals are excluded. Generated Pyright disables `reportImplicitStringConcatena
 Pylint retains `implicit-str-concat`, which still flags same-line concatenation but
 does not flag Stairfmt's multiline pieces. Source files with a UTF-8 BOM or a
 declared non-UTF-8 encoding are decoded as Python source by both entry points;
-fix retains the original encoding and BOM.
+fix retains the original encoding and BOM. Fixes also retain CRLF in CRLF files;
+in mixed-ending files untouched lines keep their endings and inserted lines use
+the edited region's local style. Check and repeat fix accept the resulting layout.
 
 Every command accepts `--project` (defaults to the current directory). A separate
 clone or a differently named submodule works with the consumer's interpreter:

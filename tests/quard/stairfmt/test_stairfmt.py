@@ -358,6 +358,70 @@ def run(path, self, test, populations):
         source = 'x = f([\n    item for item in values\n])\n'
         self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], ['ST012'])
 
+    def test_crlf_fix_and_check_converge_without_rewriting_canonical_lines(self):
+        path = self.root / 'src/demo/working.py'
+        source = b'\xef\xbb\xbf# keep\r\nx = f(g(1), h(2))\r\ny = f(\r\n    g(3)\r\n)\r\n'
+        path.write_bytes(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        fixed = path.read_bytes()
+        files = discover_files(self.root, read_scope(self.root))
+        directory = self.root / '.quard/reports/run'
+        job = next(item for item in make_jobs(self.root, directory, files, True, [])
+                   if item['name'] == 'stairfmt')
+        result = execute_job(job, self.root, directory, 30)
+        again, repeat, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['remaining'], report['warnings'], fixed,
+                          result['status'], result['exit_code'], result['diagnostics'],
+                          again, repeat['changed_files'], path.read_bytes()),
+                         (0, [], [], b'\xef\xbb\xbf# keep\r\nx = f(\r\n    g(1),\r\n'
+                          b'    h(2)\r\n)\r\ny = f(\r\n    g(3)\r\n)\r\n',
+                          'passed', 0, [], 0, [], fixed))
+
+    def test_mixed_endings_preserve_unedited_lines_and_local_new_lines(self):
+        path = self.root / 'src/demo/working.py'
+        source = (b'# LF stays\nfirst = f(g(1), h(2))\n# CRLF stays\r\n'
+                  b'second = f(g(3), h(4))\r\n# LF stays too\n')
+        path.write_bytes(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        fixed = path.read_bytes()
+        again, repeat, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['remaining'], report['warnings'], fixed,
+                          again, repeat['changed_files'], path.read_bytes()),
+                         (0, [], [], b'# LF stays\nfirst = f(\n    g(1),\n    h(2)\n)\n'
+                          b'# CRLF stays\r\nsecond = f(\r\n    g(3),\r\n'
+                          b'    h(4)\r\n)\r\n# LF stays too\n', 0, [], fixed))
+
+    def test_mixed_endings_string_split_keeps_neighboring_endings(self):
+        path = self.root / 'src/demo/working.py'
+        source = b'# LF stays\nvalue = "' + b'a word ' * 26 + b'"\r\n# LF remains\n'
+        path.write_bytes(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        fixed = path.read_bytes()
+        again, repeat, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['remaining'], report['warnings'],
+                          fixed.startswith(b'# LF stays\nvalue = (\r\n'),
+                          fixed.endswith(b')\r\n# LF remains\n'),
+                          ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed)),
+                          again, repeat['changed_files'], path.read_bytes()),
+                         (0, [], [], True, True, True, 0, [], fixed))
+
+    def test_rewritten_region_keeps_existing_mixed_endings(self):
+        path = self.root / 'src/demo/working.py'
+        source = b'x = f(\r\n    g(1),\n    h(2))\r\n# untouched\n'
+        path.write_bytes(source)
+        code, report, _ = self.run_fix('src/demo/working.py')
+        fixed = path.read_bytes()
+        check = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                '--project', str(self.root), '--json', 'src/demo/working.py'],
+                               cwd=self.root, capture_output=True, text=True, check=False)
+        again, repeat, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['remaining'], fixed, check.returncode,
+                          json.loads(check.stdout)['remaining'],
+                          ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed)), again,
+                          repeat['changed_files'], path.read_bytes()),
+                         (0, [], b'x = f(\r\n    g(1),\n    h(2)\r\n)\r\n# untouched\n',
+                          0, [], True, 0, [], fixed))
+
     def test_explicit_paths_obey_discovered_scope(self):
         self.put("src/demo/generated/ignored.py", "x = f(g(1), h(2))\n")
         self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
