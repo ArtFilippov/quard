@@ -180,8 +180,9 @@ violations baseline.
   until after the first stable release. Unknown aliases and unannotated values are
   not inferred. Parse and worker failures exit 2; findings exit 1.
 * **Stairfmt (default-on, optional)**: `ST001`–`ST012` check supported composed-call
-  layout, indentation and strings in discovered production and test `.py` files, independently of LCOM4
-  selection. Companion stubs and calls inside f-strings are not checked. The
+  and multi-field dictionary layout, indentation and strings in discovered production
+  and test `.py` files, independently of LCOM4 selection. Companion stubs and
+  expressions inside f-strings are not checked. The
   checker preserves its native positioned rule IDs and suggests the separate
   `stairfmt.py --fix --project .` command. That command rechecks its output, reports
   each unsupported edit and remaining finding, and archives a fix report separately
@@ -203,9 +204,10 @@ violations baseline.
   when more than one call-bearing branch occurs along a root-to-leaf path.
   `ST008` positions comments inside checked calls without deleting them; fix skips
   an unsafe edit with a warning even when bare CR precedes the call.
-  `ST009` checks multi-field dictionaries and ordinary versus nested container
-  elements. `ST012` identifies fixable noncanonical breaks. Fix applies independent
-  safe layout edits even when `ST006` or `ST007` remains.
+  `ST009` checks multi-field dictionaries even outside calls, and ordinary versus nested
+  container elements inside calls. Standalone dictionary fixes preserve comments by
+  skipping unsafe edits with a warning. `ST012` identifies fixable noncanonical
+  breaks. Fix applies independent safe layout edits even when `ST006` or `ST007` remains.
   `ST010` checks block indentation across selected `.py` files and supported call
   continuations, including tabs and form feeds; space-only continuations in lists
   and function signatures are outside its scope. Fix uses four spaces for block

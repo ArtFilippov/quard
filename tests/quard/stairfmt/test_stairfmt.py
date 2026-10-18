@@ -277,6 +277,75 @@ class TestStairfmt(unittest.TestCase):
         self.assertEqual((report['remaining'], report['warnings'],
                           '"a": 1,\n' in fixed), ([], [], True))
 
+    def test_standalone_multifield_dictionary_is_checked_and_fixed(self):
+        source = 'data = {"a": 1, "b": 2}\n'
+        expected = 'data = {\n    "a": 1,\n    "b": 2\n}\n'
+        findings = self.checked(source)['remaining']
+        fixed, report = self.formatted(source)
+        self.assertEqual(([(item['rule'], item['line']) for item in findings], fixed,
+                          report['remaining'], report['warnings'], self.formatted(fixed)[0]),
+                         ([('ST009', 1)], expected, [], [], expected))
+
+    def test_first_dictionary_field_needs_own_line(self):
+        source = 'data = {"a": 1,\n    "b": 2\n}\n'
+        expected = 'data = {\n    "a": 1,\n    "b": 2\n}\n'
+        findings = self.checked(source)['remaining']
+        fixed, report = self.formatted(source)
+        self.assertEqual(([(item['rule'], item['line']) for item in findings], fixed,
+                          report['remaining'], report['warnings']),
+                         ([('ST009', 1)], expected, [], []))
+
+    def test_standalone_dictionary_renders_child_calls_in_one_pass(self):
+        source = 'data = {"a": g(1, 2), "b": h(3, 4)}\n'
+        expected = ('data = {\n    "a": g(\n        1, 2\n    ),\n'
+                    '    "b": h(\n        3, 4\n    )\n}\n')
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (expected, [], [], expected, True))
+
+    def test_nested_standalone_dictionary_expands_with_container(self):
+        source = 'data = [{"a": 1, "b": 2}]\n'
+        expected = 'data = [\n    {\n        "a": 1,\n        "b": 2\n    }\n]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['remaining'], report['warnings'], self.formatted(fixed)[0]),
+                         (expected, [], [], expected))
+
+    def test_standalone_dictionary_in_comprehension_converges(self):
+        source = 'data = [{"a": 1, "b": 2} for value in values]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], fixed, True))
+
+    def test_multifield_dictionary_inside_protected_call_argument_is_reported(self):
+        source = 'value = f(lambda: {"a": 1, "b": 2})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, [item['rule'] for item in report['remaining']],
+                          len(report['warnings']), self.formatted(fixed)[0]),
+                         (source, ['ST009'], 1, source))
+
+    def test_standalone_dictionary_with_comment_is_left_intact(self):
+        source = 'data = {"a": 1,  # keep\n        "b": 2}\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, [item['rule'] for item in report['remaining']],
+                          len(report['warnings'])), (source, ['ST009'], 1))
+
+    def test_standalone_dictionary_keeps_crlf(self):
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(b'data = {"a": 1, "b": 2}\r\n')
+        code, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['remaining'], path.read_bytes()),
+                         (0, [], b'data = {\r\n    "a": 1,\r\n    "b": 2\r\n}\r\n'))
+
+    def test_dictionary_inside_fstring_remains_outside_scope(self):
+        source = 'data = f"{ {\'a\': 1, \'b\': 2} }"\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['remaining'], report['warnings']),
+                         (source, [], []))
+
     def test_calls_in_list_follow_staircase_without_container_findings(self):
         source = 'value = f([g(1), h(2), 3])\n'
         fixed, report = self.formatted(source)

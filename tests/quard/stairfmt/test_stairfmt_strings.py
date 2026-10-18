@@ -74,7 +74,8 @@ class TestStairfmtStrings(unittest.TestCase):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
                           [item['rule'] for item in report['remaining']],
                           self.formatted(fixed)[0] == fixed),
-                         ([('ST011', 1), ('ST011', 2), ('ST011', 2)], True, [], True))
+                         ([('ST011', 1), ('ST009', 2), ('ST011', 2), ('ST011', 2)],
+                          True, [], True))
 
     def test_two_long_literals_in_separate_statements_are_fixed(self):
         source = 'first = "' + 'a' * 161 + '"\nsecond = "' + 'b' * 161 + '"\n'

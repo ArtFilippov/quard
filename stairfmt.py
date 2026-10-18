@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Staircase formatter/checker for Python call compositions.
+"""Staircase formatter/checker for Python calls and multi-field dictionaries.
 
 Rules:
 - In one compositional call tree, no two called names share a source line,
@@ -7,6 +7,7 @@ Rules:
 - A method after a multiline call shares its closing-parenthesis line.
 - Calls with multiple arguments start the argument list on the next line.
 - Parenthesized tuples follow the same layout as call arguments.
+- Multi-field dictionaries put each field on its own line, even outside calls.
 - Simple arguments may share a line (e.g. Point(\n    x, y\n)).
 - A single non-call argument MUST remain inline (e.g. Point(x)).
 - The closing parenthesis of a multiline call is on its own line.
@@ -297,8 +298,9 @@ def _end_line(node: ast.expr) -> int:
 def _container_issues(node: ast.AST, lines: list[str]) -> list[Issue]:
     if isinstance(node, ast.Dict) and len(node.keys) > 1:
         fields = [key if key is not None else value for key, value in zip(node.keys, node.values)]
-        if (any(field.lineno <= _end_line(node.values[index - 1])
-                for index, field in enumerate(fields[1:], 1))
+        if (fields[0].lineno <= node.lineno
+                or any(field.lineno <= _end_line(node.values[index - 1])
+                       for index, field in enumerate(fields[1:], 1))
                 or node.end_lineno == node.values[-1].end_lineno):
             return [Issue(node.lineno, _column(lines, node.lineno, node.col_offset), "ST009",
                           "поля словаря и закрывающая скобка должны быть на отдельных строках")]
@@ -421,11 +423,11 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                string_limit: int = 160) -> list[Issue]:
     issues: list[Issue] = []
     lines = _lines(source)
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
     if source and isinstance(tree, ast.Module):
         issues.extend(_indentation(source, 4)[0])
         issues.extend(issue for issue, _, _ in _strings(tree, source, string_limit))
-        parents = {child: parent for parent in ast.walk(tree)
-                   for child in ast.iter_child_nodes(parent)}
     for root in _roots(tree):
         issues.extend(_issue_list(root, lines))
         if source:
@@ -454,9 +456,6 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                         issues.extend(issue for issue in _inline_issues(node, source, inline_limit)
                                       if issue.code == "ST007" or issue.code == "ST006"
                                       and "длина" in issue.message)
-                        for part in ast.walk(node):
-                            if isinstance(part, ast.Dict):
-                                issues.extend(_container_issues(part, lines))
                         issues.extend(_layout_issues(node, source, inline_limit,
                                                      _leading_indent(lines[node.lineno - 1])))
                     return
@@ -467,13 +466,15 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                               else " " * (_column(lines, node.lineno, node.col_offset) - 1))
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
-                issues.extend(_container_issues(node, lines))
+                if not isinstance(node, ast.Dict):
+                    issues.extend(_container_issues(node, lines))
                 for child in ast.iter_child_nodes(node):
                     visit(child, node)
             visit(root, root)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict) and not _under_interpolation(node, parents):
+            issues.extend(_container_issues(node, lines))
     if isinstance(tree, ast.Module):
-        parents = {child: parent for parent in ast.walk(tree)
-                   for child in ast.iter_child_nodes(parent)}
         for node in ast.walk(tree):
             if not isinstance(node, ast.BinOp) or not _visible(node) or any(
                     isinstance(part, (ast.Call, ast.BinOp)) or _protected(part)
@@ -935,11 +936,141 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             raise ValueError("нормализация отступов меняет структуру AST")
         source = normalized
         tree = ast.parse(source)
+    warnings: list[str] = []
+    renderer = Renderer(source, indent_size, inline_limit)
+    lines = _lines(source)
+    edits: list[tuple[int, int, str]] = []
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    containers: set[ast.AST] = set()
+    for node in ast.walk(tree):
+        if (not isinstance(node, ast.Dict) or node in containers
+                or _under_interpolation(node, parents)
+                or not _container_issues(node, lines)):
+            continue
+        ancestors = _ancestors(node, parents)
+        if any(isinstance(part, ast.Call) for part in ancestors):
+            continue
+        container = node
+        for part in ancestors:
+            if isinstance(part, (ast.Dict, ast.List, ast.Tuple, ast.Set,
+                                 ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+                container = part
+        if container in containers:
+            continue
+        containers.add(container)
+        left = _index(lines, container.lineno, container.col_offset)
+        right = _index(lines, container.end_lineno, container.end_col_offset)
+        if _has_comments(source, left, right, lines) or _trailing_comment(source, right):
+            warnings.append(f"{node.lineno}: пропущено: комментарий внутри словаря или после него")
+            continue
+        if not renderer.supported_arg(container):
+            warnings.append(f"{node.lineno}: пропущено: словарь нельзя безопасно разложить")
+            continue
+        indent = _leading_indent(lines[container.lineno - 1])
+        replacement = renderer.render_arg(container, indent)
+        if _without_endings(replacement) != _without_endings(source[left:right]):
+            edits.append((left, right, _local_endings(source, left, right, replacement)))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not _visible(node) or any(
+                isinstance(part, (ast.Call, ast.BinOp)) or _protected(part)
+                for part in _ancestors(node, parents)):
+            continue
+        left = _index(lines, node.lineno, node.col_offset)
+        right = _index(lines, node.end_lineno, node.end_col_offset)
+        indent = " " * (_column(lines, node.lineno, node.col_offset) - 1)
+        if (any(start <= left < end for start, end, _ in edits)
+                or _has_comments(source, left, right, lines)
+                or _trailing_comment(source, right)
+                or not renderer.supported_arg(node)
+                or not _layout_issues(node, source, inline_limit, indent)):
+            continue
+        try:
+            replacement = renderer.render_arg(node, indent)
+            if _without_endings(replacement) != _without_endings(source[left:right]):
+                try:
+                    _ = ast.parse(source[:left] + replacement + source[right:])
+                except SyntaxError:
+                    replacement = "(" + renderer.render_arg(node, indent + " ") + ")"
+                edits.append((left, right, _local_endings(source, left, right, replacement)))
+        except (SyntaxError, ValueError) as exc:
+            warnings.append(f"{node.lineno}: пропущено: {exc}")
+    for root in _roots(tree):
+        start = _index(lines, root.lineno, root.col_offset)
+        end = _index(lines, root.end_lineno, root.end_col_offset)
+        if any(left < end and start < right for left, right, _ in edits):
+            continue
+        findings = (issues_for(root, source, inline_limit)
+                    + [issue for call in _visible(root)
+                       for issue in _call_indent_issues(call, lines, parents)])
+        if not findings:
+            continue
+        blocked = _has_comments(source, start, end, lines)
+        if _trailing_comment(source, end):
+            warnings.append(f"{root.lineno}: пропущено: комментарий привязан к строке вызова")
+            continue
+        if blocked:
+            warnings.append(f"{root.lineno}: пропущено: комментарий внутри вызова")
+
+        def collect(call: ast.Call) -> None:
+            left = _index(lines, call.lineno, call.col_offset)
+            right = _index(lines, call.end_lineno, call.end_col_offset)
+            if any(start < right and left < end for start, end, _ in edits):
+                return
+            if ((any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
+                     or issue.code == "ST006" and "одной строке" in issue.message
+                     for issue in issues_for(call, source, inline_limit))
+                 or _call_indent_issues(call, lines, parents))
+                    and not _has_comments(source, left, right, lines)
+                    and renderer.supported(call)):
+                indent = _leading_indent(lines[call.lineno - 1])
+                try:
+                    replacement = renderer.render_call(call, indent)
+                    if (replacement.startswith('(\n') and re.search(r'\(\s*$', source[:left])
+                            and re.match(r'^\s*\)', source[right:])):
+                        replacement = ('\n' + indent + renderer.step
+                                       + renderer.render_call(call, indent + renderer.step, in_call=True)
+                                       + '\n' + indent)
+                    if _without_endings(replacement) != _without_endings(source[left:right]):
+                        edits.append((left, right, _local_endings(source, left, right, replacement)))
+                        return
+                    if any(issue.code == "ST009" for issue in issues_for(call, source, inline_limit)):
+                        warnings.append(f"{call.lineno}: пропущено: словарь внутри сложного выражения")
+                except ValueError:
+                    pass
+            for child in _visible(call)[1:]:
+                if child is not call:
+                    collect(child)
+
+        if blocked or not renderer.supported(root):
+            if not blocked and any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
+                                   for issue in findings):
+                unsupported = next((arg for arg in [*root.args, *(kw.value for kw in root.keywords)]
+                                    if not renderer.supported_arg(arg)), root.func)
+                warnings.append(f"{root.lineno}: пропущено: {type(unsupported).__name__} "
+                                "нельзя безопасно разложить внутри вызова")
+            for child in _visible(root)[1:]:
+                collect(child)
+        else:
+            collect(root)
+
+    formatted = source
+    # Test each edit independently so an unsafe branch cannot undo safe peers.
+    for start, end, replacement in sorted(edits, reverse=True):
+        candidate = formatted[:start] + replacement + formatted[end:]
+        try:
+            if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
+                formatted = candidate
+            else:
+                warnings.append("изменение отменено: результат меняет структуру AST")
+        except SyntaxError:
+            warnings.append("изменение отменено: результат синтаксически некорректен")
+    source = formatted
+    tree = ast.parse(source)
     lines = _lines(source)
     selected: dict[ast.Constant, list[tokenize.TokenInfo]] = {}
     for _, token, node in _strings(tree, source, string_limit):
         selected.setdefault(node, []).append(token)
-    warnings: list[str] = []
     for node, tokens in sorted(selected.items(), key=lambda item: item[1][0].start, reverse=True):
         start = _index(lines, node.lineno, node.col_offset)
         end = _index(lines, node.end_lineno, node.end_col_offset)
@@ -976,105 +1107,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                 warnings.append(f"{node.lineno}: пропущено: перенос меняет структуру AST")
         except SyntaxError:
             warnings.append(f"{node.lineno}: пропущено: нет безопасного синтаксического переноса строки")
-    tree = ast.parse(source)
-    renderer = Renderer(source, indent_size, inline_limit)
-    lines = _lines(source)
-    edits: list[tuple[int, int, str]] = []
-    parents = {child: parent for parent in ast.walk(tree)
-               for child in ast.iter_child_nodes(parent)}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.BinOp) or not _visible(node) or any(
-                isinstance(part, (ast.Call, ast.BinOp)) or _protected(part)
-                for part in _ancestors(node, parents)):
-            continue
-        left = _index(lines, node.lineno, node.col_offset)
-        right = _index(lines, node.end_lineno, node.end_col_offset)
-        indent = " " * (_column(lines, node.lineno, node.col_offset) - 1)
-        if (any(start <= left < end for start, end, _ in edits)
-                or _has_comments(source, left, right, lines)
-                or _trailing_comment(source, right)
-                or not renderer.supported_arg(node)
-                or not _layout_issues(node, source, inline_limit, indent)):
-            continue
-        try:
-            replacement = renderer.render_arg(node, indent)
-            if _without_endings(replacement) != _without_endings(source[left:right]):
-                try:
-                    _ = ast.parse(source[:left] + replacement + source[right:])
-                except SyntaxError:
-                    replacement = "(" + renderer.render_arg(node, indent + " ") + ")"
-                edits.append((left, right, _local_endings(source, left, right, replacement)))
-        except (SyntaxError, ValueError) as exc:
-            warnings.append(f"{node.lineno}: пропущено: {exc}")
-    for root in _roots(tree):
-        if any(left <= _index(lines, root.lineno, root.col_offset) < right
-               for left, right, _ in edits):
-            continue
-        findings = (issues_for(root, source, inline_limit)
-                    + [issue for call in _visible(root)
-                       for issue in _call_indent_issues(call, lines, parents)])
-        if not findings:
-            continue
-        start = _index(lines, root.lineno, root.col_offset)
-        end = _index(lines, root.end_lineno, root.end_col_offset)
-        blocked = _has_comments(source, start, end, lines)
-        if _trailing_comment(source, end):
-            warnings.append(f"{root.lineno}: пропущено: комментарий привязан к строке вызова")
-            continue
-        if blocked:
-            warnings.append(f"{root.lineno}: пропущено: комментарий внутри вызова")
-
-        def collect(call: ast.Call) -> None:
-            left = _index(lines, call.lineno, call.col_offset)
-            right = _index(lines, call.end_lineno, call.end_col_offset)
-            if any(start < right and left < end for start, end, _ in edits):
-                return
-            if ((any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
-                     or issue.code == "ST006" and "одной строке" in issue.message
-                     for issue in issues_for(call, source, inline_limit))
-                 or _call_indent_issues(call, lines, parents))
-                    and not _has_comments(source, left, right, lines)
-                    and renderer.supported(call)):
-                indent = _leading_indent(lines[call.lineno - 1])
-                try:
-                    replacement = renderer.render_call(call, indent)
-                    if (replacement.startswith('(\n') and re.search(r'\(\s*$', source[:left])
-                            and re.match(r'^\s*\)', source[right:])):
-                        replacement = ('\n' + indent + renderer.step
-                                       + renderer.render_call(call, indent + renderer.step, in_call=True)
-                                       + '\n' + indent)
-                    edits.append((left, right, _local_endings(source, left, right, replacement)))
-                    return
-                except ValueError:
-                    pass
-            for child in _visible(call)[1:]:
-                if child is not call:
-                    collect(child)
-
-        if blocked or not renderer.supported(root):
-            if not blocked and any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
-                                   for issue in findings):
-                unsupported = next((arg for arg in [*root.args, *(kw.value for kw in root.keywords)]
-                                    if not renderer.supported_arg(arg)), root.func)
-                warnings.append(f"{root.lineno}: пропущено: {type(unsupported).__name__} "
-                                "нельзя безопасно разложить внутри вызова")
-            for child in _visible(root)[1:]:
-                collect(child)
-        else:
-            collect(root)
-
-    formatted = source
-    # Test each edit independently so an unsafe branch cannot undo safe peers.
-    for start, end, replacement in sorted(edits, reverse=True):
-        candidate = formatted[:start] + replacement + formatted[end:]
-        try:
-            if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
-                formatted = candidate
-            else:
-                warnings.append("изменение отменено: результат меняет структуру AST")
-        except SyntaxError:
-            warnings.append("изменение отменено: результат синтаксически некорректен")
-    return formatted, warnings
+    return source, warnings
 
 
 def _paths(root: Path, inputs: list[str]) -> list[Path]:

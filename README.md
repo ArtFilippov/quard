@@ -299,10 +299,11 @@ remain technical debt until after the first stable release.
 
 ### Stairfmt
 
-The independent `stairfmt` job checks composed Python calls in discovered production
-and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST012`
-violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
-stubs (`.pyi`) and calls inside f-strings or Python 3.14 template strings are outside
+The independent `stairfmt` job checks composed Python calls and multi-field
+dictionaries in discovered production and test `.py` files, regardless of
+`--lcom_files`. It reports positioned `ST001`–`ST012` violations and suggests
+`python quard/stairfmt.py --fix --project .`; source and test
+stubs (`.pyi`) and expressions inside f-strings or Python 3.14 template strings are outside
 this rule's scope. `ST011` checks ordinary overlong string literals, including files
 with no calls. The job is enabled by default on new and existing consumer
 installations, including configs without the setting. Set `[checks] stairfmt = false`
@@ -329,9 +330,9 @@ Remove the retired `max_line_length` setting from any existing
 the configuration with exit 2. No automatic migration is performed. See
 [ADR 0010](docs/adr/0010-stairfmt-without-physical-line-limit.md).
 Simple comprehensions, single-field dictionaries without nested multi-field dictionaries,
-and lambda expressions remain inline;
-their calls do not trigger staircase layout findings. Multi-field dictionaries expand
-even within comprehensions: each field starts on its own line. For an expanded
+and lambda expressions remain inline; their calls do not trigger staircase layout
+findings. Multi-field dictionaries expand even outside calls and within comprehensions:
+each field starts on its own line. For an expanded
 dictionary key, the first `for` stays with the element, subsequent `for` clauses
 increase indentation by four spaces each, and filters stay with their clause.
 Expanded values retain their own-line clauses. Binary call operands use the same
@@ -345,8 +346,10 @@ are not checked against it. An over-limit supported expression line (`ST006`)
 or a second call-bearing branch along one path (`ST007`) receives
 simplify-expression advice independently of safe layout fixes. Ordinary container
 elements share a line, nested containers start
-new lines, and multi-field dictionaries use one field per line. Comments inside checked
-calls receive a positioned finding and are preserved; unsafe call edits are skipped
+new lines, and multi-field dictionaries use one field per line. Unsafe standalone
+dictionary edits are skipped with a warning, preserving comments. A dictionary in an
+unsupported protected call argument can retain `ST009` for manual layout. Comments inside
+checked calls receive a positioned finding and are preserved; unsafe call edits are skipped
 with a warning, including when bare CR precedes the call. Independent safe edits
 still proceed. Each fix run prints a
 summary and saves its own JSON report under
