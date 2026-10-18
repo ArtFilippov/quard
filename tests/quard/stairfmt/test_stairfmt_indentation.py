@@ -63,6 +63,24 @@ class TestStairfmtIndentation(unittest.TestCase):
                            for item in result["diagnostics"]]),
                          ("violations", 1, [("ST010", 2, 1)]))
 
+    def test_noncanonical_space_indent_is_reported_before_fix(self):
+        source = 'if True:\n  value = 1\n'
+        found = self.checked(source)
+        fixed, report = self.run_fix('src/demo/working.py')
+        self.assertEqual(([item['rule'] for item in found['remaining']],
+                          fixed, report['remaining'],
+                          (self.root / 'src/demo/working.py').read_text(encoding='utf-8')),
+                         (['ST010'], 0, [], 'if True:\n    value = 1\n'))
+
+    def test_form_feed_and_tab_in_indent_are_reported_and_removed(self):
+        source = 'if True:\n\f\tvalue = 1\n'
+        found = self.checked(source)
+        fixed, report = self.run_fix('src/demo/working.py')
+        self.assertEqual(([item['rule'] for item in found['remaining']],
+                          fixed, report['remaining'],
+                          (self.root / 'src/demo/working.py').read_text(encoding='utf-8')),
+                         (['ST010'], 0, [], 'if True:\n    value = 1\n'))
+
     def test_indent_fix_preserves_mixed_blocks_and_literal_text(self):
         source = ('if True:\n\t# note\tkeep\n\tif True:\n\t    value = """first\n'
                   '\tsecond\n\t"""\n\t    formatted = f"""first\n\tsecond\n\t"""\n'

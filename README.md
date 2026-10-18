@@ -314,9 +314,10 @@ From the consumer root, run `python quard/stairfmt.py --fix --project .` to form
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
-An empty `.py` scope passes with zero checked files. `ST010` detects indentation
-tabs independently of call layout. Fix normalizes block indentation to four spaces,
-including files without calls, while leaving tabs inside literals and comments
+An empty `.py` scope passes with zero checked files. `ST010` detects noncanonical
+indentation, including tabs and form feeds, independently of call layout. Fix
+normalizes block indentation to four spaces, including files without calls,
+while leaving tabs inside literals and comments
 untouched. `--indent` accepts only 4; other widths fail with exit 2 before source
 edits, in both check and fix.
 Pylint's physical `line-too-long` (C0301) check is disabled in both profiles;

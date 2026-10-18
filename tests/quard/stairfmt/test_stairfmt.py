@@ -370,6 +370,12 @@ def run(path, self, test, populations):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          (source.count('('), [], [], [], fixed, True))
 
+    def test_unsupported_root_fixes_all_independent_children_in_one_pass(self):
+        source = 'x = f(a[g(1, 2):h(3, 4)], k(1, 2))\n'
+        fixed, _ = self.formatted(source)
+        self.assertEqual((self.formatted(fixed)[0], ast.dump(ast.parse(fixed))),
+                         (fixed, ast.dump(ast.parse(source))))
+
     def test_comprehension_iterable_dictionary_converges(self):
         source = 'x = f([v for v in {"a": g(1), "b": h(2)}])\n'
         fixed, report = self.formatted(source)
@@ -451,6 +457,10 @@ def run(path, self, test, populations):
         source = 'x = (g(1) +\n     h(2))\n'
         self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], ['ST012'])
 
+    def test_trailing_comment_does_not_report_unfixable_binary_break(self):
+        source = 'x = (g(1) +\n     h(2))  # keep\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']], [])
+
     def test_binary_break_reaches_consumer_as_positioned_violation(self):
         self.put('src/demo/working.py', 'x = (g(1) +\n     h(2))\n')
         files = discover_files(self.root, read_scope(self.root))
@@ -519,6 +529,33 @@ def run(path, self, test, populations):
                           self.formatted(fixed)[0],
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          ([], [], [], True, fixed, True))
+
+    def test_parenthesized_callable_keeps_required_parentheses(self):
+        source = 'x = (a if cond else b)(g(1), h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          '(a if cond else b)(\n' in fixed,
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], True, fixed, True))
+
+    def test_existing_parentheses_around_chain_are_not_duplicated(self):
+        source = 'x = (a().b().c())\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], fixed.count('('),
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], source.count('('), True))
+
+    def test_multiline_literal_is_not_a_simple_call_argument(self):
+        source = 'x = f(\n    """hello\nworld"""\n)\n'
+        found = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual((found['remaining'], fixed, report['remaining'], report['warnings']),
+                         ([], source, [], []))
+
+    def test_protected_expression_with_multiline_literal_needs_no_simplification(self):
+        source = 'x = f(lambda: """first\nsecond""")\n'
+        self.assertEqual(self.checked(source)['remaining'], [])
 
     def test_nested_call_under_attribute_is_fixed(self):
         source = 'x = f(g(1, 2).attr, 0)\n'

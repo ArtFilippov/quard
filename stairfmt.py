@@ -171,7 +171,9 @@ def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
                     first.lineno, _column(lines, first.lineno, first.col_offset), "ST002",
                     "при нескольких аргументах первый должен начинаться с новой строки"
                 ))
-        elif len(arguments) == 1 and not _multiline(arguments[0]):
+        elif (len(arguments) == 1 and not _multiline(arguments[0])
+              and not (isinstance(arguments[0], (ast.Constant, ast.JoinedStr))
+                       and arguments[0].end_lineno > arguments[0].lineno)):
             arg = arguments[0]
             # A single simple argument cannot be split across lines. The
             # function name, argument, and closing ')' must share a line.
@@ -229,7 +231,18 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
     column = _column(_lines(source), node.lineno, node.col_offset)
     lengths = [len(line.strip()) for line in _lines(segment)]
     length = max(lengths, default=0)
-    if length > limit or "\n" in segment and not isinstance(node, ast.BinOp):
+    layout = list(segment)
+    lines = _lines(source)
+    start = _index(lines, node.lineno, node.col_offset)
+    for part in ast.walk(node):
+        if (isinstance(part, (ast.Constant, ast.JoinedStr))
+                and part.end_lineno > part.lineno):
+            left = _index(lines, part.lineno, part.col_offset) - start
+            right = _index(lines, part.end_lineno, part.end_col_offset) - start
+            for index in range(left, right):
+                if layout[index] in "\r\n":
+                    layout[index] = " "
+    if length > limit or "\n" in layout and not isinstance(node, ast.BinOp):
         issues.append(Issue(node.lineno, column, "ST006",
                             f"упростите выражение: длина {length} превышает предел {limit} "
                             if length > limit else "упростите выражение: оно должно быть в одной строке"))
@@ -705,14 +718,20 @@ class Renderer:
             methods.append(base)
             base = base.func.value
         if not methods:
+            lines = _lines(self.source)
+            start = _index(lines, call.lineno, call.col_offset)
+            begin = _index(lines, call.func.lineno, call.func.col_offset)
+            wrappers = self.source[start:begin].count('(')
             if isinstance(call.func, ast.Call):
                 name = self.render_call(call.func, indent, in_call=True)
             elif isinstance(call.func, ast.Subscript) and _has_nested_call(call.func):
                 name = self.render_arg(call.func, indent)
             elif isinstance(call.func, ast.Lambda):
-                name = "(" + self.compact(call.func) + ")"
+                name = self.compact(call.func)
+                wrappers = max(1, wrappers)
             else:
                 name = self.segment(call.func)
+            name = '(' * wrappers + name + ')' * wrappers
             return self.render_args(call, name, indent)
 
         inline = _first_dot(methods[-1]) and len(methods) == 1
@@ -733,7 +752,7 @@ def _layout_issues(node: ast.AST, source: str, limit: int, indent: str) -> list[
     lines = _lines(source)
     left = _index(lines, node.lineno, node.col_offset)
     right = _index(lines, node.end_lineno, node.end_col_offset)
-    if _has_comments(source, left, right, lines):
+    if _has_comments(source, left, right, lines) or _trailing_comment(source, right):
         return []
     renderer = Renderer(source, 4, limit)
     if not renderer.supported_arg(node):
@@ -774,7 +793,7 @@ def _lines(source: str) -> list[str]:
 
 
 def _leading_indent(line: str) -> str:
-    return line[:len(line) - len(line.lstrip(" \t"))]
+    return line[:len(line) - len(line.lstrip(" \t\f"))]
 
 
 def _without_endings(source: str) -> str:
@@ -843,13 +862,13 @@ def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
         if number in protected:
             continue
         prefix = _leading_indent(line)
-        if "\t" in prefix:
-            issues.append(Issue(number, prefix.index("\t") + 1, "ST010",
-                                "табуляция в отступе: используйте пробелы"))
         if number in depths:
             replacement = " " * (depths[number] * size)
         else:
-            replacement = prefix.expandtabs(size) if "\t" in prefix else prefix
+            replacement = prefix.replace("\f", "").expandtabs(size)
+        if prefix != replacement:
+            issues.append(Issue(number, (prefix.index("\t") + 1 if "\t" in prefix else 1),
+                                "ST010", "неканонический отступ: используйте четыре пробела"))
         lines[number - 1] = replacement + line[len(prefix):]
     return issues, "".join(lines)
 
@@ -891,7 +910,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
     for node, tokens in sorted(selected.items(), key=lambda item: item[1][0].start, reverse=True):
         start = _index(lines, node.lineno, node.col_offset)
         end = _index(lines, node.end_lineno, node.end_col_offset)
-        if any("\n" in token.string for token in tokens):
+        if any("\n" in token.string or "\r" in token.string for token in tokens):
             warnings.append(f"{node.lineno}: пропущено: физический перенос внутри строкового литерала")
             continue
         if _trailing_comment(source, end):
@@ -973,6 +992,8 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         def collect(call: ast.Call) -> None:
             left = _index(lines, call.lineno, call.col_offset)
             right = _index(lines, call.end_lineno, call.end_col_offset)
+            if any(start < right and left < end for start, end, _ in edits):
+                return
             if (any(issue.code in {"ST001", "ST002", "ST003", "ST004", "ST005", "ST009", "ST012"}
                     or issue.code == "ST006" and "одной строке" in issue.message
                     for issue in issues_for(call, source, inline_limit))
@@ -980,14 +1001,18 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                     and renderer.supported(call)):
                 indent = _leading_indent(lines[call.lineno - 1])
                 try:
-                    edits.append((left, right, _local_endings(
-                        source, left, right, renderer.render_call(call, indent))))
+                    replacement = renderer.render_call(call, indent)
+                    if (replacement.startswith('(\n') and re.search(r'\(\s*$', source[:left])
+                            and re.match(r'^\s*\)', source[right:])):
+                        replacement = ('\n' + indent + renderer.step
+                                       + renderer.render_call(call, indent + renderer.step, in_call=True)
+                                       + '\n' + indent)
+                    edits.append((left, right, _local_endings(source, left, right, replacement)))
                     return
                 except ValueError:
                     pass
             for child in _visible(call)[1:]:
-                if child is not call and not any(
-                    left <= edit[0] < right for edit in edits):
+                if child is not call:
                     collect(child)
 
         if blocked or not renderer.supported(root):
@@ -998,8 +1023,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                 warnings.append(f"{root.lineno}: пропущено: {type(unsupported).__name__} "
                                 "нельзя безопасно разложить внутри вызова")
             for child in _visible(root)[1:]:
-                if not any(start <= edit[0] < end for edit in edits):
-                    collect(child)
+                collect(child)
         else:
             collect(root)
 

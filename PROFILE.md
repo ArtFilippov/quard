@@ -204,9 +204,10 @@ violations baseline.
   `ST009` checks multi-field dictionaries and ordinary versus nested container
   elements. `ST012` identifies fixable noncanonical breaks. Fix applies independent
   safe layout edits even when `ST006` or `ST007` remains.
-  `ST010` checks tabs in indentation on all selected `.py` lines, even without
-  calls. Fix uses four spaces for block indentation and preserves tabs in string
-  and comment text. Both check and fix reject `--indent` values other than 4
+  `ST010` checks noncanonical indentation, including tabs and form feeds, on all
+  selected `.py` lines, even without calls. Fix uses four spaces for block
+  indentation and preserves tabs in string and comment text. Both check and fix
+  reject `--indent` values other than 4
   before editing (exit 2).
    `ST011` checks ordinary quoted literal tokens longer than 160 visible source
    characters by default (`[stairfmt] string_limit`), excluding quotes and

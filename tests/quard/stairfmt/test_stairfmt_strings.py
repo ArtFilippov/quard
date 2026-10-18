@@ -142,6 +142,23 @@ class TestStairfmtStrings(unittest.TestCase):
                           'физический перенос' in report['warnings'][0]['reason']),
                          (source, ['ST011'], ['ST011'], True))
 
+    def test_escaped_bare_cr_reports_unfixable_long_literal(self):
+        source = 'value = "' + 'a' * 170 + '\\\rb"\r'
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(source.encode('utf-8'))
+        checked = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                  '--project', str(self.root), '--json', 'src/demo/working.py'],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--fix',
+                                  '--project', str(self.root), 'src/demo/working.py'],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        report = json.loads((self.root / '.quard/reports/stairfmt/latest.json').read_text(
+            encoding='utf-8'))
+        self.assertEqual((json.loads(checked.stdout)['remaining'][0]['rule'], command.returncode,
+                          path.read_bytes(), report['remaining'][0]['rule'],
+                          'физический перенос' in report['warnings'][0]['reason']),
+                         ('ST011', 1, source.encode('utf-8'), 'ST011', True))
+
     def test_trailing_comment_explains_why_long_literal_is_skipped(self):
         source = 'value = "' + 'a' * 170 + '"  # keep\n'
         fixed, report = self.formatted(source)
