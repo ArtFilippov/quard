@@ -302,21 +302,23 @@ remain technical debt until after the first stable release.
 The independent `stairfmt` job checks composed Python calls in discovered production
 and test `.py` files, regardless of `--lcom_files`. It reports positioned `ST001`–`ST012`
 violations and suggests `python quard/stairfmt.py --fix --project .`; source and test
-stubs (`.pyi`) and calls inside f-strings are outside this rule's scope. `ST011`
-checks ordinary overlong string literals, including files with no calls. The job is
-enabled by default on new and existing consumer installations, including configs
-without the setting. Set `[checks] stairfmt = false` to skip its manifest, execution
-and diagnostics. The Quard checkout alone sets it to `false` while its existing
+stubs (`.pyi`) and calls inside f-strings or Python 3.14 template strings are outside
+this rule's scope. `ST011` checks ordinary overlong string literals, including files
+with no calls. The job is enabled by default on new and existing consumer
+installations, including configs without the setting. Set `[checks] stairfmt = false`
+to skip its manifest, execution and diagnostics. The Quard checkout alone sets it
+to `false` while its existing
 source layout is migrated.
 
 From the consumer root, run `python quard/stairfmt.py --fix --project .` to format
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
 select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
-`ST010` detects indentation tabs independently of call layout. Fix normalizes block
-indentation to four spaces, including files without calls, while leaving tabs inside
-literals and comments untouched. `--indent` accepts only 4; other widths fail with
-exit 2 before source edits, in both check and fix.
+An empty `.py` scope passes with zero checked files. `ST010` detects indentation
+tabs independently of call layout. Fix normalizes block indentation to four spaces,
+including files without calls, while leaving tabs inside literals and comments
+untouched. `--indent` accepts only 4; other widths fail with exit 2 before source
+edits, in both check and fix.
 Pylint's physical `line-too-long` (C0301) check is disabled in both profiles;
 `max_module_lines` and unrelated native checks remain active. Stairfmt governs its
 documented expression, indentation and string scope, not every physical line.
@@ -357,13 +359,16 @@ Set `[stairfmt] string_limit = 160` to change the independent default limit for
 visible characters inside an ordinary quoted literal (quotes and indentation do not
 count). Fix splits eligible literals at safe boundaries into adjacent quoted pieces
 inside parentheses, preserving their value, AST and original escape spelling. If
-an escape sequence cannot be split safely, fix retains `ST011` with a reason. This includes
-fields of multi-field dictionaries, even in files without calls. Call arguments,
-docstrings, protected inline expressions, and raw, bytes, triple-quoted and f-string
-literals are excluded. Generated Pyright disables `reportImplicitStringConcatenation`;
-Pylint retains `implicit-str-concat`, which still flags same-line concatenation but
-does not flag Stairfmt's multiline pieces. Source files with a UTF-8 BOM or a
-declared non-UTF-8 encoding are decoded as Python source by both entry points;
+an escape sequence cannot be split safely, fix retains `ST011` with a reason. This
+includes fields of multi-field dictionaries, even in files without calls. An escaped
+physical newline inside a long literal is reported but retained with a manual-fix
+reason.
+Call arguments, docstrings, protected inline expressions, raw, bytes, triple-quoted,
+f-string and Python 3.14 template string literals are excluded. Generated Pyright
+disables `reportImplicitStringConcatenation`; Pylint retains `implicit-str-concat`,
+which still flags same-line concatenation but does not flag Stairfmt's multiline
+pieces. Source files with a UTF-8 BOM or a declared non-UTF-8 encoding are decoded
+as Python source by both entry points;
 fix retains the original encoding and BOM. Fixes also retain CRLF in CRLF files;
 in mixed-ending files untouched lines keep their endings and inserted lines use
 the edited region's local style. Check and repeat fix accept the resulting layout.

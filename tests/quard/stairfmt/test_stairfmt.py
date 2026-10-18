@@ -99,8 +99,9 @@ class TestStairfmt(unittest.TestCase):
         self.assertEqual((code, report["status"], report["changed_files"],
                           report["warnings"][0]["line"], len(report["remaining"]),
                           "комментарий" in output,
+                          f"{len(report['warnings'])} пропусков" in output,
                           "x = f(\n" in (self.root / "src/demo/working.py").read_text()),
-                          (1, "violations", ["src/demo/working.py"], 1, 4, True, True))
+                          (1, "violations", ["src/demo/working.py"], 1, 4, True, True, True))
 
     def test_parent_issue_repro_is_parseable_and_clean_after_fix(self):
         source = ('import json\n\ndef lambda_case(values):\n'
@@ -253,6 +254,23 @@ class TestStairfmt(unittest.TestCase):
         self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
                           if item['rule'] == 'ST007'], [])
 
+    def test_template_argument_does_not_block_outer_call(self):
+        if sys.hexversion < 0x030E0000:
+            self.skipTest('Template strings require Python 3.14')
+        source = 'x = f(t"{g(1)}", h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], [], True))
+
+    def test_template_interpolation_does_not_count_as_inline_branch(self):
+        if sys.hexversion < 0x030E0000:
+            self.skipTest('Template strings require Python 3.14')
+        source = 'value = f(lambda x: wrap(t"{g(x)} {h(x)}", k(x)))\n'
+        self.assertEqual([item['rule'] for item in self.checked(source)['remaining']
+                          if item['rule'] == 'ST007'], [])
+
     def test_multifield_dictionary_without_child_calls_is_formatted(self):
         source = 'value = f({"a": 1, "b": 2})\n'
         fixed, report = self.formatted(source)
@@ -281,6 +299,15 @@ class TestStairfmt(unittest.TestCase):
                           code_again, report_again["changed_files"], report_again["remaining"],
                           (self.root / report["report_path"]).is_file()),
                          (0, "passed", 1, 0, [], [], True))
+
+    def test_starred_and_double_starred_calls_converge(self):
+        source = 'x = f(g(1, 2), *h(3, 4), **j(5, 6))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], '*h(\n' in fixed,
+                          '**j(\n' in fixed, self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], [], True, True, fixed, True))
 
     def test_benchmark_composition_converges_with_simplification_left(self):
         source = '''import json
@@ -389,6 +416,14 @@ def run(path, self, test, populations):
         self.assertEqual([item['column'] for item in findings if item['rule'] == 'ST009'],
                          [source.index('{') + 1])
 
+    def test_unicode_before_binary_keeps_character_alignment(self):
+        source = 'é = (g(1, 2) +\n     h(3, 4))\n'
+        fixed, report = self.formatted(source)
+        ascii_fixed, _ = self.formatted(source.replace('é', 'e'))
+        self.assertEqual((fixed.replace('é', 'e'), report['remaining'],
+                          ast.dump(ast.parse(source)) == ast.dump(ast.parse(fixed))),
+                         (ascii_fixed, [], True))
+
     def test_unparenthesized_binary_converges_in_one_pass(self):
         source = 'x = g(1, 2) + h(3, 4)\n'
         fixed, report = self.formatted(source)
@@ -403,6 +438,14 @@ def run(path, self, test, populations):
         source = 'x = f(key=g(1, 2) + h(3), other=0)\n'
         fixed, report = self.formatted(source)
         self.assertEqual((report['remaining'], self.formatted(fixed)[0] == fixed), ([], True))
+
+    def test_walrus_keyword_keeps_required_parentheses(self):
+        source = 'x = f(k=(v := g(1, 2)), other=h(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], 'k=(v := g(1, 2))' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], [], True, True, fixed))
 
     def test_noncanonical_binary_break_has_st012_not_sibling_st001(self):
         source = 'x = (g(1) +\n     h(2))\n'
@@ -451,6 +494,32 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           self.formatted(fixed)[0] == fixed), ([], [], True))
 
+    def test_result_of_call_can_be_called_with_nested_arguments(self):
+        source = 'x = make()(g(1), h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], 'make()(\n' in fixed,
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], [], True, fixed, True))
+
+    def test_subscripted_callable_and_nested_argument_converge(self):
+        source = 'x = f(g(1, 2)[0](h(3)), 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], [], fixed, True))
+
+    def test_called_lambda_keeps_required_parentheses(self):
+        source = 'x = f((lambda y: y)(g(1, 2)), h(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.checked(fixed)['remaining'], '(lambda y: y)(' in fixed,
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], [], True, fixed, True))
+
     def test_nested_call_under_attribute_is_fixed(self):
         source = 'x = f(g(1, 2).attr, 0)\n'
         fixed, report = self.formatted(source)
@@ -470,6 +539,14 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           '        for group in groups\n        for item in group if item.active' in fixed,
                           self.formatted(fixed)[0] == fixed), ([], [], True, True))
+
+    def test_walrus_filter_keeps_required_parentheses(self):
+        source = 'x = f([{"a": g(i, 2), "b": h(i)} for i in values if (n := p(i))], 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(({item['rule'] for item in report['remaining']}, report['warnings'],
+                          'if (n := p(i))' in fixed, '"a": g(' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ({'ST007'}, [], True, True, True, fixed))
 
     def test_multifield_dictionary_comprehension_key_deepens_clauses(self):
         source = ('x = f({{"a": item, "b": group}: value for group in groups '
@@ -572,6 +649,17 @@ def run(path, self, test, populations):
         self.assertEqual((code, report["checked_files"], report["changed_files"],
                           (self.root / "src/demo/generated/ignored.py").read_text()),
                          (0, 3, ["src/demo/working.py"], "x = f(g(1), h(2))\n"))
+
+    def test_empty_python_scope_passes_check_and_fix(self):
+        for name in ('src/demo/__init__.py', 'src/demo/domain/api.py', 'tests/test_value.py'):
+            (self.root / name).unlink()
+        command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                  '--project', str(self.root), '--json'], cwd=self.root,
+                                 capture_output=True, text=True, check=False)
+        checked = json.loads(command.stdout)
+        code, fixed, _ = self.run_fix()
+        self.assertEqual((command.returncode, checked['checked_files'], code,
+                          fixed['checked_files'], fixed['changed_files']), (0, 0, 0, 0, []))
 
     def test_checkout_opt_out_and_consumer_default(self):
         self.assertEqual((read_checks(QUARD)["stairfmt"], read_checks(self.root)["stairfmt"]),

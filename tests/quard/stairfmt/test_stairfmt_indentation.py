@@ -107,6 +107,16 @@ class TestStairfmtIndentation(unittest.TestCase):
         report = self.checked(source)
         self.assertEqual((report["status"], report["remaining"]), ("passed", []))
 
+    def test_template_text_tab_is_preserved(self):
+        if sys.hexversion < 0x030E0000:
+            self.skipTest('Template strings require Python 3.14')
+        source = 'x = t"""hello\n\tworld"""\n'
+        checked = self.checked(source)
+        code, fixed = self.run_fix('src/demo/working.py')
+        self.assertEqual((checked['remaining'], code, fixed['remaining'],
+                          (self.root / 'src/demo/working.py').read_text(encoding='utf-8')),
+                         ([], 0, [], source))
+
     def test_indent_fix_is_independent_of_blocked_calls(self):
         self.put("src/demo/working.py", 'if True:\n\tvalue = f(1,  # note\n\t    2)\n')
         code, report = self.run_fix("src/demo/working.py")

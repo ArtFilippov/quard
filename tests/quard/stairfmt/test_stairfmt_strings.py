@@ -133,6 +133,23 @@ class TestStairfmtStrings(unittest.TestCase):
                           'нет безопасной границы' in report['warnings'][0]['reason']),
                          (source, 1, 'ST011', True))
 
+    def test_escaped_physical_newline_reports_unfixable_long_literal(self):
+        source = 'value = "' + 'a' * 170 + '\\\nb"\n'
+        found = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, [item['rule'] for item in found['remaining']],
+                          [item['rule'] for item in report['remaining']],
+                          'физический перенос' in report['warnings'][0]['reason']),
+                         (source, ['ST011'], ['ST011'], True))
+
+    def test_trailing_comment_explains_why_long_literal_is_skipped(self):
+        source = 'value = "' + 'a' * 170 + '"  # keep\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['remaining'][0]['rule'],
+                          'в конце строки' in report['warnings'][0]['reason'],
+                          'вручную' in report['warnings'][0]['suggestion']),
+                         (source, 'ST011', True, True))
+
     def test_bom_and_declared_encoding_are_preserved_by_both_entry_points(self):
         results: list[tuple[object, ...]] = []
         for encoding, prefix in (('utf-8-sig', b'\xef\xbb\xbf'), ('iso-8859-1', b'')):
@@ -177,6 +194,15 @@ class TestStairfmtStrings(unittest.TestCase):
         fixed, report = self.formatted(source)
         self.assertEqual((fixed, [item['rule'] for item in report['remaining']
                                   if item['rule'] == 'ST011']), (source, []))
+
+    def test_template_interpolation_calls_and_long_strings_are_excluded(self):
+        if sys.hexversion < 0x030E0000:
+            self.skipTest('Template strings require Python 3.14')
+        source = 'x = t\'{f(g("' + 'a' * 170 + '"), h(2))}\'\n'
+        checked = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual((checked['remaining'], fixed, report['remaining'], report['warnings']),
+                         ([], source, [], []))
 
     def test_configured_string_limit(self):
         setting = self.root / '.quard/config.toml'

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from bisect import bisect_right
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 import io
@@ -49,10 +50,15 @@ class Issue:
     message: str
 
 
-def _under_fstring(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+def _interpolated(node: ast.AST) -> bool:
+    return (isinstance(node, ast.JoinedStr)
+            or sys.version_info >= (3, 14) and isinstance(node, ast.TemplateStr))
+
+
+def _under_interpolation(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
     while node in parents:
         node = parents[node]
-        if isinstance(node, ast.JoinedStr):
+        if _interpolated(node):
             return True
     return False
 
@@ -62,7 +68,7 @@ def _roots(tree: ast.AST) -> list[ast.Call]:
                for child in ast.iter_child_nodes(parent)}
     result: list[ast.Call] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or _under_fstring(node, parents):
+        if not isinstance(node, ast.Call) or _under_interpolation(node, parents):
             continue
         parent = parents.get(node)
         if any(_protected(ancestor) for ancestor in _ancestors(node, parents)):
@@ -91,7 +97,7 @@ def _protected(node: ast.AST) -> bool:
 
 
 def _visible(node: ast.AST) -> list[ast.Call]:
-    if isinstance(node, ast.JoinedStr) or _protected(node):
+    if _interpolated(node) or _protected(node):
         return []
     return ([node] if isinstance(node, ast.Call) else []) + [call for child in ast.iter_child_nodes(node)
                                                            for call in _visible(child)]
@@ -195,6 +201,9 @@ def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
             if _first_dot(call):
                 previous = call
                 continue
+            if isinstance(call.func, ast.Call) and previous is call.func:
+                previous = call
+                continue
             if previous is not None and any(
                 isinstance(ancestor, ast.BinOp) and previous in ast.walk(ancestor.left)
                 and call in ast.walk(ancestor.right)
@@ -226,11 +235,11 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
                             if length > limit else "упростите выражение: оно должно быть в одной строке"))
 
     def bearing(part: ast.AST) -> bool:
-        return (not isinstance(part, ast.JoinedStr)
+        return (not _interpolated(part)
                 and (isinstance(part, ast.Call) or any(bearing(child) for child in ast.iter_child_nodes(part))))
 
     def branches(part: ast.AST, count: int) -> bool:
-        if isinstance(part, ast.JoinedStr):
+        if _interpolated(part):
             return False
         children = list(ast.iter_child_nodes(part))
         if sum(bearing(child) for child in children) >= 2:
@@ -295,7 +304,7 @@ def _strings(tree: ast.AST, source: str, limit: int
     constants = [node for node in ast.walk(tree)
                  if isinstance(node, ast.Constant) and isinstance(node.value, str)]
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type != tokenize.STRING or "\n" in token.string:
+        if token.type != tokenize.STRING:
             continue
         match = re.match(r"(?i)([rubf]*)(['\"])(.*)\2$", token.string, re.DOTALL)
         if match is None or any(letter in match.group(1).lower() for letter in "rbf"):
@@ -315,7 +324,7 @@ def _strings(tree: ast.AST, source: str, limit: int
             if not left <= start < end <= right:
                 continue
             ancestry = _ancestors(node, parents)
-            if any(isinstance(part, (ast.Call, ast.JoinedStr, ast.BinOp)) or _protected(part)
+            if any(isinstance(part, (ast.Call, ast.BinOp)) or _interpolated(part) or _protected(part)
                    for part in ancestry):
                 break
             if (isinstance(parents.get(node), ast.Expr)
@@ -359,14 +368,14 @@ def _pieces(token: str, limit: int) -> list[str]:
     pieces: list[str] = []
     start = 0
     while start < len(body):
-        eligible = [point for point in boundaries if start < point <= start + limit]
-        if not eligible:
+        first = bisect_right(boundaries, start)
+        last = bisect_right(boundaries, start + limit)
+        if first == last:
             return []
-        end = eligible[-1]
+        end = boundaries[last - 1]
         if end < len(body):
-            spaces = [point for point in eligible if body[point - 1].isspace()]
-            if spaces:
-                end = spaces[-1]
+            end = next((point for point in reversed(boundaries[first:last])
+                        if body[point - 1].isspace()), end)
         pieces.append(prefix + quote + body[start:end] + quote)
         start = end
     return pieces
@@ -391,7 +400,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                         issues.append(Issue(token.start[0], token.start[1] + 1, "ST008",
                                             "комментарий внутри вызова: перенесите его за пределы вызова"))
             def visit(node: ast.AST, parent: ast.AST) -> None:
-                if isinstance(node, ast.JoinedStr):
+                if _interpolated(node):
                     return
                 if _protected(node):
                     if not _structured(node):
@@ -415,7 +424,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                     issues.extend(_inline_issues(node, source, inline_limit))
                     indent = (_leading_indent(lines[node.lineno - 1])
                               if isinstance(parent, (ast.Call, ast.keyword, ast.Dict))
-                              else " " * node.col_offset)
+                              else " " * (_column(lines, node.lineno, node.col_offset) - 1))
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
                 issues.extend(_container_issues(node, lines))
@@ -432,7 +441,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                 continue
             issues.extend(_inline_issues(node, source, inline_limit))
             issues.extend(_layout_issues(node, source, inline_limit,
-                                         " " * node.col_offset))
+                                         " " * (_column(lines, node.lineno, node.col_offset) - 1)))
     return sorted(issues, key=lambda i: (i.line, i.col, i.code))
 
 
@@ -474,6 +483,8 @@ class Renderer:
                 len(self.compact(arg)) <= self.limit or "\n" not in self.segment(arg))
         if isinstance(arg, ast.BinOp):
             return self.supported_arg(arg.left) and self.supported_arg(arg.right)
+        if isinstance(arg, ast.Starred):
+            return self.supported_arg(arg.value)
         if isinstance(arg, ast.Call):
             return self.supported(arg)
         if isinstance(arg, (ast.Subscript, ast.Attribute)):
@@ -498,6 +509,12 @@ class Renderer:
         if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Call):
             if not self.supported(call.func.value):
                 return False
+        elif isinstance(call.func, ast.Call):
+            if not self.supported(call.func):
+                return False
+        elif isinstance(call.func, ast.Subscript) and _has_nested_call(call.func):
+            if not self.supported_arg(call.func):
+                return False
         elif not self.simple(call.func):
             return False
 
@@ -511,6 +528,8 @@ class Renderer:
             return self.comprehension(arg, indent)
         if _protected(arg):
             return self.compact(arg)
+        if isinstance(arg, ast.Starred):
+            return "*" + self.render_arg(arg.value, indent)
         if isinstance(arg, ast.Call):
             return self.render_call(arg, indent, in_call=True)
         if isinstance(arg, (ast.Subscript, ast.Attribute)) and _has_nested_call(arg.value):
@@ -523,6 +542,8 @@ class Renderer:
                     + self.source[end:right])
         if isinstance(arg, ast.keyword):
             prefix = f"{arg.arg}=" if arg.arg is not None else "**"
+            if isinstance(arg.value, ast.NamedExpr):
+                return prefix + "(" + self.render_arg(arg.value, indent) + ")"
             return prefix + self.render_arg(arg.value, indent)
         if isinstance(arg, ast.Dict):
             if not arg.keys:
@@ -579,7 +600,9 @@ class Renderer:
         for clause in node.generators:
             text = ("async for " if clause.is_async else "for ") + self.compact(clause.target)
             text += " in " + self.render_arg(clause.iter, indent + self.step)
-            text += "".join(" if " + self.render_arg(condition, indent + self.step)
+            text += "".join(" if " + ("(" + self.render_arg(condition, indent + self.step) + ")"
+                                         if isinstance(condition, ast.NamedExpr)
+                                         else self.render_arg(condition, indent + self.step))
                             for condition in clause.ifs)
             clauses.append(text)
         prefix = indent + self.step
@@ -682,7 +705,15 @@ class Renderer:
             methods.append(base)
             base = base.func.value
         if not methods:
-            return self.render_args(call, self.segment(call.func), indent)
+            if isinstance(call.func, ast.Call):
+                name = self.render_call(call.func, indent, in_call=True)
+            elif isinstance(call.func, ast.Subscript) and _has_nested_call(call.func):
+                name = self.render_arg(call.func, indent)
+            elif isinstance(call.func, ast.Lambda):
+                name = "(" + self.compact(call.func) + ")"
+            else:
+                name = self.segment(call.func)
+            return self.render_args(call, name, indent)
 
         inline = _first_dot(methods[-1]) and len(methods) == 1
         chain_indent = indent if in_call or inline else indent + self.step
@@ -797,9 +828,9 @@ def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
             logical = True
         elif token.type == tokenize.STRING:
             protected.update(range(token.start[0] + 1, token.end[0] + 1))
-        elif token.type == tokenize.FSTRING_START:
+        elif token.type == tokenize.FSTRING_START or tokenize.tok_name[token.type] == "TSTRING_START":
             fstrings.append(token.start[0])
-        elif token.type == tokenize.FSTRING_END:
+        elif token.type == tokenize.FSTRING_END or tokenize.tok_name[token.type] == "TSTRING_END":
             protected.update(range(fstrings.pop() + 1, token.end[0] + 1))
         if (logical and token.type not in (tokenize.INDENT, tokenize.DEDENT,
                                            tokenize.NEWLINE, tokenize.NL, tokenize.COMMENT,
@@ -860,7 +891,13 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
     for node, tokens in sorted(selected.items(), key=lambda item: item[1][0].start, reverse=True):
         start = _index(lines, node.lineno, node.col_offset)
         end = _index(lines, node.end_lineno, node.end_col_offset)
-        if _has_comments(source, start, end, lines) or _trailing_comment(source, end):
+        if any("\n" in token.string for token in tokens):
+            warnings.append(f"{node.lineno}: пропущено: физический перенос внутри строкового литерала")
+            continue
+        if _trailing_comment(source, end):
+            warnings.append(f"{node.lineno}: пропущено: комментарий в конце строки")
+            continue
+        if _has_comments(source, start, end, lines):
             warnings.append(f"{node.lineno}: пропущено: комментарий внутри строкового литерала")
             continue
         literals = [token for token in tokenize.generate_tokens(io.StringIO(source).readline)
@@ -900,19 +937,20 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             continue
         left = _index(lines, node.lineno, node.col_offset)
         right = _index(lines, node.end_lineno, node.end_col_offset)
+        indent = " " * (_column(lines, node.lineno, node.col_offset) - 1)
         if (any(start <= left < end for start, end, _ in edits)
                 or _has_comments(source, left, right, lines)
                 or _trailing_comment(source, right)
                 or not renderer.supported_arg(node)
-                or not _layout_issues(node, source, inline_limit, " " * node.col_offset)):
+                or not _layout_issues(node, source, inline_limit, indent)):
             continue
         try:
-            replacement = renderer.render_arg(node, " " * node.col_offset)
+            replacement = renderer.render_arg(node, indent)
             if _without_endings(replacement) != _without_endings(source[left:right]):
                 try:
                     _ = ast.parse(source[:left] + replacement + source[right:])
                 except SyntaxError:
-                    replacement = "(" + renderer.render_arg(node, " " * (node.col_offset + 1)) + ")"
+                    replacement = "(" + renderer.render_arg(node, indent + " ") + ")"
                 edits.append((left, right, _local_endings(source, left, right, replacement)))
         except (SyntaxError, ValueError) as exc:
             warnings.append(f"{node.lineno}: пропущено: {exc}")
@@ -983,8 +1021,6 @@ def _paths(root: Path, inputs: list[str]) -> list[Path]:
     files = discover_files(root, read_scope(root))
     available = {root / path for profile in ("production", "tests")
                  for path in files[profile] if path.endswith(".py")}
-    if not available:
-        raise ValueError("В области проверки Quard нет файлов .py")
     if not inputs:
         return sorted(available)
     selected: set[Path] = set()
@@ -1003,6 +1039,8 @@ def _paths(root: Path, inputs: list[str]) -> list[Path]:
 def _advice(reason: str) -> str:
     if "нет безопасной границы" in reason:
         return "Разделите литерал вручную без изменения escape-последовательностей."
+    if "физический перенос" in reason or "комментарий в конце строки" in reason:
+        return "Расставьте строковый литерал вручную, сохранив перенос или комментарий."
     if "строковый литерал" in reason:
         return "Запустите --fix для переноса строкового литерала по частям."
     if "упростите выражение" in reason:
@@ -1053,7 +1091,8 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
 
 def _display(report: dict[str, object]) -> None:
     print(f"STAIRFMT {str(report['status']).upper()}: изменено {len(report['changed_files'])}; "
-          f"осталось {len(report['remaining'])} нарушений, {len(report['errors'])} ошибок")
+          f"осталось {len(report['remaining'])} нарушений, "
+          f"{len(report['warnings'])} пропусков, {len(report['errors'])} ошибок")
     for path in report["changed_files"]:
         print(f"CHANGED: {path}")
     for warning in report["warnings"]:
