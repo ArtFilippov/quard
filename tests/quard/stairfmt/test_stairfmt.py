@@ -341,6 +341,38 @@ def run(path, self, test, populations):
                           fixed.splitlines()[0].endswith('# type: ignore[call-arg]'),
                           bool(report['remaining'])), (1, True, True))
 
+    def test_trailing_pylint_directive_stays_on_its_statement(self):
+        source = 'x = f(g(1), h(2))  # pylint: disable=unused-argument\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['exit_code'], bool(report['remaining'])),
+                         (source, 1, True))
+
+    def test_trailing_comment_stays_on_its_statement(self):
+        source = 'x = f(g(1), h(2))  # ordinary note\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, report['exit_code']), (source, 1))
+
+    def test_hash_inside_string_does_not_block_fix(self):
+        source = 'x = f(g("#"), h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], 'g("#"),\n' in fixed),
+                         ([], [], True))
+
+    def test_unicode_before_calls_keeps_character_columns(self):
+        source = 'x = f("😀", g(1), h(2))\n'
+        findings = self.checked(source)['remaining']
+        self.assertEqual([(item['rule'], item['column']) for item in findings],
+                         [('ST002', source.index('"😀"') + 1),
+                          ('ST001', source.index('g(1)') + 1),
+                          ('ST001', source.index('h(2)') + 1),
+                          ('ST004', source.rindex(')') + 1)])
+
+    def test_unicode_before_container_keeps_character_column(self):
+        source = 'x = f("😀", {"a": 1, "b": 2})\n'
+        findings = self.checked(source)['remaining']
+        self.assertEqual([item['column'] for item in findings if item['rule'] == 'ST009'],
+                         [source.index('{') + 1])
+
     def test_unparenthesized_binary_converges_in_one_pass(self):
         source = 'x = g(1, 2) + h(3, 4)\n'
         fixed, report = self.formatted(source)

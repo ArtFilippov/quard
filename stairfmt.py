@@ -120,7 +120,14 @@ def _first_dot(call: ast.Call) -> bool:
             and not isinstance(call.func.value.func, ast.Attribute))
 
 
-def _issue_list(root: ast.Call) -> list[Issue]:
+def _call_column(call: ast.Call, lines: list[str]) -> int:
+    if isinstance(call.func, ast.Attribute):
+        return _column(lines, call.func.end_lineno,
+                       call.func.end_col_offset - len(call.func.attr.encode("utf-8")))
+    return _column(lines, call.func.lineno, call.func.col_offset)
+
+
+def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
     issues: list[Issue] = []
     calls = _visible(root)
     grouped: dict[int, list[ast.Call]] = {}
@@ -138,7 +145,7 @@ def _issue_list(root: ast.Call) -> list[Issue]:
                     and receiver.end_lineno > receiver.func.end_lineno
                     and call.func.end_lineno > receiver.end_lineno):
                 issues.append(Issue(
-                    call.func.end_lineno, call.func.end_col_offset + 1, "ST005",
+                    call.func.end_lineno, _call_column(call, lines), "ST005",
                     "метод после многострочного вызова должен быть на строке закрывающей скобки"
                 ))
 
@@ -147,7 +154,7 @@ def _issue_list(root: ast.Call) -> list[Issue]:
             first = min(arguments, key=lambda n: (n.lineno, n.col_offset))
             if first.lineno <= call.func.end_lineno:
                 issues.append(Issue(
-                    first.lineno, first.col_offset + 1, "ST002",
+                    first.lineno, _column(lines, first.lineno, first.col_offset), "ST002",
                     "при нескольких аргументах первый должен начинаться с новой строки"
                 ))
         elif len(arguments) == 1 and not _multiline(arguments[0]):
@@ -157,7 +164,7 @@ def _issue_list(root: ast.Call) -> list[Issue]:
             if (call.func.end_lineno != arg.lineno or
                     arg.end_lineno != call.end_lineno):
                 issues.append(Issue(
-                    call.func.end_lineno, call.func.end_col_offset + 1, "ST003",
+                    call.func.end_lineno, _column(lines, call.func.end_lineno, call.func.end_col_offset), "ST003",
                     "единственный простой аргумент должен быть в строке с вызовом: Point(x)"
                 ))
 
@@ -167,7 +174,7 @@ def _issue_list(root: ast.Call) -> list[Issue]:
             last = max(arguments, key=lambda n: (n.end_lineno, n.end_col_offset))
             if call.end_lineno <= last.end_lineno:
                 issues.append(Issue(
-                    call.end_lineno, call.end_col_offset, "ST004",
+                    call.end_lineno, _column(lines, call.end_lineno, call.end_col_offset) - 1, "ST004",
                     "закрывающая скобка многострочного вызова должна быть на отдельной строке"
                 ))
 
@@ -187,7 +194,7 @@ def _issue_list(root: ast.Call) -> list[Issue]:
                 previous = call
                 continue
             issues.append(Issue(
-                call.func.end_lineno, call.func.end_col_offset + 1, "ST001",
+                call.func.end_lineno, _call_column(call, lines), "ST001",
                 "следующий вызов функции/конструктора должен начинаться с новой строки"
             ))
             previous = call
@@ -199,10 +206,11 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
     if segment is None:
         return []
     issues: list[Issue] = []
+    column = _column(_lines(source), node.lineno, node.col_offset)
     lengths = [len(line.strip()) for line in _lines(segment)]
     length = max(lengths, default=0)
     if length > limit or "\n" in segment and not isinstance(node, ast.BinOp):
-        issues.append(Issue(node.lineno, node.col_offset + 1, "ST006",
+        issues.append(Issue(node.lineno, column, "ST006",
                             f"упростите выражение: длина {length} превышает предел {limit} "
                             if length > limit else "упростите выражение: оно должно быть в одной строке"))
 
@@ -219,7 +227,7 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
         return count > 1 or any(branches(child, count) for child in children)
 
     if branches(node, 0):
-        issues.append(Issue(node.lineno, node.col_offset + 1, "ST007",
+        issues.append(Issue(node.lineno, column, "ST007",
                             "упростите выражение: несколько уровней разветвления вызовов"))
     return issues
 
@@ -230,19 +238,19 @@ def _end_line(node: ast.expr) -> int:
     return node.end_lineno
 
 
-def _container_issues(node: ast.AST) -> list[Issue]:
+def _container_issues(node: ast.AST, lines: list[str]) -> list[Issue]:
     if isinstance(node, ast.Dict) and len(node.keys) > 1:
         fields = [key if key is not None else value for key, value in zip(node.keys, node.values)]
         if (any(field.lineno <= _end_line(node.values[index - 1])
                 for index, field in enumerate(fields[1:], 1))
                 or node.end_lineno == node.values[-1].end_lineno):
-            return [Issue(node.lineno, node.col_offset + 1, "ST009",
+            return [Issue(node.lineno, _column(lines, node.lineno, node.col_offset), "ST009",
                           "поля словаря и закрывающая скобка должны быть на отдельных строках")]
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         children = node.elts
         if (len(children) == 1 and _has_nested_call(children[0])
                 and node.end_lineno == children[0].end_lineno):
-            return [Issue(node.lineno, node.col_offset + 1, "ST009",
+            return [Issue(node.lineno, _column(lines, node.lineno, node.col_offset), "ST009",
                           "вызов и закрывающая скобка контейнера должны быть на разных строках")]
         for index, child in enumerate(children[1:], 1):
             nested = (isinstance(child, (ast.List, ast.Tuple, ast.Set, ast.Dict))
@@ -250,7 +258,7 @@ def _container_issues(node: ast.AST) -> list[Issue]:
                       or _has_nested_call(child) or _has_nested_call(children[index - 1]))
             if (nested and child.lineno <= _end_line(children[index - 1]) or
                     not nested and child.lineno != children[index - 1].lineno):
-                return [Issue(child.lineno, child.col_offset + 1, "ST009",
+                return [Issue(child.lineno, _column(lines, child.lineno, child.col_offset), "ST009",
                               "обычные элементы должны делить строку, вызовы и вложенные контейнеры — начинаться с новой")]
     return []
 
@@ -361,7 +369,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
         issues.extend(_indentation(source, 4)[0])
         issues.extend(issue for issue, _, _ in _strings(tree, source, string_limit))
     for root in _roots(tree):
-        issues.extend(_issue_list(root))
+        issues.extend(_issue_list(root, lines))
         if source:
             start = _index(lines, root.lineno, root.col_offset)
             end = _index(lines, root.end_lineno, root.end_col_offset)
@@ -388,7 +396,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                                       and "длина" in issue.message)
                         for part in ast.walk(node):
                             if isinstance(part, ast.Dict):
-                                issues.extend(_container_issues(part))
+                                issues.extend(_container_issues(part, lines))
                         issues.extend(_layout_issues(node, source, inline_limit,
                                                      _leading_indent(lines[node.lineno - 1])))
                     return
@@ -399,7 +407,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                               else " " * node.col_offset)
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
-                issues.extend(_container_issues(node))
+                issues.extend(_container_issues(node, lines))
                 for child in ast.iter_child_nodes(node):
                     visit(child, node)
             visit(root, root)
@@ -702,15 +710,20 @@ def _layout_issues(node: ast.AST, source: str, limit: int, indent: str) -> list[
             return []
     except (SyntaxError, ValueError):
         return []
-    return [Issue(node.lineno, node.col_offset + 1, "ST012",
+    return [Issue(node.lineno, _column(lines, node.lineno, node.col_offset), "ST012",
                   "исправимый перенос составного выражения не соответствует канонической раскладке")]
 
 
 def _index(lines: list[str], lineno: int, byte_col: int) -> int:
     prefix = sum(len(line) for line in lines[:lineno - 1])
     # CPython AST columns are UTF-8 byte offsets rather than Unicode indices.
-    text = lines[lineno - 1]
-    return prefix + len(text.encode("utf-8")[:byte_col].decode("utf-8"))
+    return prefix + _column(lines, lineno, byte_col) - 1
+
+
+def _column(lines: list[str], lineno: int, byte_col: int) -> int:
+    if not lines:
+        return byte_col + 1
+    return len(lines[lineno - 1].encode("utf-8")[:byte_col].decode("utf-8")) + 1
 
 
 def _lines(source: str) -> list[str]:
@@ -811,10 +824,10 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
     return False
 
 
-def _trailing_directive(source: str, end: int) -> bool:
-    """Keep line-scoped directives attached to the original statement."""
-    return bool(re.search(r"#\s*(?:type:\s*ignore\b|noqa\b)",
-                          re.split(r"\r\n|\r|\n", source[end:], maxsplit=1)[0], re.I))
+def _trailing_comment(source: str, end: int) -> bool:
+    """Keep trailing comments attached to their original source line."""
+    line = re.split(r"\r\n|\r|\n", source[end:], maxsplit=1)[0]
+    return _has_comments(source, end, end + len(line), _lines(source))
 
 
 def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
@@ -836,7 +849,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
     for node, tokens in sorted(selected.items(), key=lambda item: item[1][0].start, reverse=True):
         start = _index(lines, node.lineno, node.col_offset)
         end = _index(lines, node.end_lineno, node.end_col_offset)
-        if _has_comments(source, start, end, lines) or _trailing_directive(source, end):
+        if _has_comments(source, start, end, lines) or _trailing_comment(source, end):
             warnings.append(f"{node.lineno}: пропущено: комментарий внутри строкового литерала")
             continue
         literals = [token for token in tokenize.generate_tokens(io.StringIO(source).readline)
@@ -878,7 +891,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         right = _index(lines, node.end_lineno, node.end_col_offset)
         if (any(start <= left < end for start, end, _ in edits)
                 or _has_comments(source, left, right, lines)
-                or _trailing_directive(source, right)
+                or _trailing_comment(source, right)
                 or not renderer.supported_arg(node)
                 or not _layout_issues(node, source, inline_limit, " " * node.col_offset)):
             continue
@@ -902,8 +915,8 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         start = _index(lines, root.lineno, root.col_offset)
         end = _index(lines, root.end_lineno, root.end_col_offset)
         blocked = _has_comments(source, start, end, lines)
-        if _trailing_directive(source, end):
-            warnings.append(f"{root.lineno}: пропущено: директива привязана к строке вызова")
+        if _trailing_comment(source, end):
+            warnings.append(f"{root.lineno}: пропущено: комментарий привязан к строке вызова")
             continue
         if blocked:
             warnings.append(f"{root.lineno}: пропущено: комментарий внутри вызова")
