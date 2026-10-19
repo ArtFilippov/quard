@@ -605,9 +605,16 @@ def run(path, self, test, populations):
         source = 'x = f(a[g(1, 2):h(3, 4)], k(1, 2))\n'
         fixed, report = self.formatted(source)
         self.assertEqual((self.formatted(fixed)[0], ast.dump(ast.parse(fixed)),
-                          {item['rule'] for item in report['remaining']},
-                          any('Subscript' in item['reason'] for item in report['warnings'])),
-                         (fixed, ast.dump(ast.parse(source)), {'ST001', 'ST002', 'ST004'}, True))
+                           {item['rule'] for item in report['remaining']},
+                           any('Subscript' in item['reason'] for item in report['warnings'])),
+                          (fixed, ast.dump(ast.parse(source)), {'ST001', 'ST002', 'ST004'}, True))
+
+    def test_nested_calls_in_subscript_value_and_index_converge(self):
+        source = 'x = f(factory()[lookup(1, 2)](h(3, 4)), 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
 
     def test_explicit_continuation_preserves_source_and_reports_manual_layout(self):
         source = 'x = f(lambda: g(1) + \\\n h(2))\n'
@@ -650,6 +657,20 @@ def run(path, self, test, populations):
         source = 'x = f(g(1), h(2))  # ordinary note\n'
         fixed, report = self.formatted(source)
         self.assertEqual((fixed, report['exit_code']), (source, 1))
+
+    def test_comment_on_sibling_statement_does_not_block_call(self):
+        source = 'x = f(g(1), h(2)); y = 0  # note\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          fixed.rstrip().endswith('y = 0  # note'),
+                          ast.dump(ast.parse(fixed, type_comments=True)) == ast.dump(
+                              ast.parse(source, type_comments=True)),
+                          self.formatted(fixed)[0]), ([], [], True, True, fixed))
+
+    def test_comment_after_empty_sibling_still_blocks_call(self):
+        source = 'x = f(g(1), h(2));  # note\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, bool(report['remaining'])), (source, True))
 
     def test_hash_inside_string_does_not_block_fix(self):
         source = 'x = f(g("#"), h(2))\n'

@@ -564,7 +564,7 @@ class Renderer:
         if isinstance(arg, (ast.Subscript, ast.Attribute)):
             if _has_nested_call(arg):
                 if (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Call)
-                        and self.simple(arg.value)):
+                        and (self.simple(arg.value) or self.supported_arg(arg.value))):
                     return self.supported_arg(arg.slice)
                 return (_has_nested_call(arg.value) and self.supported_arg(arg.value)
                         and (isinstance(arg, ast.Attribute) or self.simple(arg.slice)))
@@ -617,6 +617,18 @@ class Renderer:
             return "*" + self.render_arg(arg.value, indent)
         if isinstance(arg, ast.Call):
             return self.render_call(arg, indent, in_call=True)
+        if (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Call)
+                and _has_nested_call(arg.value)):
+            lines = _lines(self.source)
+            left = _index(lines, arg.lineno, arg.col_offset)
+            start = _index(lines, arg.value.lineno, arg.value.col_offset)
+            middle = _index(lines, arg.value.end_lineno, arg.value.end_col_offset)
+            index = _index(lines, arg.slice.lineno, arg.slice.col_offset)
+            end = _index(lines, arg.slice.end_lineno, arg.slice.end_col_offset)
+            right = _index(lines, arg.end_lineno, arg.end_col_offset)
+            return (self.source[left:start] + self.render_arg(arg.value, indent)
+                    + self.source[middle:index] + self.render_arg(arg.slice, indent)
+                    + self.source[end:right])
         if (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Call)
                 and not _has_nested_call(arg.value)):
             lines = _lines(self.source)
@@ -1029,7 +1041,28 @@ def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
 def _trailing_comment(source: str, end: int) -> bool:
     """Keep trailing comments attached to their original source line."""
     line = re.split(r"\r\n|\r|\n", source[end:], maxsplit=1)[0]
-    return _has_comments(source, end, end + len(line), _lines(source))
+    lines = _lines(source)
+    if not _has_comments(source, end, end + len(line), lines):
+        return False
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        sibling = False
+        for token in tokens:
+            start = _index(lines, token.start[0], len(lines[token.start[0] - 1][
+                :token.start[1]].encode("utf-8")))
+            if start < end:
+                continue
+            if start >= end + len(line):
+                break
+            if token.type == tokenize.COMMENT:
+                return not sibling
+            if token.type == tokenize.OP and token.string == ";":
+                sibling = True
+            elif sibling and token.type not in (tokenize.NL, tokenize.NEWLINE):
+                return False
+    except tokenize.TokenError:
+        return True
+    return True
 
 
 def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
