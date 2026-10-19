@@ -160,7 +160,27 @@ class TestStairfmt(unittest.TestCase):
         report = json.loads(command.stdout)
         self.assertEqual((report['exit_code'], report['changed_files'],
                           path.read_text(encoding='utf-8')),
-                         (2, [], external))
+                          (2, [], external))
+
+    def test_fix_preserves_a_file_changed_after_the_last_read(self):
+        self.put('src/demo/working.py', 'x = f(g(1), h(2))\n')
+        path = self.root / 'src/demo/working.py'
+        script = ('import json, sys\nfrom pathlib import Path\nfrom unittest.mock import patch\n'
+                  'sys.path.insert(0, sys.argv[1])\nimport stairfmt\n'
+                  'root = Path(sys.argv[2])\npath = root / "src/demo/working.py"\n'
+                  'original = stairfmt.atomic_write\n'
+                  'def change(target, content, *args, **kwargs):\n'
+                  '    path.write_text("x = changed(42)\\n", encoding="utf-8")\n'
+                  '    return original(target, content, *args, **kwargs)\n'
+                  'with patch.object(stairfmt, "atomic_write", side_effect=change):\n'
+                  '    report = stairfmt._report(root, [path], True, 4, '
+                  '{"inline_limit": 240, "string_limit": 160})\n'
+                  'print(json.dumps(report))\n')
+        command = subprocess.run([sys.executable, '-B', '-c', script, str(QUARD), str(self.root)],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        report = json.loads(command.stdout)
+        self.assertEqual((report['exit_code'], report['changed_files'], path.read_text(encoding='utf-8')),
+                         (2, [], 'x = changed(42)\n'))
 
     def test_deep_expression_reports_file_error_and_preserves_peer_findings(self):
         self.put("src/demo/domain/api.py", "x = f(g(1), h(2))\n")
@@ -775,7 +795,21 @@ def run(path, self, test, populations):
         fixed, report = self.formatted(source)
         self.assertEqual((sum(item['rule'] == 'ST010' for item in report['remaining']),
                           self.formatted(fixed)[0], ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
-                         (sum(item['rule'] == 'ST010' for item in before), fixed, True))
+                          (sum(item['rule'] == 'ST010' for item in before), fixed, True))
+
+    def test_unary_binary_argument_converges_without_losing_parentheses(self):
+        source = 'x = f(-(g(1, 2) + h(3, 4)), 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_standalone_unary_binary_keeps_expression_alignment(self):
+        source = 'x = -(g(1, 2) + h(3, 4))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
 
     def test_comprehension_iterable_dictionary_converges(self):
         source = 'x = f([v for v in {"a": g(1), "b": h(2)}])\n'
@@ -998,7 +1032,35 @@ def run(path, self, test, populations):
         found = self.checked(source)
         fixed, report = self.formatted(source)
         self.assertEqual((found['remaining'], fixed, report['remaining'], report['warnings']),
-                         ([], source, [], []))
+                          ([], source, [], []))
+
+    def test_multiline_literal_beside_another_argument_converges(self):
+        source = 'x = f("""abc\nworld""", h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], '"""abc\nworld"""' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, True, fixed))
+
+    def test_multiline_fstring_beside_another_argument_converges(self):
+        source = 'x = f(f"""abc\n{g(1)}""", h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], 'f"""abc\n{g(1)}"""' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, True, fixed))
+
+    def test_trailing_comment_allows_indentation_only_correction(self):
+        source = 'x = f(\n g(1),\n h(2)\n)  # keep\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          fixed, ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]),
+                         ([], [], 'x = f(\n    g(1),\n    h(2)\n)  # keep\n', True, fixed))
+
+    def test_commented_tuple_warning_names_its_container(self):
+        source = 'x = (g(1),  # keep\n h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, 'контейнер' in report['warnings'][0]['reason'],
+                          'словар' in report['warnings'][0]['reason']), (source, True, False))
 
     def test_multiline_literal_content_is_not_argument_indentation(self):
         source = 'x = f("""a\nb""", 1)\n'
@@ -1296,7 +1358,22 @@ def run(path, self, test, populations):
         code, report, _ = self.run_fix("src/demo")
         self.assertEqual((code, report["checked_files"], report["changed_files"],
                           (self.root / "src/demo/generated/ignored.py").read_text()),
-                         (0, 3, ["src/demo/working.py"], "x = f(g(1), h(2))\n"))
+                          (0, 3, ["src/demo/working.py"], "x = f(g(1), h(2))\n"))
+
+    def test_explicit_file_ignores_unrelated_source_symlink(self):
+        self.put('src/demo/working.py', 'x = f(g(1), h(2))\n')
+        (self.root / 'src/demo/irrelevant.py').symlink_to('working.py')
+        code, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((code, report['changed_files'], report['remaining']),
+                         (0, ['src/demo/working.py'], []))
+
+    def test_explicit_directory_rejects_symlink_inside_selection(self):
+        self.put('src/demo/working.py', 'x = f(g(1), h(2))\n')
+        (self.root / 'src/demo/irrelevant.py').symlink_to('working.py')
+        code, report, _ = self.run_fix('src/demo')
+        self.assertEqual((code, report['status'], report['changed_files'],
+                          (self.root / 'src/demo/working.py').read_text(encoding='utf-8')),
+                         (2, 'error', [], 'x = f(g(1), h(2))\n'))
 
     def test_empty_python_scope_passes_check_and_fix(self):
         for name in ('src/demo/__init__.py', 'src/demo/domain/api.py', 'tests/test_value.py'):

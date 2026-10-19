@@ -204,21 +204,27 @@ def exclude_regex(scope: dict[str, list[str]]) -> str:
         [*scope["exclude_directory_names"], CHECKPOINT_DIRECTORY]))) + r")(?:[/\\]|$)"
 
 
-def discover_files(root: Path, scope: dict[str, list[str]]) -> dict[str, list[str]]:
+def selected(path: Path, selection: Path | None) -> bool:
+    return (selection is None or path == selection or path.is_relative_to(selection)
+            or selection.is_relative_to(path))
+
+
+def discover_files(root: Path, scope: dict[str, list[str]],
+                   selection: Path | None = None) -> dict[str, list[str]]:
     import os
     production: list[str] = []
     tests: list[str] = []
     excluded: list[str] = []
     excluded_dirs = set(scope["exclude_directory_names"]) | {CHECKPOINT_DIRECTORY}
     test_dirs = set(scope["test_directory_names"])
-    for top in (root / "src", root / "tests"):
+    for top in (top for top in (root / "src", root / "tests") if selected(top, selection)):
         if not top.is_dir():
             continue
         if top.is_symlink():
             raise QuardError("SYMLINK_SOURCE", f"Source root must not be a symlink: {top}")
-        for parent, dirs, files in os.walk(top, followlinks=False):
+        for parent, dirs, names in os.walk(top, followlinks=False):
             kept = []
-            for dirname in sorted(dirs):
+            for dirname in sorted(name for name in dirs if selected(Path(parent) / name, selection)):
                 path = Path(parent) / dirname
                 if path.is_symlink():
                     raise QuardError("SYMLINK_SOURCE", f"Source directory symlinks are unsupported: {path}")
@@ -227,7 +233,7 @@ def discover_files(root: Path, scope: dict[str, list[str]]) -> dict[str, list[st
                 else:
                     kept.append(dirname)
             dirs[:] = kept
-            for name in sorted(files):
+            for name in sorted(item for item in names if selected(Path(parent) / item, selection)):
                 path = Path(parent) / name
                 if path.suffix not in {".py", ".pyi"}:
                     continue

@@ -313,7 +313,8 @@ source layout is migrated.
 
 From the consumer root, run `python quard/stairfmt.py --fix --project .` to format
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
-select a subset inside that scope; `--json` prints the full result. Stairfmt rechecks
+select a subset inside that scope without scanning unrelated source links; links
+inside the selected scope still fail. `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
 An empty `.py` scope passes with zero checked files. `ST010` checks block
 indentation, supported call continuations, and separate fields and closers of
@@ -360,6 +361,9 @@ with a warning, including when bare CR precedes the call. A comment inside an
 f-string interpolation can also count as inside its enclosing checked call: `ST008`
 is reported and the outer call edit is skipped, even though interpolation expressions
 themselves are outside Stairfmt's layout scope. Independent safe edits still proceed.
+Trailing call comments allow indentation-only corrections that leave the comment on
+its original line. Multiline quoted and f-string arguments can be laid out beside
+other arguments without rewriting their literal text.
 Fix validates safe edits together against the AST and indentation rules, then checks
 edits individually if the batch is unsafe so independent fixes still proceed; explicit
 file arguments can limit a formatting run to the affected subset. Each fix run prints a
@@ -377,9 +381,10 @@ for rule scope.
 Set `[stairfmt] string_limit = 160` to change the independent default limit for
 visible characters inside an ordinary quoted literal (quotes and indentation do not
 count). Fix splits eligible literals at safe boundaries into adjacent quoted pieces
-inside parentheses, preserving their value, AST and original escape spelling. If
-an escape sequence cannot be split safely, fix retains `ST011` with a reason. This
-includes fields of multi-field dictionaries, even in files without calls. An escaped
+inside parentheses, preserving their value, AST and original escape spelling. The
+split keeps Unicode combining characters with their base characters. If an escape
+sequence cannot be split safely, fix retains `ST011` with a reason. This includes
+fields of multi-field dictionaries, even in files without calls. An escaped
 physical newline inside a long literal is reported but retained with a manual-fix
 reason.
 Call arguments, docstrings, protected inline expressions, raw, bytes, triple-quoted,

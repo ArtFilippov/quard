@@ -95,6 +95,32 @@ class TestStairfmtStrings(unittest.TestCase):
                           report['remaining'], ast.literal_eval(fixed.split('=', 1)[1]),
                           self.formatted(fixed)[0]), ([], ['ST011'], [], 'é' * 13, fixed))
 
+    def test_combining_character_stays_with_its_base_when_split(self):
+        source = 'value = "' + 'x' * 159 + 'e\u0301' + '"\n'
+        fixed, report = self.formatted(source)
+        tokens = [token.string for token in tokenize.generate_tokens(io.StringIO(fixed).readline)
+                  if token.type == tokenize.STRING]
+        self.assertEqual((report['remaining'], any(token.startswith('"\u0301') for token in tokens),
+                          any(token.endswith('e"') for token in tokens),
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], False, False, True, fixed))
+
+    def test_combined_encoding_endings_unicode_and_two_edits(self):
+        source = ('# coding: latin-1\r\n# untouched\n'
+                  'caf\u00e9 = f(g(1), h(2))\r\nvalue = "' + 'caf\u00e9 ' * 30 + '"\n')
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(source.encode('latin-1'))
+        code = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--fix',
+                               '--project', str(self.root), 'src/demo/working.py'],
+                              cwd=self.root, capture_output=True, text=True, check=False).returncode
+        fixed = path.read_bytes()
+        again = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--fix',
+                                '--project', str(self.root), 'src/demo/working.py'],
+                               cwd=self.root, capture_output=True, text=True, check=False).returncode
+        self.assertEqual((code, b'# untouched\n' in fixed, b'caf\xe9 = f(\r\n' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          again, path.read_bytes() == fixed), (0, True, True, True, 0, True))
+
     def test_enabled_job_reports_long_literal_without_calls(self):
         self.put('value = "' + 'a word ' * 26 + '"\n')
         files = discover_files(self.root, read_scope(self.root))

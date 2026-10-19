@@ -100,7 +100,7 @@ def safe_target(path: Path, root: Path) -> None:
 
 
 def atomic_write(path: Path, content: str | bytes, root: Path | None = None,
-                 mode: int | None = None) -> bool:
+                 mode: int | None = None, *, expected: bytes | None = None) -> bool:
     if root is not None:
         safe_target(path, root)
     data = content.encode("utf-8") if isinstance(content, str) else content
@@ -116,12 +116,22 @@ def atomic_write(path: Path, content: str | bytes, root: Path | None = None,
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.chmod(name, previous_mode if mode is None else mode)
-        os.replace(name, path)
+        replace_current(path, name, previous_mode if mode is None else mode,
+                        root=root, expected=expected)
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(name)
     return True
+
+
+def replace_current(path: Path, name: str, mode: int, *, root: Path | None,
+                    expected: bytes | None) -> None:
+    os.chmod(name, mode)
+    if expected is not None and (not path.is_file() or path.read_bytes() != expected):
+        raise ValueError(f"исходный файл изменился во время форматирования: {path}")
+    if root is not None:
+        safe_target(path, root)
+    os.replace(name, path)
 
 
 def write_json(path: Path, data: Any, root: Path | None = None) -> bool:

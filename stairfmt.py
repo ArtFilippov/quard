@@ -32,6 +32,7 @@ import re
 import stat
 import sys
 import tokenize
+import unicodedata
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -442,7 +443,9 @@ def _pieces(token: str, limit: int) -> list[str]:
                 index += 1
         else:
             index += 1
-        boundaries.append(index)
+        if index == len(body) or not (unicodedata.category(body[index]) in {"Mn", "Me"}
+                                       or body[index] == "\u200d" or body[index - 1] == "\u200d"):
+            boundaries.append(index)
     pieces: list[str] = []
     start = 0
     while start < len(body):
@@ -505,7 +508,8 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                 if isinstance(node, ast.BinOp):
                     issues.extend(_inline_issues(node, source, inline_limit))
                     indent = (_leading_indent(lines[node.lineno - 1])
-                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict, ast.Starred, ast.Await))
+                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict, ast.Starred,
+                                                     ast.Await, ast.UnaryOp))
                               else " " * (_column(lines, node.lineno, node.col_offset) - 1))
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
@@ -565,7 +569,11 @@ class Renderer:
         if isinstance(arg, (ast.Await, ast.Yield, ast.YieldFrom)):
             return arg.value is None or self.supported_arg(arg.value)
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-            return not any(char in self.compact(arg) for char in "\r\n")
+            return True
+        if _interpolated(arg):
+            return True
+        if isinstance(arg, ast.UnaryOp):
+            return self.supported_arg(arg.operand)
         if _protected(arg):
             if isinstance(arg, ast.Lambda) and _structured(arg):
                 return False
@@ -635,6 +643,14 @@ class Renderer:
                     + (self.render_arg(arg.value, indent) if arg.value is not None else "") + ")")
         if isinstance(arg, ast.BinOp):
             return self.binary(arg, indent)
+        if isinstance(arg, ast.UnaryOp):
+            lines = _lines(self.source)
+            start = _index(lines, arg.lineno, arg.col_offset)
+            left = _index(lines, arg.operand.lineno, arg.operand.col_offset)
+            right = _index(lines, arg.operand.end_lineno, arg.operand.end_col_offset)
+            end = _index(lines, arg.end_lineno, arg.end_col_offset)
+            return (self.source[start:left] + self.render_arg(arg.operand, indent)
+                    + self.source[right:end])
         if isinstance(arg, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             return self.comprehension(arg, indent)
         if _protected(arg):
@@ -1091,6 +1107,31 @@ def _trailing_comment(source: str, end: int) -> bool:
     return True
 
 
+def _commented_indentation(source: str, tree: ast.AST) -> str:
+    """Adjust call continuation whitespace without moving a trailing comment."""
+    lines = _lines(source)
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    for root in _roots(tree):
+        end = _index(lines, root.end_lineno, root.end_col_offset)
+        start = _index(lines, root.lineno, root.col_offset)
+        if (not _trailing_comment(source, end)
+                or _has_comments(source, start, end, lines)
+                or isinstance(parents.get(root), ast.BinOp)):
+            continue
+        indent = _leading_indent(lines[root.lineno - 1])
+        for issue in _call_indent_issues(root, lines, parents):
+            number = issue.line - 1
+            prefix = _leading_indent(lines[number])
+            expected = indent if issue.line == root.end_lineno else indent + "    "
+            lines[number] = expected + lines[number][len(prefix):]
+    candidate = "".join(lines)
+    if candidate != source and ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(
+            tree, include_attributes=False):
+        return candidate
+    return source
+
+
 def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                   string_limit: int = 160) -> tuple[str, list[str]]:
     if indent_size != 4:
@@ -1102,6 +1143,8 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             raise ValueError("нормализация отступов меняет структуру AST")
         source = normalized
         tree = ast.parse(source)
+    source = _commented_indentation(source, tree)
+    tree = ast.parse(source)
     warnings: list[str] = []
     renderer = Renderer(source, indent_size, inline_limit)
     lines = _lines(source)
@@ -1140,7 +1183,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         left = _index(lines, container.lineno, container.col_offset)
         right = _index(lines, container.end_lineno, container.end_col_offset)
         if _has_comments(source, left, right, lines) or _trailing_comment(source, right):
-            warnings.append(f"{node.lineno}: пропущено: комментарий внутри словаря или после него")
+            warnings.append(f"{node.lineno}: пропущено: комментарий внутри контейнера или после него")
             continue
         if not renderer.supported_arg(container):
             warnings.append(f"{node.lineno}: пропущено: контейнер нельзя безопасно разложить")
@@ -1338,16 +1381,19 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
 
 
 def _paths(root: Path, inputs: list[str]) -> list[Path]:
-    files = discover_files(root, read_scope(root))
-    available = {root / path for profile in ("production", "tests")
-                 for path in files[profile] if path.endswith(".py")}
     if not inputs:
-        return sorted(available)
+        files = discover_files(root, read_scope(root))
+        return sorted(root / path for profile in ("production", "tests")
+                      for path in files[profile] if path.endswith(".py"))
     selected: set[Path] = set()
+    scope = read_scope(root)
     for value in inputs:
         path = (root / value).absolute()
         if not path.is_relative_to(root) or ".." in path.relative_to(root).parts:
             raise ValueError(f"Путь вне проекта: {value}")
+        files = discover_files(root, scope, path)
+        available = {root / candidate for profile in ("production", "tests")
+                     for candidate in files[profile] if candidate.endswith(".py")}
         matching = {candidate for candidate in available
                     if candidate == path or path.is_dir() and candidate.is_relative_to(path)}
         if not matching:
@@ -1396,7 +1442,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
                 if formatted != source:
                     if read_source(path) != original:
                         raise ValueError("исходный файл изменился во время форматирования")
-                    atomic_write(path, formatted.encode(encoding), root)
+                    atomic_write(path, formatted.encode(encoding), root, expected=original)
                     changed.append(name)
                 tree = ast.parse(formatted, filename=name)
             remaining.extend({"path": name, "line": issue.line, "column": issue.col,
