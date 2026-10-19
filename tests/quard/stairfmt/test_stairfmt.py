@@ -168,6 +168,36 @@ class TestStairfmt(unittest.TestCase):
                           '[ h(item) for item in values ]' in fixed),
                          ([], [], True, True, True))
 
+    def test_simple_comprehensions_with_nested_calls_remain_inline(self):
+        sources = ('x = f([g(1, 2) for v in xs])\n',
+                   'x = f({g(1, 2) for v in xs})\n',
+                   'x = f({v: g(1, 2) for v in xs})\n',
+                   'x = f(g(1, 2) for v in xs)\n')
+        results = []
+        for source in sources:
+            fixed, report = self.formatted(source)
+            results.append((report['remaining'], report['warnings'],
+                            ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                            self.formatted(fixed)[0] == fixed))
+        self.assertEqual(results, [([], [], True, True)] * len(sources))
+
+    def test_parenthesized_binary_beside_comprehension_is_stable(self):
+        source = 'x = f((g(1, 2) + h(3, 4)), [g(1, 2) for v in xs])\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          '    (g(\n' in fixed, self.formatted(fixed)[0]),
+                         ([], [], True, True, fixed))
+
+    def test_relayout_retains_parentheses_around_multiline_binary_argument(self):
+        source = ('x = f(\n    (g(\n        1, 2\n    ) +\n'
+                  '    h(\n        3, 4\n    )), j(5, 6)\n)\n')
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          '    (g(\n' in fixed, self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], True, fixed, True))
+
     def test_multifield_dictionary_and_nested_containers_have_distinct_lines(self):
         source = 'value = f({"a": g(1), "b": h(2)}, [[1, 2], 3, 4], {5, 6})\n'
         fixed, report = self.formatted(source)

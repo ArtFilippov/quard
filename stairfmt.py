@@ -641,6 +641,8 @@ class Renderer:
 
     def comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
                       indent: str) -> str:
+        if not _structured(node):
+            return self.compact(node)
         key = self.render_arg(node.key, indent + self.step) if isinstance(node, ast.DictComp) else ""
         if isinstance(node, ast.DictComp):
             value = self.render_arg(node.value, indent + self.step)
@@ -689,11 +691,10 @@ class Renderer:
                                 _index(lines, following.end_lineno, following.end_col_offset)
                                 if following is call else _index(lines, following.lineno,
                                                                  following.col_offset)]
-            opening = len(before) - len(before.rstrip(' ('))
-            closing = len(after) - len(after.lstrip(' )'))
-            wrappers.append(max(0, min((before[-opening:] if opening else '').count('(')
-                                        - (index == 0),
-                                        after[:closing].count(')') - (index == len(args) - 1))))
+            opening = re.findall(r"[\s(]*$", before)[0].count('(')
+            closing = re.findall(r"^[\s)]*", after)[0].count(')')
+            wrappers.append(max(0, min(opening - (index == 0),
+                                        closing - (index == len(args) - 1))))
         return self.render_values(args, name, indent, wrappers=wrappers)
 
     def render_values(self, args: Sequence[ast.AST], name: str, indent: str,
