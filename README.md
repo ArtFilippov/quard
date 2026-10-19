@@ -349,12 +349,20 @@ are not checked against it. An over-limit supported expression line (`ST006`)
 or a second call-bearing branch along one path (`ST007`) receives
 simplify-expression advice independently of safe layout fixes. Ordinary container
 elements share a line, nested containers start
-new lines, and multi-field dictionaries use one field per line. Unsafe standalone
-dictionary edits are skipped with a warning, preserving comments. A dictionary in an
+new lines, and multi-field dictionaries use one field per line. A standalone list,
+tuple or set whose first call shares its opening line but whose closing bracket is
+already separate (for example, `[g(1)\n]`) is accepted as-is; this alone does not
+trigger `ST009`. Unsafe standalone dictionary edits are skipped with a warning,
+preserving comments. A dictionary in an
 unsupported protected call argument can retain `ST009` for manual layout. Comments inside
 checked calls receive a positioned finding and are preserved; unsafe call edits are skipped
-with a warning, including when bare CR precedes the call. Independent safe edits
-still proceed. Each fix run prints a
+with a warning, including when bare CR precedes the call. A comment inside an
+f-string interpolation can also count as inside its enclosing checked call: `ST008`
+is reported and the outer call edit is skipped, even though interpolation expressions
+themselves are outside Stairfmt's layout scope. Independent safe edits still proceed.
+Fix validates candidate edits individually against the AST and indentation rules, so
+many independent edits in one file can take disproportionately longer; explicit file
+arguments can limit a formatting run to the affected subset. Each fix run prints a
 summary and saves its own JSON report under
 `.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest
 Quard check report intact. A clean fix exits 0, remaining violations exit 1, and

@@ -110,7 +110,8 @@ def _has_nested_call(node: ast.AST) -> bool:
 
 
 def _multiline(node: ast.AST) -> bool:
-    return (isinstance(node, ast.BinOp) and (_multiline(node.left) or _multiline(node.right))
+    return (isinstance(node, (ast.keyword, ast.Starred)) and _multiline(node.value)
+            or isinstance(node, ast.BinOp) and (_multiline(node.left) or _multiline(node.right))
             or isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
             and _structured(node)
             or _has_nested_call(node)
@@ -157,7 +158,7 @@ def _call_indent_issues(call: ast.Call, lines: list[str], parents: dict[ast.AST,
     inside = _ancestors(call, parents)
     indent = (" " * (_column(lines, call.lineno, call.col_offset) - 1)
               if isinstance(context, ast.BinOp) and not any(
-                  isinstance(part, ast.Dict) for part in inside[:inside.index(context)])
+                  isinstance(part, ast.Dict) for part in inside)
               else _leading_indent(lines[call.lineno - 1]))
     arguments = [*call.args, *call.keywords]
     issues: list[Issue] = []

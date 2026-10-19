@@ -274,10 +274,22 @@ class TestStairfmt(unittest.TestCase):
                             report['remaining'], report['warnings'], self.formatted(fixed)[0] == fixed))
         self.assertEqual(results, [(True, [], [], True)] * len(sources))
 
+    def test_standalone_container_first_call_may_share_opening_line(self):
+        source = 'x = [g(1)\n]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((self.checked(source)['remaining'], fixed, report['remaining'],
+                          report['warnings']), ([], source, [], []))
+
     def test_clean_call_with_comment_is_positioned_violation(self):
         source = 'value = f(\n    1,  # keep\n    2\n)\n'
         self.assertEqual([(item["rule"], item["line"]) for item in self.checked(source)["remaining"]
                           if item["rule"] == 'ST008'], [('ST008', 2)])
+
+    def test_interpolation_comment_blocks_outer_call_fix(self):
+        source = 'x = f(f"{g(1) # interpolation\n}")\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, [item['rule'] for item in report['remaining']],
+                          bool(report['warnings'])), (source, ['ST008'], True))
 
     def test_limit_measures_expression_not_physical_line(self):
         source = 'prefix = f(' + ' ' * 70 + 'lambda x: g(x))\n'
@@ -340,6 +352,25 @@ class TestStairfmt(unittest.TestCase):
         self.assertEqual((report['remaining'], report['warnings'],
                           '"a": 1,\n' in fixed), ([], [], True))
 
+    def test_single_keyword_with_multifield_dictionary_converges(self):
+        source = 'x = f(k={"a": 1, "b": 2})\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], fixed, True))
+
+    def test_single_unpacking_argument_with_multifield_dictionary_converges(self):
+        sources = ('x = f(**{"a": 1, "b": 2})\n',
+                   'x = f(*[{"a": 1, "b": 2}])\n')
+        results = []
+        for source in sources:
+            fixed, report = self.formatted(source)
+            results.append((report['remaining'], report['warnings'],
+                            self.formatted(fixed)[0] == fixed,
+                            ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))))
+        self.assertEqual(results, [([], [], True, True)] * len(sources))
+
     def test_standalone_multifield_dictionary_is_checked_and_fixed(self):
         source = 'data = {"a": 1, "b": 2}\n'
         expected = 'data = {\n    "a": 1,\n    "b": 2\n}\n'
@@ -367,6 +398,14 @@ class TestStairfmt(unittest.TestCase):
                           self.formatted(fixed)[0],
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          (expected, [], [], expected, True))
+
+    def test_standalone_dictionary_with_binary_call_value_converges(self):
+        source = 'x = {"a": (f(1, 2) + g(3, 4)), "b": 2}\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], fixed, True))
 
     def test_standalone_parenthesized_tuple_with_calls_converges(self):
         results = []
