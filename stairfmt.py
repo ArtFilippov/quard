@@ -150,8 +150,11 @@ def _call_indent_issues(call: ast.Call, lines: list[str], parents: dict[ast.AST,
     # Nested binary alignment belongs to the enclosing expression's ST012 layout.
     if isinstance(context, ast.BinOp) and len(ancestors) > 1:
         return []
+    inside = _ancestors(call, parents)
     indent = (" " * (_column(lines, call.lineno, call.col_offset) - 1)
-              if isinstance(context, ast.BinOp) else _leading_indent(lines[call.lineno - 1]))
+              if isinstance(context, ast.BinOp) and not any(
+                  isinstance(part, ast.Dict) for part in inside[:inside.index(context)])
+              else _leading_indent(lines[call.lineno - 1]))
     arguments = [*call.args, *call.keywords]
     issues: list[Issue] = []
     for number in {arg.lineno for arg in arguments if arg.lineno > call.func.end_lineno}:
@@ -202,6 +205,9 @@ def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
             # A single simple argument cannot be split across lines. The
             # function name, argument, and closing ')' must share a line.
             if (call.func.end_lineno != arg.lineno or
+                    arg.end_lineno != arg.lineno and not _protected(arg) and not any(
+                        isinstance(part, (ast.Constant, ast.JoinedStr))
+                        and part.end_lineno > part.lineno for part in ast.walk(arg)) or
                     arg.end_lineno != call.end_lineno):
                 issues.append(Issue(
                     call.func.end_lineno, _column(lines, call.func.end_lineno, call.func.end_col_offset), "ST003",
@@ -266,7 +272,8 @@ def _inline_issues(node: ast.AST, source: str, limit: int) -> list[Issue]:
             for index in range(left, right):
                 if layout[index] in "\r\n":
                     layout[index] = " "
-    if length > limit or "\n" in layout and not isinstance(node, ast.BinOp):
+    if length > limit or (not isinstance(node, ast.BinOp)
+                          and any(char in layout for char in "\r\n")):
         issues.append(Issue(node.lineno, column, "ST006",
                             f"упростите выражение: длина {length} превышает предел {limit} "
                             if length > limit else "упростите выражение: оно должно быть в одной строке"))
@@ -328,7 +335,7 @@ def _structured(node: ast.AST) -> bool:
 
 def decode_source(data: bytes) -> tuple[str, str]:
     """Decode a Python file according to its BOM and encoding declaration."""
-    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(re.sub(rb"\r(?!\n)", b"\n", data)).readline)
     return data.decode(encoding), encoding
 
 
@@ -341,7 +348,7 @@ def _strings(tree: ast.AST, source: str, limit: int
     selected: list[tuple[Issue, tokenize.TokenInfo, ast.Constant]] = []
     constants = [node for node in ast.walk(tree)
                  if isinstance(node, ast.Constant) and isinstance(node.value, str)]
-    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+    for token in tokenize.generate_tokens(io.StringIO(re.sub(r"\r(?!\n)", "\n", source)).readline):
         if token.type != tokenize.STRING:
             continue
         match = re.match(r"(?i)([rubf]*)(['\"])(.*)\2$", token.string, re.DOTALL)
@@ -465,7 +472,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                 if isinstance(node, ast.BinOp):
                     issues.extend(_inline_issues(node, source, inline_limit))
                     indent = (_leading_indent(lines[node.lineno - 1])
-                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict))
+                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict, ast.Starred))
                               else " " * (_column(lines, node.lineno, node.col_offset) - 1))
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
@@ -484,8 +491,10 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                     for part in _ancestors(node, parents)):
                 continue
             issues.extend(_inline_issues(node, source, inline_limit))
-            issues.extend(_layout_issues(node, source, inline_limit,
-                                         " " * (_column(lines, node.lineno, node.col_offset) - 1)))
+            indent = (_leading_indent(lines[node.lineno - 1])
+                      if isinstance(parents.get(node), (ast.Dict, ast.keyword, ast.Call, ast.Starred))
+                      else " " * (_column(lines, node.lineno, node.col_offset) - 1))
+            issues.extend(_layout_issues(node, source, inline_limit, indent))
     return sorted(issues, key=lambda i: (i.line, i.col, i.code))
 
 
@@ -504,17 +513,17 @@ class Renderer:
         return segment
 
     def simple(self, node: ast.AST) -> bool:
-        return not _has_nested_call(node) and "\n" not in self.segment(node)
+        return not _has_nested_call(node) and not any(char in self.segment(node) for char in "\r\n")
 
     def compact(self, node: ast.AST) -> str:
         segment = self.segment(node)
-        if "\n" not in segment:
+        if not any(char in segment for char in "\r\n"):
             return segment
         if any(isinstance(part, (ast.Constant, ast.JoinedStr))
-               and "\n" in (ast.get_source_segment(self.source, part) or "")
+               and any(char in (ast.get_source_segment(self.source, part) or "") for char in "\r\n")
                for part in ast.walk(node)):
             return segment
-        return re.sub(r"\s*\n\s*", " ", segment)
+        return re.sub(r"\s*(?:\r\n|\r|\n)\s*", " ", segment)
 
     def supported_arg(self, arg: ast.AST) -> bool:
         if _protected(arg):
@@ -523,8 +532,9 @@ class Renderer:
                         and self.supported_clauses(arg))
             if isinstance(arg, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
                 return self.supported_arg(arg.elt) and self.supported_clauses(arg)
-            return "\n" not in self.compact(arg) and (
-                len(self.compact(arg)) <= self.limit or "\n" not in self.segment(arg))
+            return not any(char in self.compact(arg) for char in "\r\n") and (
+                len(self.compact(arg)) <= self.limit or not any(
+                    char in self.segment(arg) for char in "\r\n"))
         if isinstance(arg, ast.BinOp):
             return self.supported_arg(arg.left) and self.supported_arg(arg.right)
         if isinstance(arg, ast.Starred):
@@ -535,7 +545,7 @@ class Renderer:
             if _has_nested_call(arg):
                 return (_has_nested_call(arg.value) and self.supported_arg(arg.value)
                         and (isinstance(arg, ast.Attribute) or self.simple(arg.slice)))
-            return "\n" not in self.segment(arg)
+            return not any(char in self.compact(arg) for char in "\r\n")
         if isinstance(arg, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
             if isinstance(arg, ast.Dict):
                 return (all(key is None or self.supported_arg(key) for key in arg.keys)
@@ -604,7 +614,7 @@ class Renderer:
             result = self.render_values(arg.elts, "", indent, tuple_mode=isinstance(arg, ast.Tuple),
                                         container_mode=True)
             return opening + result[1:-1] + closing
-        return self.segment(arg)
+        return self.compact(arg)
 
     def binary(self, node: ast.BinOp, indent: str) -> str:
         lines = _lines(self.source)
@@ -615,10 +625,14 @@ class Renderer:
         between = self.source[left:right]
         if "#" in between:
             raise ValueError("комментарий между операндами бинарного выражения")
-        prefix = self.render_arg(node.left, indent)
-        suffix = self.render_arg(node.right, indent)
+        alignment = (_leading_indent(lines[node.lineno - 1])
+                     if len(indent) in (_column(lines, node.lineno, node.col_offset) - 1,
+                                        _column(lines, node.lineno, node.col_offset))
+                     else indent)
+        prefix = self.render_arg(node.left, alignment if isinstance(node.left, ast.Dict) else indent)
+        suffix = self.render_arg(node.right, alignment if isinstance(node.right, ast.Dict) else indent)
         # Retain parentheses around operands, rather than reconstructing precedence.
-        gap = re.sub(r"\s*\n\s*", " ", between)
+        gap = re.sub(r"\s*(?:\r\n|\r|\n)\s*", " ", between)
         if isinstance(node.right, ast.Call) and "\n" in suffix and "(" not in gap:
             gap = gap.rstrip() + "\n" + indent
         return self.source[begin:operand] + prefix + gap + suffix + self.source[
@@ -693,7 +707,7 @@ class Renderer:
                   if wrappers and wrappers[index] > 0 else value
                   for index, value in enumerate(values)]
         def separate(arg: ast.AST, value: str) -> bool:
-            return (_has_nested_call(arg) or "\n" in value
+            return (_has_nested_call(arg) or any(char in value for char in "\r\n")
                     or (container_mode or _multiline(arg))
                     and isinstance(arg, (ast.List, ast.Tuple, ast.Set, ast.Dict)) and not _protected(arg))
 
@@ -791,7 +805,7 @@ def _layout_issues(node: ast.AST, source: str, limit: int, indent: str) -> list[
     try:
         expected = renderer.render_arg(node, indent)
         if (_without_endings(source[left:right]) == _without_endings(expected)
-                or "\n" not in source[left:right] + expected):
+                or not any(char in source[left:right] + expected for char in "\r\n")):
             return []
         try:
             candidate = ast.parse(source[:left] + expected + source[right:])
@@ -869,7 +883,7 @@ def _indentation(source: str, size: int) -> tuple[list[Issue], str]:
     fstrings: list[int] = []
     prefixes = [""]
     logical = True
-    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+    for token in tokenize.generate_tokens(io.StringIO(re.sub(r"\r(?!\n)", "\n", source)).readline):
         if token.type == tokenize.INDENT:
             prefixes.append(token.string)
         elif token.type == tokenize.DEDENT:
@@ -990,6 +1004,12 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         ancestors = _ancestors(node, parents)
         if any(isinstance(part, ast.Call) for part in ancestors):
             continue
+        if any(isinstance(part, ast.BinOp) and _visible(part) and not any(
+                _protected(ancestor) for ancestor in _ancestors(part, parents)) and _layout_issues(
+                part, source, inline_limit,
+                " " * (_column(lines, part.lineno, part.col_offset) - 1))
+                for part in ancestors):
+            continue
         container = node
         for part in ancestors:
             if isinstance(part, (ast.Dict, ast.List, ast.Tuple, ast.Set,
@@ -1017,7 +1037,9 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             continue
         left = _index(lines, node.lineno, node.col_offset)
         right = _index(lines, node.end_lineno, node.end_col_offset)
-        indent = " " * (_column(lines, node.lineno, node.col_offset) - 1)
+        indent = (_leading_indent(lines[node.lineno - 1])
+                  if isinstance(parents.get(node), (ast.Dict, ast.keyword, ast.Call, ast.Starred))
+                  else " " * (_column(lines, node.lineno, node.col_offset) - 1))
         if (any(start <= left < end for start, end, _ in edits)
                 or _has_comments(source, left, right, lines)
                 or _trailing_comment(source, right)
@@ -1107,6 +1129,8 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
     source = formatted
     tree = ast.parse(source)
     lines = _lines(source)
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
     selected: dict[ast.Constant, list[tokenize.TokenInfo]] = {}
     for _, token, node in _strings(tree, source, string_limit):
         selected.setdefault(node, []).append(token)
@@ -1116,13 +1140,18 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         if any("\n" in token.string or "\r" in token.string for token in tokens):
             warnings.append(f"{node.lineno}: пропущено: физический перенос внутри строкового литерала")
             continue
-        if _trailing_comment(source, end):
+        mapping = parents.get(node)
+        if _trailing_comment(source, end) and not (
+                isinstance(mapping, ast.MatchMapping) and mapping.end_lineno == node.end_lineno
+                and _trailing_comment(source, _index(lines, mapping.end_lineno,
+                                                     mapping.end_col_offset))):
             warnings.append(f"{node.lineno}: пропущено: комментарий в конце строки")
             continue
         if _has_comments(source, start, end, lines):
             warnings.append(f"{node.lineno}: пропущено: комментарий внутри строкового литерала")
             continue
-        literals = [token for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        literals = [token for token in tokenize.generate_tokens(io.StringIO(
+            re.sub(r"\r(?!\n)", "\n", source)).readline)
                     if token.type == tokenize.STRING and start <= _index(
                         lines, token.start[0], len(lines[token.start[0] - 1][
                             :token.start[1]].encode("utf-8"))) < end]
@@ -1132,10 +1161,25 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                   for token in literals]
         if any(not part for part in pieces):
             warnings.append(f"{node.lineno}: пропущено: нет безопасной границы для строкового литерала")
-            continue
+            if not any(len(part) > 1 for part in pieces):
+                continue
+            pieces = [part or [token.string] for part, token in zip(pieces, literals)]
         indent = _leading_indent(lines[node.lineno - 1])
-        replacement = "(\n" + "".join(indent + " " * indent_size + piece + "\n"
-                                      for group in pieces for piece in group) + indent + ")"
+        if isinstance(parents.get(node), ast.MatchMapping) and node in parents[node].keys:
+            mapping = parents[node]
+            line = source[sum(len(line) for line in lines[:node.lineno - 1]):start]
+            inline = bool(line.strip())
+            if inline:
+                depth = sum(isinstance(part, ast.MatchMapping) and part.lineno == node.lineno
+                            for part in [mapping, *_ancestors(mapping, parents)])
+                indent += " " * (indent_size * depth)
+                while start > 0 and source[start - 1] in " \t":
+                    start -= 1
+            replacement = ("\n" + indent if inline else "") + ("\n" + indent).join(
+                piece for group in pieces for piece in group)
+        else:
+            replacement = "(\n" + "".join(indent + " " * indent_size + piece + "\n"
+                                          for group in pieces for piece in group) + indent + ")"
         replacement = _local_endings(source, start, end, replacement)
         candidate = source[:start] + replacement + source[end:]
         try:

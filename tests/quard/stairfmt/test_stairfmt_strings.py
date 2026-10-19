@@ -160,6 +160,83 @@ class TestStairfmtStrings(unittest.TestCase):
                           'физический перенос' in report['warnings'][0]['reason']),
                          ('ST011', 1, source.encode('utf-8'), 'ST011', True))
 
+    def test_bare_cr_before_long_literal_keeps_its_position_and_splits(self):
+        source = 'before = 1\rvalue = "' + 'a' * 161 + '"\r'
+        findings = self.checked(source)
+        fixed, report = self.formatted(source)
+        preserved = (self.root / 'src/demo/working.py').read_bytes().startswith(
+            b'before = 1\rvalue = (')
+        self.assertEqual(([(item['rule'], item['line']) for item in findings['remaining']],
+                          report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          preserved, self.formatted(fixed)[0]),
+                         ([('ST011', 2)], [], [], True, True, fixed))
+
+    def test_mapping_pattern_long_key_splits_without_parentheses(self):
+        source = 'match value:\n    case {"' + 'a' * 161 + '": item}:\n        pass\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_multiline_mapping_key_keeps_existing_indentation(self):
+        source = 'match x:\n    case {\n        "' + 'a' * 161 + '": v\n    }:\n        pass\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], '\n        \n' in fixed,
+                          '\n        "' in fixed, '\n            "' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], False, True, False, True))
+
+    def test_nested_mapping_key_indents_inside_its_own_brace(self):
+        source = 'match x:\n    case {"k": {"' + 'a' * 161 + '": v}}:\n        pass\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          'case {"k": {\n            "' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], True, True))
+
+    def test_later_mapping_key_moves_without_trailing_space(self):
+        source = 'match x:\n    case {"b": y, "' + 'a' * 161 + '": z}:\n        pass\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], '"b": y, \n' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], False, True))
+
+    def test_mapping_key_with_comment_after_case_keeps_comment(self):
+        source = 'match x:\n    case {"' + 'a' * 161 + '": v}: pass # note\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], '# note' in fixed,
+                          'case {\n' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], True, True, True))
+
+    def test_splittable_adjacent_literal_survives_undivisible_escape(self):
+        source = 'value = "\\N{LATIN SMALL LETTER A}" "' + 'b' * 13 + '"\n'
+        setting = self.root / '.quard/config.toml'
+        setting.write_text(setting.read_text(encoding='utf-8')
+                           + '\n[stairfmt]\nstring_limit = 12\n', encoding='utf-8')
+        fixed, report = self.formatted(source)
+        self.assertEqual(([(item['rule'], item['line']) for item in report['remaining']],
+                          len(report['warnings']), '"' + 'b' * 13 + '"' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([('ST011', 2)], 1, False, True))
+
+    def test_bare_cr_encoding_cookie_can_be_checked_and_fixed(self):
+        source = '# coding: latin-1\rvalue = "caf\xe9 ' + 'a' * 161 + '"\r'
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(source.encode('latin-1'))
+        check = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                '--project', str(self.root), '--json', 'src/demo/working.py'],
+                               cwd=self.root, capture_output=True, text=True, check=False)
+        command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--fix',
+                                  '--project', str(self.root), '--json', 'src/demo/working.py'],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        report = json.loads(command.stdout)
+        self.assertEqual((json.loads(check.stdout)['errors'], report['errors'],
+                          report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(path.read_bytes())) == ast.dump(ast.parse(source))),
+                         ([], [], [], [], True))
+
     def test_trailing_comment_explains_why_long_literal_is_skipped(self):
         source = 'value = "' + 'a' * 170 + '"  # keep\n'
         fixed, report = self.formatted(source)

@@ -203,7 +203,7 @@ class TestStairfmt(unittest.TestCase):
         sources = ('x = f(\n    {\n        "a": g(\n            1, 2\n        ), "b": 3\n    }\n)\n',
                    'x = f(\n    [\n        g(\n            1, 2\n        ), h(3)\n    ]\n)\n',
                    'x = f(\n    [g(1)]\n)\n', 'x = f(\n    (g(1),)\n)\n')
-        results = []
+        results: list[tuple[bool, object, object, bool]] = []
         for source in sources:
             findings = self.checked(source)['remaining']
             fixed, report = self.formatted(source)
@@ -304,6 +304,48 @@ class TestStairfmt(unittest.TestCase):
                           self.formatted(fixed)[0],
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          (expected, [], [], expected, True))
+
+    def test_dictionary_union_with_nested_call_converges_in_one_pass(self):
+        source = 'x = {"a": 1, "b": 2} | g(1, 2)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([], [], fixed, True))
+
+    def test_binary_containers_and_calls_converge_in_one_pass(self):
+        sources = [
+            'x = {"a": 1, "b": 2} | {"c": 3, "d": 4}\n',
+            'x = {"a": g(1, 2), "b": 0} | h(1, 2)\n',
+            'x = f(*(g(1, 2) + h(3, 4)))\n',
+            'x = [{"a": 1, "b": 2} | g(1, 2) for i in xs]\n',
+            'x = {"v": {"a": 1, "b": 2} | g(1, 2), "n": 0}\n',
+            'x = f(k={"a": g(1, 2), "b": 0} | h(1, 2))\n',
+        ]
+        results: list[tuple[object, object, bool, bool]] = []
+        for source in sources:
+            fixed, report = self.formatted(source)
+            results.append((report['remaining'], report['warnings'], self.formatted(fixed)[0] == fixed,
+                            ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))))
+        self.assertEqual(results, [([], [], True, True)] * len(sources))
+
+    def test_multiline_single_simple_argument_is_reported_and_fixed(self):
+        source = 'x = f(a[\n    0\n])\n'
+        findings = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual(('ST003' in [item['rule'] for item in findings['remaining']],
+                          'f(a[' in fixed and '\n' not in fixed.rstrip('\n'),
+                          report['remaining'], report['warnings'], self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (True, True, [], [], fixed, True))
+
+    def test_bare_cr_multiline_index_never_leaves_silent_findings(self):
+        source = 'x = f(a[\r    0\r], 1)\r'
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(source.encode('utf-8'))
+        _, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((report['remaining'] == [], bool(report['warnings']),
+                          ast.dump(ast.parse(path.read_bytes())) == ast.dump(ast.parse(source))),
+                         (True, False, True))
 
     def test_nested_standalone_dictionary_expands_with_container(self):
         source = 'data = [{"a": 1, "b": 2}]\n'
@@ -716,6 +758,24 @@ def run(path, self, test, populations):
         code, report, _ = self.run_fix('src/demo/working.py')
         self.assertEqual((code, report['remaining'], path.read_bytes()),
                           (0, [], b'before = 1\rvalue = f(\n    g(1),\n    h(2)\n)\n'))
+
+    def test_bare_cr_tabbed_block_reports_indentation_and_fixes(self):
+        path = self.root / 'src/demo/working.py'
+        path.write_bytes(b'if True:\r\tvalue = 1\r')
+        checked = self.checked('if True:\r\tvalue = 1\r')
+        code, report, _ = self.run_fix('src/demo/working.py')
+        self.assertEqual((checked['errors'], [(item['rule'], item['line']) for item in
+                           checked['remaining']], code, report['remaining'], path.read_bytes()),
+                         ([], [('ST010', 2)], 0, [], b'if True:\r    value = 1\r'))
+
+    def test_bare_cr_protected_expression_break_is_detected_and_fixed(self):
+        source = 'x = f(lambda x: (g(x)\r + h(x)))\r'
+        findings = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual(([(item['rule'], item['line']) for item in findings['remaining']],
+                          report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         ([('ST012', 1)], [], [], True))
 
     def test_bare_cr_inside_call_comment_blocks_fix_with_warning(self):
         path = self.root / 'src/demo/working.py'
