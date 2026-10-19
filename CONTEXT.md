@@ -97,6 +97,17 @@ Local Protocol and abstract-interface declarations are contracts, even when a
 method has a body; they supply overridable members, not forbidden implementations.
 An external or unresolved base cannot establish a customer method override.
 
+## Override-marked method
+
+An **override-marked method** is a directly declared customer class method with
+a proven `typing.override` or `typing_extensions.override` decorator, including
+imported aliases. The optional leading-underscore job exempts its method name,
+not its parameters, fields or path, without resolving external member declarations.
+Each property accessor and source or stub declaration is considered separately.
+Pyright independently validates the override claim during a full check; an
+unmarked method does not receive this naming exception. A customer method override
+remains a separate, customer-owned ancestry finding.
+
 ## Contract-facing method
 
 A **contract-facing method** is a customer method whose name is declared by a

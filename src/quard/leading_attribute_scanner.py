@@ -23,7 +23,7 @@ class AttributeScanner(Accesses):
             lines (list[str]): Source lines for locating attribute names.
         """
         super().__init__(ownership, path)
-        self.names = BindingScanner(path, lines)
+        self.names = BindingScanner(path, lines, frozenset(), frozenset())
 
     @override
     def value(self, node: ast.expr) -> Binding | None:

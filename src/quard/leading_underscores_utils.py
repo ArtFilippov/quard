@@ -108,11 +108,13 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
         lines[path] = text.splitlines()
     if trees:
         modules = frozenset(module_name(path) for path in trees)
+        ownership = Ownership(trees)
+        overrides = frozenset(node for node, symbol in ownership.markers.decorators.items()
+                              if symbol in {"typing.override", "typing_extensions.override"})
         for path, tree in trees.items():
-            scanner = BindingScanner(path, lines[path], modules)
+            scanner = BindingScanner(path, lines[path], modules, overrides)
             scanner.visit(tree)
             diagnostics.extend(scanner.diagnostics)
-        ownership = Ownership(trees)
         for path, tree in trees.items():
             visitor = AttributeScanner(ownership, path, lines[path])
             visitor.visit(tree)

@@ -55,6 +55,14 @@ The verbatim original text between the reported clone positions, including any
 non-eligible intervening source lines.
 _Avoid_: Prepared text
 
+## Method naming
+
+**Override-marked method**:
+A method whose declaration explicitly claims to replace an inherited member.
+This claim is distinct from a proven customer method override or a proven
+external member declaration.
+_Avoid_: Proven external override
+
 ## Envelope structure
 
 **Read-only property contract**:

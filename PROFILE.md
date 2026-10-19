@@ -1,6 +1,6 @@
 # Native analysis profile
 
-Quard 1.6.1 preserves the original strict profile. Exact tool pins live in
+Quard 1.6.2 preserves the original strict profile. Exact tool pins live in
 `tools.json`; top-level versions are verified on every check. Consumers control
 their native configs except generated contract-only `tach.toml`; there is no hidden
 violations baseline.
@@ -335,7 +335,14 @@ violations baseline.
   names (including the five exception context/traceback/note fields), and
   `__init__`/`__main__` modules are allowed; arbitrary double-underscore
   names are not. Existing findings remain normal violations without migration
-  baselines. Set `leading_underscores = false` in `[checks]` to skip this job only;
+  baselines. Direct class methods with proven `typing.override` or
+  `typing_extensions.override` decorators (including aliases and re-exports)
+  are exempt only for their own names. The job does not inspect external member
+  declarations; Pyright validates the override claim independently during a full
+  check. Unmarked methods, unrelated decorators, and separately unmarked property
+  accessors or companion-stub declarations remain subject to the naming rule.
+  See [ADR 0011](docs/adr/0011-override-marked-method-names.md).
+  Set `leading_underscores = false` in `[checks]` to skip this job only;
   disabled runs have no worker, manifest or exit code. Malformed source and output
   remain infrastructure errors while other file findings stay visible.
 * **Contract folders** (reviewed and generated version 1): `CONTRACT_FOLDER` requires each discovered local Protocol or

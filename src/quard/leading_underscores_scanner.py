@@ -10,13 +10,15 @@ from quard.field_ownership.bindings import module_name
 class BindingScanner(ast.NodeVisitor):
     """Report syntactic bindings, without treating external attribute access as ownership."""
 
-    def __init__(self, path: str, lines: list[str], modules: frozenset[str] = frozenset()) -> None:
+    def __init__(self, path: str, lines: list[str], modules: frozenset[str],
+                 overrides: frozenset[ast.expr]) -> None:
         self.path = path
         self.lines = lines
         self.diagnostics: list[dict[str, object]] = []
         self.in_class = False
         self.module = module_name(path)
         self.modules = modules
+        self.overrides = overrides
 
     def local_module(self, name: str) -> bool:
         """Accept only a discovered module or its package prefix, never an external import."""
@@ -44,7 +46,8 @@ class BindingScanner(ast.NodeVisitor):
         self.in_class = previous
 
     def function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        self.add(node.name, node, locate=True)
+        if not (self.in_class and any(item in self.overrides for item in node.decorator_list)):
+            self.add(node.name, node, locate=True)
         previous = self.in_class
         self.in_class = False
         self.generic_visit(node)

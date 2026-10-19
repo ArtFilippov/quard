@@ -679,7 +679,15 @@ exception fields (`__traceback__`, `__cause__`, `__context__`,
 `__suppress_context__`, `__notes__`) are allowed, as are required
 `__init__.py`/`__main__.py` modules; invented `__custom__` names are not.
 Unaliased imports from external libraries, external attributes and excluded
-paths are not checked. Set `[checks] leading_underscores = false` to skip only this
+paths are not checked. A directly declared method with a proven
+`typing.override` or `typing_extensions.override` decorator (including an
+imported alias) is exempt from the name check, even for an external base that
+Quard does not inspect. An unrelated same-named decorator grants no exemption.
+Each property accessor and source/stub declaration needs its own marker; unmarked
+methods still receive naming findings. Pyright checks the validity of marked
+overrides independently during a full check; this job does not prove external
+membership. See [ADR 0011](docs/adr/0011-override-marked-method-names.md).
+Set `[checks] leading_underscores = false` to skip only this
 job. It defaults to on for existing projects even before reinstall; reinstall adds
 the explicit setting. Existing Quard source and test names are deliberately reported
 by its own full check: migrate them when ready, or opt out explicitly. Enabled

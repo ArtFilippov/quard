@@ -294,6 +294,96 @@ setattr(Local(), "_", 1)
         self.assertEqual({d["symbol"] for d in findings if d["rule"] == "LEADING_UNDERSCORE_NAME"},
                          {"_local"})
 
+    def test_override_marked_methods_skip_naming_without_external_inspection(self):
+        self.put("vendor/fitd.py", '''class Base:
+    def _inherited(self): ...
+    def _nested(self): ...
+class FITD(Base):
+    def _direct(self): ...
+    def _qualified(self): ...
+''')
+        self.put("src/demo/alias.py", "from typing_extensions import override as mark\n")
+        self.put("src/demo/overrides.py", '''import typing as t
+from typing import override as direct
+from demo.alias import mark
+from vendor.fitd import FITD
+
+class Probe(FITD):
+    @direct
+    def _direct(self): ...
+
+    @mark
+    async def _inherited(self): ...
+
+    @t.override
+    def _qualified(self): ...
+
+    class Nested(FITD):
+        @direct
+        def _nested(self): ...
+''')
+        result = execute_job(self.job(), self.root, self.run_dir, 30)
+        self.assertEqual((result["status"], result["exit_code"], result["diagnostics"]),
+                         ("passed", 0, []),
+                         "proven override decorators were still treated as forbidden names")
+
+    def test_undecorated_and_unproven_override_names_remain_reported(self):
+        self.put("src/demo/fake.py", "def override(method): return method\n")
+        self.put("src/demo/overrides.py", '''from typing import Protocol, override as mark
+from demo.fake import override as fake
+from missing_library import FITD
+
+class Contract(Protocol):
+    def _contract(self): ...
+
+class Probe(FITD, Contract):
+    @mark
+    def _contract(self): ...
+    def _undecorated(self): ...
+    @fake
+    def _fake(self): ...
+    @mark
+    @property
+    def _value(self): ...
+    @_value.setter
+    def _value(self, value): ...
+
+mark = lambda method: method
+
+class Shadowed(FITD):
+    @mark
+    def _shadowed(self): ...
+
+@fake
+def _free(): ...
+''')
+        findings, error = analyze(self.root, ["src/demo/fake.py", "src/demo/overrides.py"])
+        self.assertEqual((error, [(item["symbol"], item["line"]) for item in findings
+                                  if item["path"] == "src/demo/overrides.py"]),
+                         (None, [("_contract", 6), ("_undecorated", 11), ("_fake", 13),
+                                 ("_value", 18), ("_shadowed", 24), ("_free", 27)]),
+                         "undecorated or unproven names escaped the naming check")
+
+    def test_override_accessors_and_companion_stubs_are_separate_declarations(self):
+        code = '''from typing_extensions import override as mark
+from missing_library import FITD
+class Probe(FITD):
+    @property
+    @mark
+    def _value(self): ...
+    @_value.setter
+    def _value(self, value): ...
+'''
+        self.put("src/demo/probe.py", code)
+        self.put("src/demo/probe.pyi", code.replace("    @property\n    @mark\n", "    @property\n"))
+        findings, error = analyze(self.root, ["src/demo/probe.py", "src/demo/probe.pyi"])
+        self.assertEqual((error, [(item["path"], item["symbol"], item["line"])
+                                  for item in findings]),
+                         (None, [("src/demo/probe.py", "_value", 8),
+                                 ("src/demo/probe.pyi", "_value", 5),
+                                 ("src/demo/probe.pyi", "_value", 7)]),
+                         "an override marker on another declaration hid a naming violation")
+
     def test_disabled_naming_keeps_other_jobs_and_never_starts_worker(self):
         self.put("src/demo/_bad.py", "class _Bad: pass\n")
         self.put("src/demo/model.pyi", 'class Model:\n'
