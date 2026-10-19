@@ -833,6 +833,100 @@ def run(path, self, test, populations):
                           self.checked(fixed)['remaining']),
                          ([], [], True, True, True, True, True, []))
 
+    def test_conditional_dictionaries_in_comprehension_converge(self):
+        source = 'x = [v for v in ({"a": g(1), "b": h(2)} if cond else {"a": 1, "b": 2})]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_conditional_dictionaries_inside_call_converge(self):
+        source = 'x = f({"a": g(1), "b": h(2)} if cond else {"a": 1, "b": 2}, j(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_await_argument_converges(self):
+        source = 'async def run():\n    return f(key=await g(1, 2), other=h(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_await_list_converges_without_dictionary_warning(self):
+        source = 'async def run():\n    return [await f(g(1, 2)), h(3)]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_yield_argument_converges(self):
+        source = 'def run():\n    x = f((yield g(1, 2)), h(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_yield_from_argument_converges(self):
+        source = 'def run():\n    x = f((yield from g(1, 2)), h(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_call_inside_subscript_argument_converges(self):
+        source = 'x = f(a[g(1, 2)], h(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_interleaved_unpacking_keywords_preserves_ast(self):
+        source = 'x = f(a=g(1), *h(2), b=j(3), **k(4))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_dictionary_unpacking_and_callable_field_preserve_ast(self):
+        source = 'data = {**defaults, g(1): h(2), **overrides}\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_dictionary_in_generator_argument_preserves_ast(self):
+        source = 'x = f(({"a": i, "b": g(i)} for i in xs), 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_independent_call_fixes_beside_commented_call(self):
+        source = 'x = f(g(1), h(2))\ny = f(g(3),  # keep\n    h(4))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['changed_files'],
+                          [item['rule'] for item in report['remaining']],
+                          'x = f(\n' in fixed and '# keep\n' in fixed,
+                          self.formatted(fixed)[0]),
+                         (['src/demo/working.py'], ['ST001', 'ST002', 'ST008', 'ST004'], True, fixed))
+
+    def test_fstring_argument_does_not_hide_outer_call(self):
+        source = 'x = f(f"{g(1)}", h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          'f"{g(1)}"' in fixed, self.formatted(fixed)[0]),
+                         ([], [], True, True, fixed))
+
+    def test_many_independent_calls_converge(self):
+        source = ''.join(f'x{i} = f(g({i}), h({i}))\n' for i in range(30))
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
     def test_single_field_dictionary_comprehension_key_stays_inline(self):
         source = 'x = f({{"a": item}: value for item in values})\n'
         fixed, report = self.formatted(source)

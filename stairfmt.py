@@ -25,6 +25,7 @@ import ast
 from bisect import bisect_right
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from functools import lru_cache
 import io
 import json
 import re
@@ -539,6 +540,11 @@ class Renderer:
         return re.sub(r"\s*(?:\r\n|\r|\n)\s*", " ", segment)
 
     def supported_arg(self, arg: ast.AST) -> bool:
+        if isinstance(arg, ast.IfExp) and _structured(arg):
+            return (self.supported_arg(arg.body) and self.supported_arg(arg.test)
+                    and self.supported_arg(arg.orelse))
+        if isinstance(arg, (ast.Await, ast.Yield, ast.YieldFrom)):
+            return arg.value is None or self.supported_arg(arg.value)
         if _protected(arg):
             if isinstance(arg, ast.DictComp):
                 return (self.supported_arg(arg.key) and self.supported_arg(arg.value)
@@ -556,6 +562,9 @@ class Renderer:
             return self.supported(arg)
         if isinstance(arg, (ast.Subscript, ast.Attribute)):
             if _has_nested_call(arg):
+                if (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Call)
+                        and self.simple(arg.value)):
+                    return self.supported_arg(arg.slice)
                 return (_has_nested_call(arg.value) and self.supported_arg(arg.value)
                         and (isinstance(arg, ast.Attribute) or self.simple(arg.slice)))
             return not any(char in self.compact(arg) for char in "\r\n")
@@ -589,6 +598,14 @@ class Renderer:
                 and all(self.supported_arg(kw.value) for kw in call.keywords))
 
     def render_arg(self, arg: ast.AST, indent: str) -> str:
+        if isinstance(arg, ast.IfExp) and _structured(arg):
+            return (self.render_arg(arg.body, indent) + " if " + self.render_arg(arg.test, indent)
+                    + " else " + self.render_arg(arg.orelse, indent))
+        if isinstance(arg, ast.Await):
+            return "await " + self.render_arg(arg.value, indent)
+        if isinstance(arg, (ast.Yield, ast.YieldFrom)):
+            return ("(yield" + (" from " if isinstance(arg, ast.YieldFrom) else " ")
+                    + (self.render_arg(arg.value, indent) if arg.value is not None else "") + ")")
         if isinstance(arg, ast.BinOp):
             return self.binary(arg, indent)
         if isinstance(arg, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
@@ -599,6 +616,15 @@ class Renderer:
             return "*" + self.render_arg(arg.value, indent)
         if isinstance(arg, ast.Call):
             return self.render_call(arg, indent, in_call=True)
+        if (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Call)
+                and not _has_nested_call(arg.value)):
+            lines = _lines(self.source)
+            left = _index(lines, arg.lineno, arg.col_offset)
+            start = _index(lines, arg.slice.lineno, arg.slice.col_offset)
+            end = _index(lines, arg.slice.end_lineno, arg.slice.end_col_offset)
+            right = _index(lines, arg.end_lineno, arg.end_col_offset)
+            return (self.source[left:start] + self.render_arg(arg.slice, indent)
+                    + self.source[end:right])
         if isinstance(arg, (ast.Subscript, ast.Attribute)) and _has_nested_call(arg.value):
             lines = _lines(self.source)
             left = _index(lines, arg.lineno, arg.col_offset)
@@ -681,7 +707,10 @@ class Renderer:
         clauses = []
         for clause in node.generators:
             text = ("async for " if clause.is_async else "for ") + self.compact(clause.target)
-            text += " in " + self.render_arg(clause.iter, indent + self.step)
+            iterable = self.render_arg(clause.iter, indent + self.step)
+            if isinstance(clause.iter, (ast.IfExp, ast.Lambda)):
+                iterable = "(" + iterable + ")"
+            text += " in " + iterable
             text += "".join(" if " + ("(" + self.render_arg(condition, indent + self.step) + ")"
                                          if isinstance(condition, ast.NamedExpr)
                                          else self.render_arg(condition, indent + self.step))
@@ -977,11 +1006,12 @@ def _dictionary_indentation(tree: ast.AST, source: str) -> tuple[list[Issue], st
     return issues, "".join(lines)
 
 
-def _comment_tokens(source: str) -> list[tokenize.TokenInfo]:
+@lru_cache(maxsize=4)
+def _comment_tokens(source: str) -> tuple[tokenize.TokenInfo, ...]:
     """Match AST line positions when Python source uses bare carriage returns."""
     normalized = re.sub(r"\r(?!\n)", "\n", source)
-    return [token for token in tokenize.generate_tokens(io.StringIO(normalized).readline)
-            if token.type == tokenize.COMMENT]
+    return tuple(token for token in tokenize.generate_tokens(io.StringIO(normalized).readline)
+                 if token.type == tokenize.COMMENT)
 
 
 def _has_comments(source: str, start: int, end: int, lines: list[str]) -> bool:
@@ -1048,7 +1078,7 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             warnings.append(f"{node.lineno}: пропущено: комментарий внутри словаря или после него")
             continue
         if not renderer.supported_arg(container):
-            warnings.append(f"{node.lineno}: пропущено: словарь нельзя безопасно разложить")
+            warnings.append(f"{node.lineno}: пропущено: контейнер нельзя безопасно разложить")
             continue
         indent = _leading_indent(lines[container.lineno - 1])
         replacement = renderer.render_arg(container, indent)
