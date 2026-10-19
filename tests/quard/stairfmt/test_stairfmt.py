@@ -515,12 +515,12 @@ class TestStairfmt(unittest.TestCase):
                          ([], [], True, True))
 
     def test_commented_parent_skips_indentation_breaking_child(self):
-        source = 'value = f(g(h(1)), k(2),  # keep\n    j(3))\n'
+        source = 'value = f(g(h(1)), k(2),  # keep\n    j(3))\nother = f(g(4), h(5))\n'
         fixed, report = self.formatted(source)
-        self.assertEqual((ast.dump(ast.parse(fixed)), '# keep' in fixed,
-                          not any(item['rule'] == 'ST010' for item in report['remaining']),
-                          self.formatted(fixed)[0] == fixed),
-                         (ast.dump(ast.parse(source)), True, True, True))
+        self.assertEqual((ast.dump(ast.parse(fixed)), '# keep' in fixed, 'other = f(\n' in fixed,
+                           not any(item['rule'] == 'ST010' for item in report['remaining']),
+                           self.formatted(fixed)[0] == fixed),
+                          (ast.dump(ast.parse(source)), True, True, True, True))
 
     def test_successful_fix_is_clean_and_idempotent(self):
         self.put("src/demo/working.py", "x = f(g(h(1)), k(2))\n")
@@ -616,6 +616,27 @@ def run(path, self, test, populations):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
                           self.formatted(fixed)[0]), ([], [], True, fixed))
 
+    def test_method_after_multiline_call_shares_closing_line(self):
+        source = 'x = (a(\n    1, 2\n)\n    .b())\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], ').b()' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], True, True, fixed))
+
+    def test_nested_calls_with_trailing_comma_converge(self):
+        source = 'x = f(g(1), h(2),)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_async_comprehension_with_dictionary_converges(self):
+        source = 'async def run(xs):\n    return f([{"a": x, "b": x} async for x in xs])\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], 'async for x in xs' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], True, True, fixed))
+
     def test_explicit_continuation_preserves_source_and_reports_manual_layout(self):
         source = 'x = f(lambda: g(1) + \\\n h(2))\n'
         fixed, report = self.formatted(source)
@@ -671,6 +692,14 @@ def run(path, self, test, populations):
         source = 'x = f(g(1), h(2));  # note\n'
         fixed, report = self.formatted(source)
         self.assertEqual((fixed, bool(report['remaining'])), (source, True))
+
+    def test_type_ignore_remains_on_sibling_statement(self):
+        source = 'x = f(g(1), h(2)); y = other()  # type: ignore[name-defined]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.parse(fixed, type_comments=True).type_ignores[0].lineno,
+                          fixed.splitlines()[-1].endswith('y = other()  # type: ignore[name-defined]')),
+                         ([], [], len(fixed.splitlines()), True))
 
     def test_hash_inside_string_does_not_block_fix(self):
         source = 'x = f(g("#"), h(2))\n'
@@ -986,6 +1015,18 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
                           self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_many_safe_edits_do_not_reparse_file_per_edit(self):
+        source = ''.join(f'x{i} = f(g({i}), h({i}))\n' for i in range(30))
+        command = subprocess.run([sys.executable, '-B', '-c',
+                                  'import ast, sys\n'
+                                  'from unittest.mock import patch\n'
+                                  'from stairfmt import format_source\n'
+                                  'with patch("stairfmt.ast.parse", wraps=ast.parse) as parsing:\n'
+                                  '    format_source(sys.argv[1])\n'
+                                  'print(parsing.call_count)', source], cwd=QUARD,
+                                 capture_output=True, text=True, check=True)
+        self.assertLess(int(command.stdout), 20)
 
     def test_single_field_dictionary_comprehension_key_stays_inline(self):
         source = 'x = f({{"a": item}: value for item in values})\n'

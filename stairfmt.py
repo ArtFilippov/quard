@@ -627,8 +627,8 @@ class Renderer:
             end = _index(lines, arg.slice.end_lineno, arg.slice.end_col_offset)
             right = _index(lines, arg.end_lineno, arg.end_col_offset)
             return (self.source[left:start] + self.render_arg(arg.value, indent)
-                    + self.source[middle:index] + self.render_arg(arg.slice, indent)
-                    + self.source[end:right])
+                    + self.source[middle:index].rstrip() + "\n" + indent + self.step
+                    + self.render_arg(arg.slice, indent + self.step) + self.source[end:right])
         if (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Call)
                 and not _has_nested_call(arg.value)):
             lines = _lines(self.source)
@@ -1046,7 +1046,7 @@ def _trailing_comment(source: str, end: int) -> bool:
         return False
     try:
         tokens = tokenize.generate_tokens(io.StringIO(source).readline)
-        sibling = False
+        semicolon = False
         for token in tokens:
             start = _index(lines, token.start[0], len(lines[token.start[0] - 1][
                 :token.start[1]].encode("utf-8")))
@@ -1055,10 +1055,10 @@ def _trailing_comment(source: str, end: int) -> bool:
             if start >= end + len(line):
                 break
             if token.type == tokenize.COMMENT:
-                return not sibling
+                return True
             if token.type == tokenize.OP and token.string == ";":
-                sibling = True
-            elif sibling and token.type not in (tokenize.NL, tokenize.NEWLINE):
+                semicolon = True
+            elif semicolon and token.type not in (tokenize.NL, tokenize.NEWLINE):
                 return False
     except tokenize.TokenError:
         return True
@@ -1205,23 +1205,36 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
 
     formatted = source
     indent_issues = sum(issue.code == "ST010" for issue in issues_for(tree, source, inline_limit, string_limit))
-    # Test each edit independently so an unsafe branch cannot undo safe peers.
-    for start, end, replacement in sorted(edits, reverse=True):
-        candidate = formatted[:start] + replacement + formatted[end:]
+    if edits:
+        candidate = source
+        for start, end, replacement in sorted(edits, reverse=True):
+            candidate = candidate[:start] + replacement + candidate[end:]
         try:
             parsed = ast.parse(candidate)
-            if ast.dump(parsed, include_attributes=False) == ast.dump(tree, include_attributes=False):
-                pending = sum(issue.code == "ST010" for issue in issues_for(
-                    parsed, candidate, inline_limit, string_limit))
-                if pending > indent_issues:
-                    warnings.append("изменение отменено: результат создаёт нарушение отступа")
-                else:
-                    formatted = candidate
-                    indent_issues = pending
-            else:
-                warnings.append("изменение отменено: результат меняет структуру AST")
+            if (ast.dump(parsed, include_attributes=False) == ast.dump(tree, include_attributes=False)
+                    and sum(issue.code == "ST010" for issue in issues_for(
+                        parsed, candidate, inline_limit, string_limit)) <= indent_issues):
+                formatted = candidate
         except SyntaxError:
-            warnings.append("изменение отменено: результат синтаксически некорректен")
+            pass
+    # Test unsafe batches individually so a rejected edit cannot undo safe peers.
+    if formatted == source:
+        for start, end, replacement in sorted(edits, reverse=True):
+            candidate = formatted[:start] + replacement + formatted[end:]
+            try:
+                parsed = ast.parse(candidate)
+                if ast.dump(parsed, include_attributes=False) == ast.dump(tree, include_attributes=False):
+                    pending = sum(issue.code == "ST010" for issue in issues_for(
+                        parsed, candidate, inline_limit, string_limit))
+                    if pending > indent_issues:
+                        warnings.append("изменение отменено: результат создаёт нарушение отступа")
+                    else:
+                        formatted = candidate
+                        indent_issues = pending
+                else:
+                    warnings.append("изменение отменено: результат меняет структуру AST")
+            except SyntaxError:
+                warnings.append("изменение отменено: результат синтаксически некорректен")
     source = formatted
     tree = ast.parse(source)
     lines = _lines(source)

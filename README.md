@@ -360,9 +360,9 @@ with a warning, including when bare CR precedes the call. A comment inside an
 f-string interpolation can also count as inside its enclosing checked call: `ST008`
 is reported and the outer call edit is skipped, even though interpolation expressions
 themselves are outside Stairfmt's layout scope. Independent safe edits still proceed.
-Fix validates candidate edits individually against the AST and indentation rules, so
-many independent edits in one file can take disproportionately longer; explicit file
-arguments can limit a formatting run to the affected subset. Each fix run prints a
+Fix validates safe edits together against the AST and indentation rules, then checks
+edits individually if the batch is unsafe so independent fixes still proceed; explicit
+file arguments can limit a formatting run to the affected subset. Each fix run prints a
 summary and saves its own JSON report under
 `.quard/reports/stairfmt/` (`latest.json` and an archived run), leaving the latest
 Quard check report intact. A clean fix exits 0, remaining violations exit 1, and
