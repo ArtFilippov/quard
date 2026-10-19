@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -106,6 +107,27 @@ class TestStairfmt(unittest.TestCase):
                           (self.root / 'src/demo/broken.py').read_bytes()),
                          (2, {'src/demo/working.py'}, 2, ['src/demo/working.py'],
                           'src/demo/broken.py', b'\xff'))
+
+    def test_named_pipe_reports_error_without_waiting_for_a_writer(self):
+        if not hasattr(os, 'mkfifo'):
+            self.skipTest('named pipes require POSIX')
+        os.mkfifo(self.root / 'src/demo/pipe.py')
+        self.put('src/demo/working.py', 'x = f(g(1), h(2))\n')
+        command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                  '--project', str(self.root), '--json'], cwd=self.root,
+                                 capture_output=True, text=True, check=False, timeout=5)
+        report = json.loads(command.stdout)
+        manifest = self.root / 'manifest.json'
+        manifest.write_text(json.dumps(['src/demo/pipe.py']), encoding='utf-8')
+        worker = subprocess.run([sys.executable, '-B', str(QUARD / '_stairfmt_worker.py'),
+                                 '--manifest', str(manifest)], cwd=self.root,
+                                capture_output=True, text=True, check=False, timeout=5)
+        findings = json.loads(worker.stdout)['diagnostics']
+        self.assertEqual((command.returncode, report['errors'][0]['path'],
+                          {item['path'] for item in report['remaining']},
+                          worker.returncode, findings[0]['rule']),
+                         (2, 'src/demo/pipe.py', {'src/demo/working.py'},
+                          2, 'STAIRFMT_EXECUTION_ERROR'))
 
     def test_prescan_errors_keep_checked_files_in_json_report(self):
         command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
@@ -465,6 +487,14 @@ class TestStairfmt(unittest.TestCase):
                             ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))))
         self.assertEqual(results, [(True, [], [], True, True)] * 2)
 
+    def test_standalone_tuple_closing_bracket_has_own_line(self):
+        source = 'x = (\n    g(1),\n    h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(('ST009' in {item['rule'] for item in self.checked(source)['remaining']},
+                          report['remaining'], report['warnings'], self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (True, [], [], fixed, True))
+
     def test_dictionary_walrus_value_keeps_parentheses(self):
         source = 'data = {"a": (n := g(1)), "b": 2}\n'
         fixed, report = self.formatted(source)
@@ -505,6 +535,14 @@ class TestStairfmt(unittest.TestCase):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          (True, True, [], [], fixed, True))
 
+    def test_implicitly_joined_single_argument_needs_inline_layout(self):
+        source = 'x = f(\n    "a"\n    "b"\n)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(('ST003' in {item['rule'] for item in self.checked(source)['remaining']},
+                          report['remaining'], report['warnings'], self.formatted(fixed)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (True, [], [], fixed, True))
+
     def test_bare_cr_multiline_index_never_leaves_silent_findings(self):
         source = 'x = f(a[\r    0\r], 1)\r'
         path = self.root / 'src/demo/working.py'
@@ -535,6 +573,22 @@ class TestStairfmt(unittest.TestCase):
         self.assertEqual((fixed, [item['rule'] for item in report['remaining']],
                           len(report['warnings']), self.formatted(fixed)[0]),
                          (source, ['ST009'], 1, source))
+
+    def test_nested_dictionary_in_lambda_warns_when_it_cannot_be_expanded(self):
+        source = 'x = [lambda: {"a": 1, "b": 2}]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, [item['rule'] for item in report['remaining']],
+                          len(report['warnings']), self.formatted(fixed)[0]),
+                         (source, ['ST009'], 1, source))
+
+    def test_protected_dictionary_and_binary_call_do_not_oscillate(self):
+        source = 'x = g(1) + (lambda: {"a": 1, "b": 2})\n'
+        fixed, report = self.formatted(source)
+        again, repeat = self.formatted(fixed)
+        self.assertEqual((again, self.formatted(again)[0],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          bool(report['warnings'] or repeat['warnings'])),
+                         (fixed, fixed, True, True))
 
     def test_standalone_dictionary_with_comment_is_left_intact(self):
         source = 'data = {"a": 1,  # keep\n        "b": 2}\n'
@@ -946,6 +1000,11 @@ def run(path, self, test, populations):
         self.assertEqual((found['remaining'], fixed, report['remaining'], report['warnings']),
                          ([], source, [], []))
 
+    def test_multiline_literal_content_is_not_argument_indentation(self):
+        source = 'x = f("""a\nb""", 1)\n'
+        self.assertEqual([item['line'] for item in self.checked(source)['remaining']
+                          if item['rule'] == 'ST010'], [])
+
     def test_protected_expression_with_multiline_literal_needs_no_simplification(self):
         source = 'x = f(lambda: """first\nsecond""")\n'
         self.assertEqual(self.checked(source)['remaining'], [])
@@ -969,6 +1028,14 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           '        for group in groups\n        for item in group if item.active' in fixed,
                           self.formatted(fixed)[0] == fixed), ([], [], True, True))
+
+    def test_conditional_filter_keeps_its_parentheses(self):
+        source = 'x = [{"a": 1, "b": 2} for i in xs if (g(1) if flag else h(2))]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          'if (g(1) if flag else h(2))' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, True, fixed))
 
     def test_walrus_filter_keeps_required_parentheses(self):
         source = 'x = f([{"a": g(i, 2), "b": h(i)} for i in values if (n := p(i))], 0)\n'
@@ -1011,6 +1078,14 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
                           self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_await_binary_argument_keeps_grouping(self):
+        source = 'async def run():\n    return f(await (g(1, 2) + h(3, 4)), 0)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          'await (' in fixed,
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, True, fixed))
 
     def test_await_list_converges_without_dictionary_warning(self):
         source = 'async def run():\n    return [await f(g(1, 2)), h(3)]\n'

@@ -29,6 +29,7 @@ from functools import lru_cache
 import io
 import json
 import re
+import stat
 import sys
 import tokenize
 import uuid
@@ -109,6 +110,18 @@ def _has_nested_call(node: ast.AST) -> bool:
     return bool(_visible(node))
 
 
+def _multiline_literal(node: ast.AST, source: str) -> bool:
+    if isinstance(node, ast.JoinedStr):
+        return node.end_lineno > node.lineno
+    if not isinstance(node, ast.Constant) or node.end_lineno == node.lineno:
+        return False
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        raise ValueError("отсутствует текст строкового литерала")
+    return any(token.type == tokenize.STRING and any(char in token.string for char in "\r\n")
+               for token in tokenize.generate_tokens(io.StringIO(segment).readline))
+
+
 def _multiline(node: ast.AST) -> bool:
     return (isinstance(node, (ast.keyword, ast.Starred)) and _multiline(node.value)
             or isinstance(node, ast.BinOp) and (_multiline(node.left) or _multiline(node.right))
@@ -162,7 +175,8 @@ def _call_indent_issues(call: ast.Call, lines: list[str], parents: dict[ast.AST,
               else _leading_indent(lines[call.lineno - 1]))
     arguments = [*call.args, *call.keywords]
     issues: list[Issue] = []
-    for number in {arg.lineno for arg in arguments if arg.lineno > call.func.end_lineno}:
+    for number in {arg.lineno for arg in arguments if arg.lineno > call.func.end_lineno
+                   and not lines[arg.lineno - 1][:_column(lines, arg.lineno, arg.col_offset) - 1].strip()}:
         if _leading_indent(lines[number - 1]) != indent + "    ":
             issues.append(Issue(number, 1, "ST010",
                                 "неканонический отступ аргумента: используйте четыре пробела"))
@@ -204,8 +218,7 @@ def _issue_list(root: ast.Call, lines: list[str]) -> list[Issue]:
                     "при нескольких аргументах первый должен начинаться с новой строки"
                 ))
         elif (len(arguments) == 1 and not _multiline(arguments[0])
-              and not (isinstance(arguments[0], (ast.Constant, ast.JoinedStr))
-                       and arguments[0].end_lineno > arguments[0].lineno)):
+              and not _multiline_literal(arguments[0], "".join(lines))):
             arg = arguments[0]
             # A single simple argument cannot be split across lines. The
             # function name, argument, and closing ')' must share a line.
@@ -318,8 +331,7 @@ def _container_issues(node: ast.AST, lines: list[str]) -> list[Issue]:
                           "поля словаря и закрывающая скобка должны быть на отдельных строках")]
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         children = node.elts
-        if (len(children) == 1 and _has_nested_call(children[0])
-                and node.end_lineno == children[0].end_lineno):
+        if children and _has_nested_call(node) and node.end_lineno == children[-1].end_lineno:
             return [Issue(node.lineno, _column(lines, node.lineno, node.col_offset), "ST009",
                           "вызов и закрывающая скобка контейнера должны быть на разных строках")]
         for index, child in enumerate(children[1:], 1):
@@ -351,6 +363,13 @@ def decode_source(data: bytes) -> tuple[str, str]:
     """Decode a Python file according to its BOM and encoding declaration."""
     encoding, _ = tokenize.detect_encoding(io.BytesIO(re.sub(rb"\r(?!\n)", b"\n", data)).readline)
     return data.decode(encoding), encoding
+
+
+def read_source(path: Path) -> bytes:
+    """Read a regular Python source file without opening a known FIFO or device."""
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError(f"необычный тип исходного файла: {path}")
+    return path.read_bytes()
 
 
 def _strings(tree: ast.AST, source: str, limit: int
@@ -486,7 +505,7 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                 if isinstance(node, ast.BinOp):
                     issues.extend(_inline_issues(node, source, inline_limit))
                     indent = (_leading_indent(lines[node.lineno - 1])
-                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict, ast.Starred))
+                              if isinstance(parent, (ast.Call, ast.keyword, ast.Dict, ast.Starred, ast.Await))
                               else " " * (_column(lines, node.lineno, node.col_offset) - 1))
                     if not isinstance(parent, ast.BinOp):
                         issues.extend(_layout_issues(node, source, inline_limit, indent))
@@ -534,8 +553,7 @@ class Renderer:
         segment = self.segment(node)
         if not any(char in segment for char in "\r\n"):
             return segment
-        if any(isinstance(part, (ast.Constant, ast.JoinedStr))
-               and any(char in (ast.get_source_segment(self.source, part) or "") for char in "\r\n")
+        if any(_multiline_literal(part, self.source)
                for part in ast.walk(node)):
             return segment
         return re.sub(r"\s*(?:\r\n|\r|\n)\s*", " ", segment)
@@ -546,7 +564,11 @@ class Renderer:
                     and self.supported_arg(arg.orelse))
         if isinstance(arg, (ast.Await, ast.Yield, ast.YieldFrom)):
             return arg.value is None or self.supported_arg(arg.value)
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            return not any(char in self.compact(arg) for char in "\r\n")
         if _protected(arg):
+            if isinstance(arg, ast.Lambda) and _structured(arg):
+                return False
             if isinstance(arg, ast.DictComp):
                 return (self.supported_arg(arg.key) and self.supported_arg(arg.value)
                         and self.supported_clauses(arg))
@@ -603,7 +625,11 @@ class Renderer:
             return (self.render_arg(arg.body, indent) + " if " + self.render_arg(arg.test, indent)
                     + " else " + self.render_arg(arg.orelse, indent))
         if isinstance(arg, ast.Await):
-            return "await " + self.render_arg(arg.value, indent)
+            value = self.render_arg(arg.value, indent)
+            if isinstance(arg.value, (ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp,
+                                      ast.Lambda, ast.NamedExpr)):
+                value = "(" + value + ")"
+            return "await " + value
         if isinstance(arg, (ast.Yield, ast.YieldFrom)):
             return ("(yield" + (" from " if isinstance(arg, ast.YieldFrom) else " ")
                     + (self.render_arg(arg.value, indent) if arg.value is not None else "") + ")")
@@ -725,7 +751,7 @@ class Renderer:
                 iterable = "(" + iterable + ")"
             text += " in " + iterable
             text += "".join(" if " + ("(" + self.render_arg(condition, indent + self.step) + ")"
-                                         if isinstance(condition, ast.NamedExpr)
+                                         if isinstance(condition, (ast.NamedExpr, ast.IfExp))
                                          else self.render_arg(condition, indent + self.step))
                             for condition in clause.ifs)
             clauses.append(text)
@@ -1092,6 +1118,9 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
         ancestors = _ancestors(node, parents)
         if any(isinstance(part, ast.Call) for part in ancestors):
             continue
+        if any(isinstance(part, ast.Lambda) for part in ancestors):
+            warnings.append(f"{node.lineno}: пропущено: словарь внутри lambda нельзя безопасно разложить")
+            continue
         if any(isinstance(part, ast.BinOp) and _visible(part) and not any(
                 _protected(ancestor) for ancestor in _ancestors(part, parents)) and _layout_issues(
                 part, source, inline_limit,
@@ -1354,7 +1383,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
     for path in paths:
         name = path.relative_to(root).as_posix()
         try:
-            original = path.read_bytes()
+            original = read_source(path)
             source, encoding = decode_source(original)
             tree = ast.parse(source, filename=name)
             if fix:
@@ -1365,7 +1394,7 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
                                      position.isdecimal() else None, "reason": reason if separator
                                      else warning, "suggestion": _advice(warning)})
                 if formatted != source:
-                    if path.read_bytes() != original:
+                    if read_source(path) != original:
                         raise ValueError("исходный файл изменился во время форматирования")
                     atomic_write(path, formatted.encode(encoding), root)
                     changed.append(name)
