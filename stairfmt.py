@@ -410,8 +410,8 @@ def _pieces(token: str, limit: int) -> list[str]:
     while index < len(body):
         if body[index] == "\\":
             index += 1
-            if index < len(body) and body[index] in "xXuU":
-                index += {"x": 2, "X": 2, "u": 4, "U": 8}[body[index]] + 1
+            if index < len(body) and body[index] in "xuU":
+                index += {"x": 2, "u": 4, "U": 8}[body[index]] + 1
             elif index < len(body) and body[index] == "N" and "}" in body[index:]:
                 index = body.index("}", index) + 1
             elif index < len(body) and body[index] in "01234567":
@@ -798,7 +798,7 @@ class Renderer:
                 flush()
                 rendered.append(child_indent + value)
             else:
-                if (rendered and not pending and (attached or index
+                if (not container_mode and rendered and not pending and (attached or index
                         and isinstance(args[index - 1], ast.BinOp)
                         and "\n" in values[index - 1]) and "\n" not in value):
                     rendered[-1] += (", " if attached else " ") + value
@@ -1100,8 +1100,10 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             continue
         container = node
         for part in ancestors:
-            if isinstance(part, (ast.Dict, ast.List, ast.Tuple, ast.Set,
-                                 ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+            if (isinstance(part, (ast.Dict, ast.List, ast.Tuple, ast.Set,
+                                  ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp))
+                    and (not isinstance(part, (ast.DictComp, ast.ListComp, ast.SetComp,
+                                               ast.GeneratorExp)) or _structured(part))):
                 container = part
         if container in containers:
             continue
@@ -1352,7 +1354,8 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
     for path in paths:
         name = path.relative_to(root).as_posix()
         try:
-            source, encoding = decode_source(path.read_bytes())
+            original = path.read_bytes()
+            source, encoding = decode_source(original)
             tree = ast.parse(source, filename=name)
             if fix:
                 formatted, skipped = format_source(source, indent, **limits)
@@ -1362,6 +1365,8 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
                                      position.isdecimal() else None, "reason": reason if separator
                                      else warning, "suggestion": _advice(warning)})
                 if formatted != source:
+                    if path.read_bytes() != original:
+                        raise ValueError("исходный файл изменился во время форматирования")
                     atomic_write(path, formatted.encode(encoding), root)
                     changed.append(name)
                 tree = ast.parse(formatted, filename=name)
@@ -1422,7 +1427,7 @@ def main(argv: list[str] | None = None) -> int:
                 report = _report(root, paths, args.fix, args.indent, limits)
             except (QuardError, OSError, UnicodeError, ValueError) as exc:
                 report = {"schema_version": "quard-stairfmt-fix/v1", "status": "error",
-                          "exit_code": 2, "changed_files": [], "remaining": [], "warnings": [],
+                          "exit_code": 2, "checked_files": 0, "changed_files": [], "remaining": [], "warnings": [],
                           "errors": [{"path": str(args.project), "message": str(exc),
                                       "suggestion": "Проверьте настройки проекта и повторите команду."}]}
             if args.fix:
@@ -1450,7 +1455,7 @@ def main(argv: list[str] | None = None) -> int:
                                                  "suggestion": "Используйте архив отчёта и проверьте хранилище."})
     except (QuardError, OSError, UnicodeError, ValueError) as exc:
         report = {"schema_version": "quard-stairfmt-fix/v1", "status": "error", "exit_code": 2,
-                  "changed_files": [], "remaining": [], "warnings": [],
+                  "checked_files": 0, "changed_files": [], "remaining": [], "warnings": [],
                   "errors": [{"path": str(args.project), "message": str(exc),
                               "suggestion": "Проверьте настройки проекта и повторите команду."}]}
     if args.json:

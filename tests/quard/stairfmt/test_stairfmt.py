@@ -92,6 +92,54 @@ class TestStairfmt(unittest.TestCase):
                           ("error", 2, {"ST001", "ST002", "ST004", "STAIRFMT_PARSE_ERROR"},
                            True), result)
 
+    def test_unreadable_file_preserves_peer_findings_and_fix(self):
+        self.put('src/demo/working.py', 'x = f(g(1), h(2))\n')
+        (self.root / 'src/demo/broken.py').write_bytes(b'\xff')
+        checked = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                  '--project', str(self.root), '--json'], cwd=self.root,
+                                 capture_output=True, text=True, check=False)
+        code, report, _ = self.run_fix()
+        findings = json.loads(checked.stdout)
+        self.assertEqual((findings['exit_code'],
+                          {item['path'] for item in findings['remaining']}, code,
+                          report['changed_files'], report['errors'][0]['path'],
+                          (self.root / 'src/demo/broken.py').read_bytes()),
+                         (2, {'src/demo/working.py'}, 2, ['src/demo/working.py'],
+                          'src/demo/broken.py', b'\xff'))
+
+    def test_prescan_errors_keep_checked_files_in_json_report(self):
+        command = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                  '--project', str(self.root), '--json', 'src/demo/missing.py'],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        missing = subprocess.run([sys.executable, '-B', str(QUARD / 'stairfmt.py'), '--check',
+                                  '--project', str(self.root / 'absent'), '--json'],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        report = json.loads(command.stdout)
+        self.assertEqual((command.returncode, report['status'], report['checked_files'],
+                          json.loads(missing.stdout)['checked_files']), (2, 'error', 0, 0))
+
+    def test_fix_preserves_a_file_changed_during_formatting(self):
+        self.put('src/demo/working.py', 'x = f(g(1), h(2))\n')
+        path = self.root / 'src/demo/working.py'
+        external = 'x = changed(42)\n'
+        script = ('import json, sys\nfrom pathlib import Path\nfrom unittest.mock import patch\n'
+                  'sys.path.insert(0, sys.argv[1])\nimport stairfmt\n'
+                  'root = Path(sys.argv[2])\npath = root / "src/demo/working.py"\n'
+                  'original = stairfmt.format_source\n'
+                  'def change(source, indent, **limits):\n'
+                  '    path.write_text("x = changed(42)\\n", encoding="utf-8")\n'
+                  '    return original(source, indent, **limits)\n'
+                  'with patch.object(stairfmt, "format_source", side_effect=change):\n'
+                  '    report = stairfmt._report(root, [path], True, 4, '
+                  '{"inline_limit": 240, "string_limit": 160})\n'
+                  'print(json.dumps(report))\n')
+        command = subprocess.run([sys.executable, '-B', '-c', script, str(QUARD), str(self.root)],
+                                 cwd=self.root, capture_output=True, text=True, check=False)
+        report = json.loads(command.stdout)
+        self.assertEqual((report['exit_code'], report['changed_files'],
+                          path.read_text(encoding='utf-8')),
+                         (2, [], external))
+
     def test_deep_expression_reports_file_error_and_preserves_peer_findings(self):
         self.put("src/demo/domain/api.py", "x = f(g(1), h(2))\n")
         self.put("src/demo/deep.py", "x = f(" + "+" * 1100 + "g(1))\n")
@@ -584,6 +632,27 @@ def run(path, self, test, populations):
         self.assertEqual((report['remaining'], report['warnings'],
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
                           self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_multiline_binary_with_following_container_element_converges(self):
+        source = 'x = [g(1, 2) + h(3), 4]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_container_inside_simple_comprehension_converges(self):
+        source = 'x = [v for v in [g(1, 2), 3]]\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
+
+    def test_fix_without_final_newline_converges(self):
+        source = 'x = f(g(1), h(2))'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'], fixed.endswith('\n'),
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], False, True, fixed))
 
     def test_parenthesized_binary_operand_converges(self):
         source = 'x = (g(1, 2) + h(3, 4)) * z(5, 6)\n'

@@ -84,6 +84,17 @@ class TestStairfmtStrings(unittest.TestCase):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          (0, [], True))
 
+    def test_unicode_literal_limit_boundary(self):
+        setting = self.root / '.quard/config.toml'
+        setting.write_text(setting.read_text(encoding='utf-8')
+                           + '\n[stairfmt]\nstring_limit = 12\n', encoding='utf-8')
+        short = self.checked('value = "' + 'é' * 12 + '"\n')
+        long = self.checked('value = "' + 'é' * 13 + '"\n')
+        fixed, report = self.formatted('value = "' + 'é' * 13 + '"\n')
+        self.assertEqual((short['remaining'], [item['rule'] for item in long['remaining']],
+                          report['remaining'], ast.literal_eval(fixed.split('=', 1)[1]),
+                          self.formatted(fixed)[0]), ([], ['ST011'], [], 'é' * 13, fixed))
+
     def test_enabled_job_reports_long_literal_without_calls(self):
         self.put('value = "' + 'a word ' * 26 + '"\n')
         files = discover_files(self.root, read_scope(self.root))
@@ -133,6 +144,16 @@ class TestStairfmtStrings(unittest.TestCase):
         self.assertEqual((fixed, report['exit_code'], report['remaining'][0]['rule'],
                           'нет безопасной границы' in report['warnings'][0]['reason']),
                          (source, 1, 'ST011', True))
+
+    def test_unknown_escape_is_not_treated_as_a_hex_escape(self):
+        source = 'value = "\\Xabcd"\n'
+        setting = self.root / '.quard/config.toml'
+        setting.write_text(setting.read_text(encoding='utf-8')
+                           + '\n[stairfmt]\nstring_limit = 2\n', encoding='utf-8')
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source)),
+                          self.formatted(fixed)[0]), ([], [], True, fixed))
 
     def test_escaped_physical_newline_reports_unfixable_long_literal(self):
         source = 'value = "' + 'a' * 170 + '\\\nb"\n'
@@ -244,6 +265,15 @@ class TestStairfmtStrings(unittest.TestCase):
                           'в конце строки' in report['warnings'][0]['reason'],
                           'вручную' in report['warnings'][0]['suggestion']),
                          (source, 'ST011', True, True))
+
+    def test_blocked_literal_keeps_comment_while_peer_call_is_fixed(self):
+        source = 'value = "' + 'a' * 170 + '"  # keep\nx = f(g(1), h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((report['exit_code'], report['changed_files'],
+                          [item['rule'] for item in report['remaining']],
+                          len(report['warnings']), fixed.startswith(source.splitlines()[0] + '\n'),
+                          self.formatted(fixed)[0]),
+                         (1, ['src/demo/working.py'], ['ST011'], 1, True, fixed))
 
     def test_bom_and_declared_encoding_are_preserved_by_both_entry_points(self):
         results: list[tuple[object, ...]] = []
