@@ -205,6 +205,20 @@ class TestFreeFunctionPlacement(unittest.TestCase):
         self.assertIn("tests/test_math_utils.pyi", manifest)
         self.assertNotIn("src/demo/generated/bad.py", manifest)
 
+    def test_root_main_directory_allows_functions_but_namesakes_do_not(self):
+        self.put("src/main/wire.py", "def wire(): pass\n")
+        self.put("src/main/wire.pyi", "async def wire() -> None: ...\n")
+        self.put("src/main/nested/entry.py", "def entry(): pass\n")
+        self.put("src/demo/main/wire.py", "def wire(): pass\n")
+        self.put("src/demo/main.py", "def wire(): pass\n")
+        self.put("tests/main/wire.py", "def wire(): pass\n")
+        diagnostics, error = placement(self.root, [
+            "src/main/wire.py", "src/main/wire.pyi", "src/main/nested/entry.py",
+            "src/demo/main/wire.py", "src/demo/main.py", "tests/main/wire.py"])
+        self.assertEqual((error, [(item["path"], item["rule"]) for item in diagnostics]),
+                         (None, [("src/demo/main.py", "FREE_FUNCTION_PLACEMENT"),
+                                 ("tests/main/wire.py", "FREE_FUNCTION_PLACEMENT")]))
+
     def test_misplaced_functions_and_classes_have_individual_positions(self):
         self.put("src/demo/ordinary.py", "def first(): pass\nasync def second(): pass\n"
                  "if True:\n    def conditional(): pass\n"

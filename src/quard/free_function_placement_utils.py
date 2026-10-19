@@ -59,7 +59,7 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                                 "symbol": node.name,
                                 "message": (f"{node.name}: utilities module {path} "
                                             "must be class-free.")})
-        if (not (source.parts[0] == SOURCE_ROOT and MAIN_FOLDER in source.parts[2:-1])
+        if (not (source.parts[0] == SOURCE_ROOT and MAIN_FOLDER in source.parts[1:-1])
                 and (classes or not (source.stem.endswith("_utils")
                                      and len(source.stem) > len("_utils")))):
             for node in declarations(tree):

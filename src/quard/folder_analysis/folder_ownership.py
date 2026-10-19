@@ -621,7 +621,7 @@ class FolderOwnership(Contracts, FolderAnalysis):
                                     f"'{expected}/{expected}{current.suffix}' (folder and module "
                                     "must match the contract name)."})
                 continue
-            if current.parts[0] == SOURCE_ROOT and MAIN_FOLDER in current.parts[2:-1]:
+            if current.parts[0] == SOURCE_ROOT and MAIN_FOLDER in current.parts[1:-1]:
                 # Assembly classes can combine multiple local implementations here.
                 continue
             local_bases = [self.resolved(name, base, path) for base in node.bases]

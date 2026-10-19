@@ -426,7 +426,8 @@ violations baseline.
   a class-free module named `<group_name>_utils.py` (or its `.pyi` companion), with
   a nonempty group name describing their shared purpose. Related functions can
   share a module; source and stub companions are each checked on their own.
-  Production files under any `main/` folder may declare assembly functions.
+  Production files under any `main/` folder, including `src/main/`, may declare
+  assembly functions.
   Declarations in module-scope conditional suites count; methods and functions nested inside another
   function do not. `UTILITIES_MODULE_CLASS` reports each class declared anywhere in
   a utilities module, including nested classes. If a utilities module declares a

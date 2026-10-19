@@ -73,7 +73,7 @@ def _assembly_modules(paths: dict[str, str], ownership: FolderOwnership,
     envelopes = {Path(ownership.path_for(contract)).parent / "envelopes"
                  for contract in names}
     return {name for name, path in paths.items()
-            if (MAIN_FOLDER in Path(path).parts[2:-1]
+            if (MAIN_FOLDER in Path(path).parts[1:-1]
                 or any(folder == Path(path).parent or folder in Path(path).parents
                        for folder in envelopes))}
 

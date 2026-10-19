@@ -111,11 +111,11 @@ Fresh clones need only sync dependencies
 and run check. No manual acceptance or routine `tach sync` is required. Only eligible
 source imports become exact dependency declarations; unauthorized imports of concrete
 implementations and private utilities remain native Tach violations. Files anywhere
-under a production `main/` folder or anywhere in a group's `envelopes/` subtree may assemble
-concrete implementations from other groups,
+under a production `main/` folder (including `src/main/`) or anywhere in a group's
+`envelopes/` subtree may assemble concrete implementations from other groups,
 including type-only imports and companion stubs. Ordinary directories beside
-`envelopes/` follow ordinary rules. Exactly one
-`main/` directory is allowed across `src/`, even if another is empty. Neither
+`envelopes/` follow ordinary rules. Exactly one `main/` directory is allowed across
+`src/`, including `src/main/`, even if another is empty. Neither
 envelopes nor main may import Bootstrap modules, including in stubs; Bootstrap
 modules may not import one another. Package facades may be empty or
 re-export proven contracts directly, through aliases or through ancestor facades;

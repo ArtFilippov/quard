@@ -17,6 +17,7 @@ sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from quard._common import QuardError, capture, load_toml, read_json, write_json
+from quard.architecture_draft.generated_architecture_utils import render
 from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 from quard.consumer_policy.configured_consumer_policy import ConfiguredConsumerPolicy
 from quard.contract_analysis.dependency_type_utils import analyze as dependency_types
@@ -535,6 +536,66 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         self.assertFalse(any(item.get("is_infrastructure_error") for item in diagnostics),
                          diagnostics)
         return diagnostics
+
+    def root_main_fixture(self) -> Path:
+        write_json(self.root / ".quard/architecture.generated.json", IDENTITY)
+        main = self.root / "src/main"
+        main.mkdir()
+        return main
+
+    def root_main_sender_fixture(self) -> Path:
+        main = self.root_main_fixture()
+        (self.root / "src/demo/service.py").write_text(
+            "from typing import Protocol\nclass Service(Protocol): pass\n")
+        (self.root / "src/demo/sender.py").write_text(
+            "from demo.service import Service\nclass Sender(Service): pass\n")
+        return main
+
+    def test_root_main_generated_role_and_concrete_import(self):
+        main = self.root_main_sender_fixture()
+        (main / "wire.py").write_text("from demo.sender import Sender\ndef wire(): return Sender()\n")
+        (main / "wire.pyi").write_text("from demo.sender import Sender\ndef wire() -> Sender: ...\n")
+        modules = {item["path"]: item for item in render(self.root)[0]["modules"]}
+        self.assertEqual((modules["main.wire"]["layer"], modules["main.wire"]["depends_on"]),
+                         ("Bootstrap", ["demo.sender"]))
+
+    def test_root_main_is_not_an_importable_dependency(self):
+        main = self.root_main_fixture()
+        (main / "wire.py").write_text("def wire(): pass\n")
+        client = self.root / "src/demo/client.py"
+        client.write_text("from main.wire import wire\n")
+        client.with_suffix(".pyi").write_text("from main.wire import wire\n")
+        findings = self.focused_diagnostics(self.root, "contract-folders")
+        self.assertEqual({item["path"] for item in findings
+                          if item["rule"] == "BOOTSTRAP_DEPENDENCY"},
+                         {"src/demo/client.py", "src/demo/client.pyi"})
+
+    def test_root_main_can_assemble_classes_and_annotate_concrete_types(self):
+        main = self.root_main_sender_fixture()
+        for suffix in (".py", ".pyi"):
+            (main / f"wire{suffix}").write_text(
+                "from demo.sender import Sender\n"
+                "class Assembly(Sender): pass\n"
+                "def wire(value: Sender) -> Sender: ...\n")
+        folders = self.focused_diagnostics(self.root, "contract-folders")
+        types = self.focused_diagnostics(self.root, "dependency-types")
+        self.assertEqual([item for item in folders + types
+                          if str(item["path"]).startswith("src/main/")], [])
+
+    def test_root_main_counts_toward_single_directory_limit(self):
+        _ = self.root_main_fixture()
+        (self.root / "src/demo/main").mkdir()
+        findings = self.focused_diagnostics(self.root, "contract-folders")
+        self.assertEqual({item["path"] for item in findings
+                          if item["rule"] == "MULTIPLE_MAIN_DIRECTORIES"},
+                         {"src/main", "src/demo/main"})
+
+    def test_single_root_main_is_allowed(self):
+        _ = self.root_main_fixture()
+        (self.root / "src/main.py").write_text("pass\n")
+        findings = self.focused_diagnostics(self.root, "contract-folders")
+        self.assertFalse(any(item["rule"] == "MULTIPLE_MAIN_DIRECTORIES"
+                             for item in findings))
 
     def module(self, root: Path, name: str) -> dict[str, Any]:
         return next(item for item in generated_policy.render(root)[0]["modules"]

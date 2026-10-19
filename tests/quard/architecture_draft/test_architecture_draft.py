@@ -31,6 +31,7 @@ sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from legacy_clone_fixture_utils import historical_cli
+from quard.architecture_draft.contract_boundary_utils import contract_boundaries
 
 if not TYPE_CHECKING:
     common = import_module("quard._common")
@@ -344,6 +345,12 @@ class TestArchitectureDraft(unittest.TestCase):
         client.write_text("from demo.reader.reader import Reader\n")
         return pkg, main, client
 
+    def root_main_fixture(self, root: Path) -> Path:
+        self.main_fixture(root)
+        main = root / "src/main"
+        main.mkdir()
+        return main
+
     def main_policy(self, root: Path) -> dict[str, Any]:
         config, _ = ConfiguredArchitectureDraft(root).draft(
             contract_only=True, validate_ownership=False)
@@ -419,6 +426,32 @@ class TestArchitectureDraft(unittest.TestCase):
             self.assertIn(("src/demo/main/bad_contract.py", "CONTRACT_FOLDER"),
                           {(item["path"], item["rule"])
                            for item in FolderOwnership(trees).folder_violations()})
+
+    def test_root_main_allows_assembly_classes_in_source_and_stub(self):
+        with TemporaryDirectory(prefix="quard-root-main-classes-") as directory:
+            root = Path(directory)
+            main = self.root_main_fixture(root)
+            for suffix in (".py", ".pyi"):
+                (main / f"wire{suffix}").write_text(
+                    "from demo.reader.impl import ReaderImpl\n"
+                    "from demo.writer.impl import WriterImpl\n"
+                    "class Assembly(ReaderImpl, WriterImpl): pass\n")
+            findings, _ = contract_folders(root, ConfiguredConsumerPolicy(root).files()[
+                "production"])
+            self.assertFalse(any(str(item["path"]).startswith("src/main/") for item in
+                                 findings))
+
+    def test_root_main_legacy_draft_can_import_implementations(self):
+        with TemporaryDirectory(prefix="quard-root-main-draft-") as directory:
+            root = Path(directory)
+            main = self.root_main_fixture(root)
+            (main / "wire.py").write_text("from demo.reader.impl import ReaderImpl\n")
+            files = ConfiguredConsumerPolicy(root).files()["production"]
+            draft: dict[str, Any] = {"modules": []}
+            contract_boundaries(root, files, draft, validate_ownership=False)
+            module = next(item for item in draft["modules"] if item["path"] == "main.wire")
+            self.assertEqual((module["layer"], module["depends_on"]),
+                             ("Bootstrap", ["demo.reader.impl"]))
 
     def envelope_fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
         pkg, _, client = self.main_fixture(root)
