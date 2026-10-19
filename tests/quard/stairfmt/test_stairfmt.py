@@ -335,6 +335,23 @@ class TestStairfmt(unittest.TestCase):
                           ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
                          (expected, [], [], expected, True))
 
+    def test_standalone_parenthesized_tuple_with_calls_converges(self):
+        results = []
+        for source in ('x = (g(1), h(2))\n', 'x = (g(1),)\n'):
+            findings = self.checked(source)['remaining']
+            fixed, report = self.formatted(source)
+            results.append(('ST009' in {item['rule'] for item in findings},
+                            report['remaining'], report['warnings'], self.formatted(fixed)[0] == fixed,
+                            ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))))
+        self.assertEqual(results, [(True, [], [], True, True)] * 2)
+
+    def test_dictionary_walrus_value_keeps_parentheses(self):
+        source = 'data = {"a": (n := g(1)), "b": 2}\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(('"a": (n := g(1))' in fixed, report['remaining'], report['warnings'],
+                          self.formatted(fixed)[0], ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (True, [], [], fixed, True))
+
     def test_dictionary_union_with_nested_call_converges_in_one_pass(self):
         source = 'x = {"a": 1, "b": 2} | g(1, 2)\n'
         fixed, report = self.formatted(source)
@@ -425,11 +442,12 @@ class TestStairfmt(unittest.TestCase):
                           'g(1),\n' in fixed, 'h(2),\n' in fixed),
                          ([], [], True, True))
 
-    def test_independent_branch_is_fixed_while_comment_survives(self):
+    def test_commented_parent_skips_indentation_breaking_child(self):
         source = 'value = f(g(h(1)), k(2),  # keep\n    j(3))\n'
-        fixed, _ = self.formatted(source)
+        fixed, report = self.formatted(source)
         self.assertEqual((ast.dump(ast.parse(fixed)), '# keep' in fixed,
-                          'g(\n' in fixed, self.formatted(fixed)[0] == fixed),
+                          not any(item['rule'] == 'ST010' for item in report['remaining']),
+                          self.formatted(fixed)[0] == fixed),
                          (ast.dump(ast.parse(source)), True, True, True))
 
     def test_successful_fix_is_clean_and_idempotent(self):
@@ -517,6 +535,14 @@ def run(path, self, test, populations):
         self.assertEqual((self.formatted(fixed)[0], ast.dump(ast.parse(fixed))),
                          (fixed, ast.dump(ast.parse(source))))
 
+    def test_unsupported_parent_does_not_create_new_indentation_violation(self):
+        source = 'x = f(-g(1, 2), h(3))\n'
+        before = self.checked(source)['remaining']
+        fixed, report = self.formatted(source)
+        self.assertEqual((sum(item['rule'] == 'ST010' for item in report['remaining']),
+                          self.formatted(fixed)[0], ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (sum(item['rule'] == 'ST010' for item in before), fixed, True))
+
     def test_comprehension_iterable_dictionary_converges(self):
         source = 'x = f([v for v in {"a": g(1), "b": h(2)}])\n'
         fixed, report = self.formatted(source)
@@ -556,6 +582,30 @@ def run(path, self, test, populations):
                           ('ST001', source.index('g(1)') + 1),
                           ('ST001', source.index('h(2)') + 1),
                           ('ST004', source.rindex(')') + 1)])
+
+    def test_normalized_unicode_method_keeps_position_and_fixes(self):
+        source = 'x = f(g(1), obj.K(2))\n'
+        checked = self.checked(source)
+        fixed, report = self.formatted(source)
+        self.assertEqual((checked['status'], ('ST001', source.index('obj.K') + 5) in
+                          [(item['rule'], item['column']) for item in checked['remaining']],
+                          'obj.K(2)' in fixed,
+                          report['remaining'], report['warnings']),
+                         ('violations', True, True, [], []))
+
+    def test_normalized_unicode_keyword_keeps_original_spelling(self):
+        source = 'x = f(K=1, x=2)\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(('K=1' in fixed, report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (True, [], [], True))
+
+    def test_normalized_unicode_method_chain_keeps_original_spelling(self):
+        source = 'x = f(g(1), obj.K(2).𝒂(3))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual(('obj.K(2)\n    .𝒂(3)' in fixed, report['remaining'], report['warnings'],
+                          ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(source))),
+                         (True, [], [], True))
 
     def test_unicode_before_container_keeps_character_column(self):
         source = 'x = f("😀", {"a": 1, "b": 2})\n'

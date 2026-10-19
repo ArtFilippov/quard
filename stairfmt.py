@@ -129,8 +129,11 @@ def _first_dot(call: ast.Call) -> bool:
 
 def _call_column(call: ast.Call, lines: list[str]) -> int:
     if isinstance(call.func, ast.Attribute):
+        segment = ast.get_source_segment("".join(lines), call.func)
+        if segment is None or call.func.end_lineno is None or call.func.end_col_offset is None:
+            raise ValueError("отсутствует имя метода в исходном тексте")
         return _column(lines, call.func.end_lineno,
-                       call.func.end_col_offset - len(call.func.attr.encode("utf-8")))
+                       call.func.end_col_offset) - len(segment.rsplit(".", 1)[-1].strip())
     return _column(lines, call.func.lineno, call.func.col_offset)
 
 
@@ -328,6 +331,15 @@ def _container_issues(node: ast.AST, lines: list[str]) -> list[Issue]:
     return []
 
 
+def _standalone_container(node: ast.AST, source: str, lines: list[str],
+                          parents: dict[ast.AST, ast.AST]) -> bool:
+    return (bool(source) and isinstance(node, (ast.Tuple, ast.List, ast.Set))
+            and _has_nested_call(node)
+            and (not isinstance(node, ast.Tuple)
+                 or source[_index(lines, node.lineno, node.col_offset)] == "(")
+            and not any(isinstance(part, ast.Call) for part in _ancestors(node, parents)))
+
+
 def _structured(node: ast.AST) -> bool:
     return any(isinstance(part, ast.Dict) and len(part.keys) > 1
                for part in ast.walk(node))
@@ -482,7 +494,8 @@ def issues_for(tree: ast.AST, source: str = "", inline_limit: int = 240,
                     visit(child, node)
             visit(root, root)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Dict) and not _under_interpolation(node, parents):
+        if ((isinstance(node, ast.Dict) or _standalone_container(node, source, lines, parents))
+                and not _under_interpolation(node, parents)):
             issues.extend(_container_issues(node, lines))
     if isinstance(tree, ast.Module):
         for node in ast.walk(tree):
@@ -595,16 +608,25 @@ class Renderer:
             return (self.source[left:start] + self.render_arg(arg.value, indent)
                     + self.source[end:right])
         if isinstance(arg, ast.keyword):
-            prefix = f"{arg.arg}=" if arg.arg is not None else "**"
+            prefix = self.segment(arg).split("=", 1)[0].strip() + "=" if arg.arg is not None else "**"
             if isinstance(arg.value, ast.NamedExpr):
                 return prefix + "(" + self.render_arg(arg.value, indent) + ")"
             return prefix + self.render_arg(arg.value, indent)
         if isinstance(arg, ast.Dict):
             if not arg.keys:
                 return "{}"
-            fields = [f"{self.render_arg(key, indent + self.step)}: {self.render_arg(value, indent + self.step)}"
-                      if key is not None else "**" + self.render_arg(value, indent + self.step)
-                      for key, value in zip(arg.keys, arg.values)]
+            fields: list[str] = []
+            for key, value in zip(arg.keys, arg.values):
+                rendered = self.render_arg(value, indent + self.step)
+                if isinstance(value, ast.NamedExpr):
+                    rendered = "(" + rendered + ")"
+                if key is None:
+                    fields.append("**" + rendered)
+                else:
+                    name = self.render_arg(key, indent + self.step)
+                    if isinstance(key, ast.NamedExpr):
+                        name = "(" + name + ")"
+                    fields.append(f"{name}: {rendered}")
             return "{\n" + ",\n".join(indent + self.step + field for field in fields) + "\n" + indent + "}"
         if isinstance(arg, (ast.Tuple, ast.List, ast.Set)):
             opening, closing = ("(", ")") if isinstance(arg, ast.Tuple) else (
@@ -785,7 +807,7 @@ class Renderer:
         previous = self.render_call(base, chain_indent, in_call=True)
         output = previous
         for step_call in reversed(methods):
-            method_name = "." + step_call.func.attr
+            method_name = "." + self.segment(step_call.func).rsplit(".", 1)[-1]
             prefix = "" if _first_dot(step_call) or "\n" in previous else "\n" + chain_indent
             previous = self.render_args(step_call, method_name, chain_indent)
             output += prefix + previous
@@ -998,7 +1020,8 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
                for child in ast.iter_child_nodes(parent)}
     containers: set[ast.AST] = set()
     for node in ast.walk(tree):
-        if (not isinstance(node, ast.Dict) or node in containers
+        if (not (isinstance(node, ast.Dict) or _standalone_container(node, source, lines, parents))
+                or node in containers
                 or _under_interpolation(node, parents)
                 or not _container_issues(node, lines)):
             continue
@@ -1117,12 +1140,20 @@ def format_source(source: str, indent_size: int = 4, inline_limit: int = 240,
             collect(root)
 
     formatted = source
+    indent_issues = sum(issue.code == "ST010" for issue in issues_for(tree, source, inline_limit, string_limit))
     # Test each edit independently so an unsafe branch cannot undo safe peers.
     for start, end, replacement in sorted(edits, reverse=True):
         candidate = formatted[:start] + replacement + formatted[end:]
         try:
-            if ast.dump(ast.parse(candidate), include_attributes=False) == ast.dump(tree, include_attributes=False):
-                formatted = candidate
+            parsed = ast.parse(candidate)
+            if ast.dump(parsed, include_attributes=False) == ast.dump(tree, include_attributes=False):
+                pending = sum(issue.code == "ST010" for issue in issues_for(
+                    parsed, candidate, inline_limit, string_limit))
+                if pending > indent_issues:
+                    warnings.append("изменение отменено: результат создаёт нарушение отступа")
+                else:
+                    formatted = candidate
+                    indent_issues = pending
             else:
                 warnings.append("изменение отменено: результат меняет структуру AST")
         except SyntaxError:
