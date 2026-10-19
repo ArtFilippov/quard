@@ -92,6 +92,39 @@ class TestStairfmt(unittest.TestCase):
                           ("error", 2, {"ST001", "ST002", "ST004", "STAIRFMT_PARSE_ERROR"},
                            True), result)
 
+    def test_deep_expression_reports_file_error_and_preserves_peer_findings(self):
+        self.put("src/demo/domain/api.py", "x = f(g(1), h(2))\n")
+        self.put("src/demo/deep.py", "x = f(" + "+" * 1100 + "g(1))\n")
+        files = discover_files(self.root, read_scope(self.root))
+        directory = self.root / ".quard/reports/run"
+        job = next(item for item in make_jobs(self.root, directory, files, True, [])
+                   if item["name"] == "stairfmt")
+        result = execute_job(job, self.root, directory, 30)
+        self.assertEqual((result["status"], result["exit_code"],
+                          {item["path"] for item in result["diagnostics"] if item["path"]},
+                          any(item["rule"] == "STAIRFMT_EXECUTION_ERROR"
+                              and item["is_infrastructure_error"]
+                              for item in result["diagnostics"])),
+                         ("error", 2, {"src/demo/deep.py", "src/demo/domain/api.py"}, True), result)
+
+    def test_deep_expression_does_not_prevent_peer_fix(self):
+        source = "x = f(" + "+" * 1100 + "g(1))\n"
+        self.put("src/demo/deep.py", source)
+        self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
+        code, report, _ = self.run_fix()
+        self.assertEqual((code, report["status"], report["changed_files"],
+                          report["errors"][0]["path"],
+                          (self.root / "src/demo/deep.py").read_text(encoding="utf-8"),
+                          "x = f(\n" in (self.root / "src/demo/working.py").read_text(encoding="utf-8")),
+                         (2, "error", ["src/demo/working.py"], "src/demo/deep.py", source, True))
+
+    def test_direct_check_reports_deep_expression_without_traceback(self):
+        report = self.checked("x = f(" + "+" * 1100 + "g(1))\n")
+        self.assertEqual((report["status"], report["exit_code"],
+                          report["errors"][0]["path"],
+                          "слишком глубокое выражение" in report["errors"][0]["message"]),
+                         ("error", 2, "src/demo/working.py", True))
+
     def test_partial_fix_reports_failure_and_keeps_success(self):
         self.put("src/demo/working.py", "x = f(g(1), h(2))\n")
         self.put("src/demo/blocked.py", "x = f(g(1),  # note\n    h(2))\n")
@@ -531,9 +564,20 @@ def run(path, self, test, populations):
 
     def test_unsupported_root_fixes_all_independent_children_in_one_pass(self):
         source = 'x = f(a[g(1, 2):h(3, 4)], k(1, 2))\n'
-        fixed, _ = self.formatted(source)
-        self.assertEqual((self.formatted(fixed)[0], ast.dump(ast.parse(fixed))),
-                         (fixed, ast.dump(ast.parse(source))))
+        fixed, report = self.formatted(source)
+        self.assertEqual((self.formatted(fixed)[0], ast.dump(ast.parse(fixed)),
+                          {item['rule'] for item in report['remaining']},
+                          any('Subscript' in item['reason'] for item in report['warnings'])),
+                         (fixed, ast.dump(ast.parse(source)), {'ST001', 'ST002', 'ST004'}, True))
+
+    def test_explicit_continuation_preserves_source_and_reports_manual_layout(self):
+        source = 'x = f(lambda: g(1) + \\\n h(2))\n'
+        fixed, report = self.formatted(source)
+        self.assertEqual((fixed, self.formatted(fixed)[0],
+                          {item['rule'] for item in report['remaining']},
+                          any('синтаксически некорректен' in item['reason']
+                              for item in report['warnings'])),
+                         (source, source, {'ST006'}, True))
 
     def test_unsupported_parent_does_not_create_new_indentation_violation(self):
         source = 'x = f(-g(1, 2), h(3))\n'

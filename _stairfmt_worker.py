@@ -38,10 +38,12 @@ def main() -> int:
                 findings.extend({"path": path, "line": issue.line, "column": issue.col,
                                  "rule": issue.code, "message": issue.message + suggestion}
                                  for issue in issues_for(tree, source, **limits))
-            except (OSError, UnicodeError, SyntaxError, LookupError) as exc:
+            except (OSError, UnicodeError, SyntaxError, LookupError, RecursionError) as exc:
                 rule = "STAIRFMT_PARSE_ERROR" if isinstance(exc, SyntaxError) else "STAIRFMT_EXECUTION_ERROR"
                 error = error or rule
-                findings.append({"path": path, "rule": rule, "message": str(exc)})
+                findings.append({"path": path, "rule": rule,
+                                 "message": (f"слишком глубокое выражение: {exc}"
+                                             if isinstance(exc, RecursionError) else str(exc))})
     except (OSError, UnicodeError, ValueError, TypeError, QuardError) as exc:
         error = "STAIRFMT_EXECUTION_ERROR"
         findings.append({"rule": error, "message": str(exc)})

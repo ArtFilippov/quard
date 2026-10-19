@@ -1292,9 +1292,14 @@ def _report(root: Path, paths: list[Path], fix: bool, indent: int,
                               "rule": issue.code, "message": issue.message,
                                "suggestion": _advice(issue.message)} for issue in issues_for(
                                    tree, formatted if fix else source, **limits))
-        except (OSError, UnicodeError, SyntaxError, LookupError, ValueError, TypeError, IndexError) as exc:
-            errors.append({"path": name, "message": str(exc),
-                           "suggestion": "Исправьте файл или доступ к нему и повторите --fix."})
+        except (OSError, UnicodeError, SyntaxError, LookupError, ValueError, TypeError,
+                IndexError, RecursionError) as exc:
+            errors.append({"path": name,
+                           "message": (f"слишком глубокое выражение: {exc}"
+                                       if isinstance(exc, RecursionError) else str(exc)),
+                           "suggestion": ("Упростите вложенность выражения и повторите --fix."
+                                          if isinstance(exc, RecursionError) else
+                                          "Исправьте файл или доступ к нему и повторите --fix.")})
     code = 2 if errors else (1 if remaining or warnings else 0)
     return {"schema_version": "quard-stairfmt-fix/v1", "status": {0: "passed", 1: "violations",
             2: "error"}[code], "exit_code": code, "checked_files": len(paths),
