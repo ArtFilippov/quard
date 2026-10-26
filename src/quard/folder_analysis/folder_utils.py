@@ -9,7 +9,7 @@ import re
 
 from quard._common import read_json
 from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER, generated
-from quard.policy_utils import read_scope
+from quard.policy_utils import gateways, read_scope
 
 SOURCE_ROOT = "src"
 SOURCE_ROOT_DEPTH = 2
@@ -56,10 +56,10 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
                     "rule": "SOURCE_ROOT_LAYOUT", "path": path, "line": 1, "column": 1,
                     "symbol": Path(path).name,
                     "message": f"{path}: place Python files inside a source directory."})
-        ownership = GeneratedOwnership(trees)
+        ownership = GeneratedOwnership(trees, gateways(root))
         diagnostics.extend(group_roles(trees, ownership))
     else:
-        ownership = FolderOwnership(trees)
+        ownership = FolderOwnership(trees, gateways(root))
         diagnostics.extend(ownership.folder_violations())
     diagnostics.extend(ownership.base_violations(frozenset(scope["test_directory_names"])))
     return diagnostics, error

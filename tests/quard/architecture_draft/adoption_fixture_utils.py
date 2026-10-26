@@ -6,10 +6,14 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 
+import tomlkit
+
 from offline_fixtures import CATALOG, create_repo
-from quard._common import write_json
+from quard._common import capture, tool_dir, write_json
+from quard.architecture_draft.configured_architecture_draft import ConfiguredArchitectureDraft
 
 discover_plugins = import_module("quard.audit_utils").discover_plugins
 configure = import_module("quard.policy_utils").configure
@@ -119,6 +123,49 @@ def adoption_consumer(root: Path, *, probe_plugins: bool = True) -> None:
                         (CATALOG["plugins"], CATALOG))
     write_json(root / ".quard/pylint-catalog.json", catalog)
     configure(root, initial=True, plugins=plugins, catalog=catalog)
+
+
+def pin(root: Path) -> None:
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text() + '\n[tool.uv.sources]\nquard-clones = '
+                       '{ git = "https://example.org/quard.git", rev = "' + 'a' * 40 +
+                       '", subdirectory = "rust/quard-clones" }\n')
+
+
+def reviewed_consumer(root: Path) -> None:
+    create_repo(root, configured=False, ready=False)
+    (root / "src/demo/domain/api.py").write_text("")
+    (root / "tests/test_value.py").write_text("")
+    contract = root / "src/demo/domain/value"
+    contract.mkdir()
+    (contract / "__init__.py").write_text("")
+    (contract / "value.py").write_text(
+        "from typing import Protocol\n\nclass Value(Protocol):\n"
+        "    def read(self) -> str: ...\n")
+    (root / "src/demo/domain/value_utils.py").write_text(
+        "from demo.domain.bridge_gw import Bridge\n"
+        "from demo.domain.value.value import Value\n\n"
+        "def value(port: Value) -> str:\n"
+        "    return port.read() + Bridge([''])[0]\n")
+    config = ConfiguredArchitectureDraft(root).draft(
+        contract_only=True, validate_ownership=False)[0]
+    for module in config["modules"]:
+        if module["path"] == "demo.domain.value_utils":
+            module["depends_on"] = ["demo.domain.value.value"]
+    write_json(root / ".quard/architecture.ready.json", {"accepted": True})
+    (root / "tach.toml").write_text(tomlkit.dumps(config))
+    pin(root)
+    logs = root / ".quard/logs/install-probes"
+    logs.mkdir(parents=True)
+    plugins, catalog = discover_plugins(root, logs)
+    write_json(root / ".quard/pylint-catalog.json", catalog)
+    configure(root, initial=True, plugins=plugins, catalog=catalog)
+    (root / "src/demo/domain/bridge_gw.py").write_text(
+        "from collections import UserList as Bridge\n__all__ = ['Bridge']\n")
+    result = capture([sys.executable, str(tool_dir() / "apply.py"), "--project",
+                      str(root), "--json"], root, 30)
+    if result["exit_code"]:
+        raise RuntimeError(f"Reviewed apply failed: {result}")
 
 
 @contextmanager

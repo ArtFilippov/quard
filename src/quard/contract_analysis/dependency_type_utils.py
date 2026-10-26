@@ -13,6 +13,7 @@ from quard.architecture_draft.group_area_utils import ORDINARY, area
 from quard.contract_analysis.contract_utils import dotted, module_name
 from quard.contract_analysis.contracts import Contracts
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
+from quard.policy_utils import gateways
 
 _SELF = frozenset({"Self", "typing.Self", "typing_extensions.Self"})
 _CONCRETE = "CONCRETE_DEPENDENCY_TYPE"
@@ -160,7 +161,8 @@ def _function_diagnostics(index: Contracts, trees: dict[str, ast.Module]
 def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
     trees, diagnostics, error = _read_trees(root, paths)
     grouped = ((root / MARKER).exists() and read_json(root / MARKER) == IDENTITY)
-    index = GeneratedOwnership(trees) if grouped else Contracts(trees)
+    excluded = gateways(root)
+    index = GeneratedOwnership(trees, excluded) if grouped else Contracts(trees, excluded)
     for owner in index.all_declarations():
         if grouped and Path(owner[2]).parts[0] != _SOURCE_ROOT:
             continue

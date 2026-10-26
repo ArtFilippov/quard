@@ -510,7 +510,13 @@ recognize ordinary property accessors; they do not use this descriptor index or
 enumerate concrete cached-property implementations. Other independent checks keep
 their documented scope and do not infer descriptor semantics.
 
-Production is `src/`; tests are `tests/` and the test directory basenames configured
+Production is `src/`, except discovered `_gw.py` and `_gw.pyi` production files:
+these remain importable, but bypass every Quard job and applicable native file
+check. Native Tach excludes their edges, and Pyright both excludes and ignores
+their file diagnostics even when imported. `coverage.excluded_gateways` lists
+them separately; ordinary importing code and tests remain checked. See
+[ADR 0012](docs/adr/0012-gateway-file-source-opt-out.md).
+Tests are `tests/` and the test directory basenames configured
 in `.quard/config.toml` under `[scope]`. Exclusions match **exact directory basenames**,
 not substrings:
 `generated_models` is not `generated`. `.ipynb_checkpoints` is always excluded

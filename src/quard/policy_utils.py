@@ -14,6 +14,7 @@ import tomlkit
 from quard._common import QuardError, atomic_write, load_toml, read_json, safe_target
 from quard.check_selection_utils import (DEPENDENCY_TYPES, architecture_defaults,
                                          validate_architecture_checks, validate_checks)
+from quard.contract_analysis.contract_utils import module_name
 from quard.duplication_utils import validate_duplication
 from quard.architecture_draft.generated_selection_utils import generated
 from quard.pylint_config_utils import (LEGACY_PLUGIN, official_plugins,
@@ -199,9 +200,29 @@ def exclude_globs(scope: dict[str, list[str]]) -> list[str]:
             for pattern in (f"{name}/**", f"**/{name}/**")]
 
 
-def exclude_regex(scope: dict[str, list[str]]) -> str:
-    return r"(?:^|[/\\])(?:" + "|".join(map(re.escape, dict.fromkeys(
+def exclude_regex(scope: dict[str, list[str]], gateways: tuple[str, ...] | list[str] = (),
+                  root: Path | None = None) -> str:
+    directories = r"(?:^|[/\\])(?:" + "|".join(map(re.escape, dict.fromkeys(
         [*scope["exclude_directory_names"], CHECKPOINT_DIRECTORY]))) + r")(?:[/\\]|$)"
+    if not gateways:
+        return directories
+    prefix = ("(?:" + re.escape(root.as_posix()).replace("/", r"[/\\]") + r"[/\\])?"
+              if root else "")
+    return directories + "|^" + prefix + "(?:" + "|".join(
+        re.escape(path).replace("/", r"[/\\]") for path in gateways) + r")$"
+
+
+def gateways(root: Path) -> frozenset[str]:
+    """Identify excluded module identities without exempting their parent package.
+
+    Args:
+        root (Path): Selected consumer root.
+
+    Returns:
+        frozenset[str]: Import names of discovered gateway files and stubs.
+    """
+    return frozenset(module_name(path) for path in discover_files(root, read_scope(root))[
+        "excluded_gateways"])
 
 
 def selected(path: Path, selection: Path | None) -> bool:
@@ -215,6 +236,7 @@ def discover_files(root: Path, scope: dict[str, list[str]],
     production: list[str] = []
     tests: list[str] = []
     excluded: list[str] = []
+    gateways: list[str] = []
     excluded_dirs = set(scope["exclude_directory_names"]) | {CHECKPOINT_DIRECTORY}
     test_dirs = set(scope["test_directory_names"])
     for top in (top for top in (root / "src", root / "tests") if selected(top, selection)):
@@ -242,9 +264,12 @@ def discover_files(root: Path, scope: dict[str, list[str]],
                 rel = path.relative_to(root)
                 if top.name == "tests" or any(part in test_dirs for part in rel.parts[:-1]):
                     tests.append(rel.as_posix())
+                elif name.endswith(("_gw.py", "_gw.pyi")):
+                    gateways.append(rel.as_posix())
                 else:
                     production.append(rel.as_posix())
-    return {"production": sorted(production), "tests": sorted(tests), "excluded_directories": sorted(excluded)}
+    return {"production": sorted(production), "tests": sorted(tests),
+            "excluded_directories": sorted(excluded), "excluded_gateways": sorted(gateways)}
 
 
 def apply_limits(config: dict[str, Any], limits: dict[str, int]) -> None:
@@ -272,7 +297,8 @@ def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]],
                     contract_folders: bool = False, managed: bool = False) -> dict[str, Any]:
     config: dict[str, Any] = {
         "include": ["src"] + (["tests"] if any(path.startswith("tests/") for path in files["tests"]) else []),
-        "exclude": exclude_globs(scope), "ignore": exclude_globs(scope),
+        "exclude": exclude_globs(scope) + files["excluded_gateways"],
+        "ignore": exclude_globs(scope) + files["excluded_gateways"],
         "typeCheckingMode": "strict", "pythonPlatform": "Linux", "extraPaths": ["src"],
         "pythonVersion": f"{sys.version_info.major}.{sys.version_info.minor}",
         "analyzeUnannotatedFunctions": True, "enableReachabilityAnalysis": True,
@@ -306,9 +332,11 @@ def pyright_config(scope: dict[str, list[str]], files: dict[str, list[str]],
     return config
 
 
-def pydoclint_config(scope: dict[str, list[str]]) -> dict[str, Any]:
+def pydoclint_config(scope: dict[str, list[str]],
+                     gateways: tuple[str, ...] | list[str] = (),
+                     root: Path | None = None) -> dict[str, Any]:
     return {
-        "style": "google", "quiet": True, "exclude": exclude_regex(scope),
+        "style": "google", "quiet": True, "exclude": exclude_regex(scope, gateways, root),
         "skip-checking-short-docstrings": False, "skip-checking-private-functions": False,
         "skip-checking-raises": False, "check-arg-order": True,
         "arg-type-hints-in-docstring": True, "arg-type-hints-in-signature": True,
@@ -350,6 +378,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     limits = read_limits(root)
     scope = read_scope(root)
     files = discover_files(root, scope)
+    gateways = files["excluded_gateways"]
     project_path = root / "pyproject.toml"
     try:
         doc = tomlkit.parse(project_path.read_text(encoding="utf-8"))
@@ -366,7 +395,7 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
         # reviewed layers, stubPath and other project-specific settings.
         tool.setdefault("pylint", base_pylint(plugins, scope))
         tool.setdefault("pyright", pyright_config(scope, files, read_checks(root)["contract_folders"], managed))
-        tool.setdefault("pydoclint", pydoclint_config(scope))
+        tool.setdefault("pydoclint", pydoclint_config(scope, gateways, root))
         if not managed:
             tool.setdefault("clean-arch", clean_config())
         tool["pylint"].setdefault("main", {})["load-plugins"] = plugins
@@ -403,18 +432,18 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     apply_limits(tool["pylint"], limits["production"])
     tool["pylint"].get("format", {}).pop("max-line-length", None)
     # Scope is shared, while unrelated native settings are preserved on apply.
-    tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope)]
+    tool["pylint"].setdefault("main", {})["ignore-paths"] = [exclude_regex(scope, gateways, root)]
     if "pyright" in tool:
         if managed:
             tool["pyright"]["reportImplicitStringConcatenation"] = "none"
-        tool["pyright"]["exclude"] = exclude_globs(scope)
-        tool["pyright"]["ignore"] = exclude_globs(scope)
+        tool["pyright"]["exclude"] = exclude_globs(scope) + gateways
+        tool["pyright"]["ignore"] = exclude_globs(scope) + gateways
         discovered = pyright_config(scope, files, read_checks(root)["contract_folders"])
         tool["pyright"]["include"] = discovered["include"]
         if tool["pyright"].get("executionEnvironments") != discovered["executionEnvironments"]:
             tool["pyright"]["executionEnvironments"] = discovered["executionEnvironments"]
     if "pydoclint" in tool:
-        tool["pydoclint"]["exclude"] = exclude_regex(scope)
+        tool["pydoclint"]["exclude"] = exclude_regex(scope, gateways, root)
     # Build and validate all target content before writing any file.
     if catalog is None:
         catalog = read_json(root / ".quard/pylint-catalog.json")
@@ -435,7 +464,8 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
     tach_path = root / "tach.toml"
     if tach_path.exists() and not (root / ".quard/architecture.generated.json").exists():
         tach = tomlkit.parse(tach_path.read_text(encoding="utf-8"))
-        tach["exclude"] = exclude_globs(scope) + ["tests/**"] + [f"**/{name}/**" for name in scope["test_directory_names"]]
+        tach["exclude"] = (exclude_globs(scope) + ["tests/**"] +
+                           [f"**/{name}/**" for name in scope["test_directory_names"]] + gateways)
         outputs["tach.toml"] = tomlkit.dumps(tach)
     previous = {}
     for name in outputs:

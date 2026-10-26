@@ -79,7 +79,7 @@ class ConfiguredArchitectureDraft(ArchitectureDraft):
             interfaces.append({"from": ["^" + re.escape(name) + "$"], "expose": expose})
         config: dict[str, Any] = {
             "source_roots": ["src"], "exclude": exclude_globs(scope) + ["tests/**"] +
-            [f"**/{name}/**" for name in scope["test_directory_names"]],
+            [f"**/{name}/**" for name in scope["test_directory_names"]] + discover_files(self._root, scope)["excluded_gateways"],
             "exact": True, "forbid_circular_dependencies": True,
             "ignore_type_checking_imports": False, "layers_explicit_depends_on": True,
             "root_module": "forbid", "respect_gitignore": False,

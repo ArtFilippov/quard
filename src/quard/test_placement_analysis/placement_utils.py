@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import cast
 
+from quard.policy_utils import gateways
+
 
 def top_level_tests(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     """Find module-level tests, including declarations under conditional suites."""
@@ -42,7 +44,8 @@ def analyze(root: Path, production: list[str], tests: list[str],
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
-    placement = TestPlacement(trees, set(production), set(tests), set(test_directories))
+    placement = TestPlacement(trees, set(production), set(tests), set(test_directories),
+                              gateways(root))
     diagnostics.extend(placement.violations())
     return diagnostics, error
 

@@ -28,12 +28,13 @@ def patch_envelope_methods(paths: list[str]) -> None:
     from quard.folder_analysis.folder_ownership import FolderOwnership
     from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
     from quard.contract_analysis.contracts import module_name
-    from quard.policy_utils import read_scope
+    from quard.policy_utils import gateways, read_scope
 
     trees = {path: ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
              for path in paths}
-    ownership = (GeneratedOwnership(trees) if generated(Path.cwd()) and
-                 read_json(Path(MARKER)) == IDENTITY else FolderOwnership(trees))
+    excluded = gateways(Path.cwd())
+    ownership = (GeneratedOwnership(trees, excluded) if generated(Path.cwd()) and
+                 read_json(Path(MARKER)) == IDENTITY else FolderOwnership(trees, excluded))
     failures = ownership.base_violations(frozenset(read_scope(Path.cwd())["test_directory_names"]))
     rejected = {(item["path"], item.get("symbol")) for item in failures}
     proven: set[tuple[str, int]] = set()

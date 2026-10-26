@@ -11,6 +11,7 @@ from quard._instance_fields_worker import Ownership
 from quard.restriction_agreement_utils import agreement
 from quard.restricted_calls.calls import Calls
 from quard.restricted_targets.resolution import Restrictions
+from quard.policy_utils import gateways
 
 
 def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], str | None,
@@ -29,7 +30,7 @@ def analyze(root: Path, paths: list[object]) -> tuple[list[dict[str, object]], s
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc)})
     ownership = Ownership(trees)
-    restrictions = Restrictions(ownership)
+    restrictions = Restrictions(ownership, gateways(root))
     diagnostics.extend(agreement(restrictions))
     for path, tree in trees.items():
         visitor = Calls(restrictions, path, ownership)

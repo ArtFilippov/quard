@@ -24,7 +24,8 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
             diagnostics.append({"rule": error, "path": path, "line": getattr(exc, "lineno", None),
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
-    diagnostics.extend(Contracts(trees).diagnostics())
+    from quard.policy_utils import gateways
+    diagnostics.extend(Contracts(trees, gateways(root)).diagnostics())
     return diagnostics, error
 
 

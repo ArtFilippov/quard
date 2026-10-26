@@ -17,6 +17,7 @@ from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 from quard.folder_analysis.generated_facades_utils import alias_exports, facade_evidence
 from quard.folder_analysis.generated_reference_utils import contract_only
+from quard.policy_utils import gateways
 
 CONTRACT_EXPORT = "contract"
 CONCRETE_EXPORT = "concrete"
@@ -199,9 +200,11 @@ def folder_boundaries(root: Path) -> dict[str, Any]:
         dict[str, Any]: Exact Tach configuration for discovered production modules.
     """
     scope = read_scope(root)
-    files = discover_files(root, scope)["production"]
+    discovered = discover_files(root, scope)
+    files = discovered["production"]
     trees = parse_trees(root, files, "GENERATED_ARCHITECTURE_SOURCE_ERROR")
-    modules, interfaces = _boundaries(trees, GeneratedOwnership(trees), _sources(trees))
+    modules, interfaces = _boundaries(trees, GeneratedOwnership(trees, gateways(root)),
+                                      _sources(trees))
     config: dict[str, Any] = {"source_roots": ["src"], "exact": True,
                               "forbid_circular_dependencies": True,
                               "ignore_type_checking_imports": False,
@@ -212,5 +215,5 @@ def folder_boundaries(root: Path) -> dict[str, Any]:
                                         "require_ignore_directive_reasons": "error",
                                         "unused_external_dependencies": "error"}}
     config["exclude"] = exclude_globs(scope) + ["tests/**"] + [
-        f"**/{name}/**" for name in scope["test_directory_names"]]
+        f"**/{name}/**" for name in scope["test_directory_names"]] + discovered["excluded_gateways"]
     return config

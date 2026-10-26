@@ -4,7 +4,7 @@ from __future__ import annotations
 import ast
 from typing import override
 
-from quard.contract_analysis.contracts import Contracts
+from quard.contract_analysis.contracts import Contracts, EMPTY_MODULES
 from quard.field_ownership.bindings import Binding, assigned_names
 from quard.field_ownership.ownership import Ownership
 from quard.field_type_analysis.type_evidence import UNKNOWN
@@ -16,7 +16,8 @@ from quard.restricted_targets.restricted_targets import Parents, RestrictedTarge
 class Restrictions(RestrictedTargets):
     """Retain every method declaration rather than collapsing source/stub/overloads."""
 
-    def __init__(self, ownership: Ownership):
+    def __init__(self, ownership: Ownership,
+                 gateways: frozenset[str] = EMPTY_MODULES):
         super().__init__()
         self.ownership = ownership
         self.declarations: list[dict[str, object]] = []
@@ -27,7 +28,7 @@ class Restrictions(RestrictedTargets):
         self.properties: dict[tuple[str, str], list[dict[str, object]]] = {}
         self.own_properties: dict[str, set[str]] = {}
         self.class_marked: set[str] = set()
-        self.contracts = Contracts(dict(ownership.source_trees()))
+        self.contracts = Contracts(dict(ownership.source_trees()), gateways)
         self.parents: Parents = {}
         self.field_types: dict[tuple[str, str], str] = {}
         primary = {owner: next((path for path, _, _, _ in sources if path.endswith(".py")),

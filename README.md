@@ -203,6 +203,29 @@ imports within their owning contract folder, and declares only eligible dependen
 actually used by source. It does not run `tach sync`; forbidden imports remain
 violations. The default draft and existing reviewed configurations are unchanged.
 
+### Thin external-dependency bridges
+
+Name a production module anywhere under `src/` with the exact suffix `_gw.py`
+to opt that file out of Quard diagnostics while keeping it importable by Python.
+The matching `_gw.pyi` stub, or a stub-only `_gw.pyi` module, is excluded too.
+For example, a bridge may import a private third-party class and expose a public
+alias; ordinary code, Bootstrap and Envelopes may import it directly or import
+the whole gateway module. No Gateway layer, interface or Tach dependency is
+needed. The opt-out applies to **all content** in the named file, not just
+external aliases. This is a deliberate diagnostic bypass: Quard, Pylint,
+pydoclint, Stairfmt, clone checks, Pyright and both Tach checks do not analyze
+the gateway file; Pyright also ignores diagnostics located there when imported.
+The report lists the files under `coverage.excluded_gateways`, separate from
+analyzed production and tests. Neighboring source, tests and importing code
+retain their checks. Missing gateway modules are still invalid imports;
+ordinary package facades cannot use this suffix to export concrete types.
+
+For the #178 migration, rename the thin bridge to `<purpose>_gw.py`, update its
+consumers' imports to the new module, and run `apply.py` followed by `check.py`.
+Generated Tach is regenerated; reviewed Tach preserves accepted declarations
+and updates only its file exclusion. Unused reviewed dependencies remain native
+violations and must be edited deliberately. See [ADR 0012](docs/adr/0012-gateway-file-source-opt-out.md).
+
 ## Daily commands
 
 ```bash
@@ -313,7 +336,9 @@ source layout is migrated.
 
 From the consumer root, run `python quard/stairfmt.py --fix --project .` to format
 the same discovered, non-excluded `.py` files. Explicit file or directory arguments
-select a subset inside that scope without scanning unrelated source links; links
+select a subset inside that scope without scanning unrelated source links. A
+production `_gw.py` selected alone is a zero-file no-op in check and fix; other
+out-of-scope paths remain invalid. Links
 inside the selected scope still fail. `--json` prints the full result. Stairfmt rechecks
 the formatted source and preserves safely fixed files even if others need manual work.
 An empty `.py` scope passes with zero checked files. `ST010` checks block

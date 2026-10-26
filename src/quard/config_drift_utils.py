@@ -27,11 +27,12 @@ def scope_drift(root: Path) -> list[str]:
     scope = read_scope(root)
     files = discover_files(root, scope)
     tool = load_toml(root / "pyproject.toml").get("tool", {})
+    gateways = files["excluded_gateways"]
     mismatch = [f"{profile}.main.ignore-paths" for profile, config in
                 (("production", tool.get("pylint", {})),
                  ("tests", load_toml(root / ".quard/pylint-tests.toml")
                   .get("tool", {}).get("pylint", {})))
-                if config.get("main", {}).get("ignore-paths") != [exclude_regex(scope)]]
+                if config.get("main", {}).get("ignore-paths") != [exclude_regex(scope, gateways, root)]]
     expected = pyright_config(scope, files, read_checks(root)["contract_folders"])
     for name in ("exclude", "ignore", "include", "executionEnvironments"):
         if tool.get("pyright", {}).get(name) != expected[name]:
@@ -40,12 +41,12 @@ def scope_drift(root: Path) -> list[str]:
     for name in ("exclude", "ignore", "include", "executionEnvironments"):
         if native.get(name) != expected[name]:
             mismatch.append(f"pyrightconfig.json.{name}")
-    if tool.get("pydoclint", {}).get("exclude") != exclude_regex(scope):
+    if tool.get("pydoclint", {}).get("exclude") != exclude_regex(scope, gateways, root):
         mismatch.append("pydoclint.exclude")
     tach = root / "tach.toml"
     if tach.exists() and not (root / ".quard/architecture.generated.json").exists():
         exclusions = (exclude_globs(scope) + ["tests/**"]
-                      + [f"**/{name}/**" for name in scope["test_directory_names"]])
+                       + [f"**/{name}/**" for name in scope["test_directory_names"]] + gateways)
         if load_toml(tach).get("exclude") != exclusions:
             mismatch.append("tach.exclude")
     return mismatch

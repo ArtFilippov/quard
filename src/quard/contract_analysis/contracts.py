@@ -20,13 +20,22 @@ __all__ = ["CONTRACT_BASES", "METHOD", "Contracts", "analyze", "collect_nodes",
 METHOD = (ast.FunctionDef, ast.AsyncFunctionDef)
 CONTRACT_BASES = frozenset({"typing.Protocol", "typing_extensions.Protocol",
                             "abc.ABC", "abc.ABCMeta", "builtins.object"})
+EMPTY_MODULES: frozenset[str] = frozenset()
 
 
 class Contracts(ContractAnalysis):
     """Resolve explicit imports and local inheritance across the discovered scope."""
 
-    def __init__(self, trees: dict[str, ast.Module]):
+    def __init__(self, trees: dict[str, ast.Module],
+                 gateways: frozenset[str] = EMPTY_MODULES):
+        """Index discovered declarations and exact excluded gateway identities.
+
+        Args:
+            trees (dict[str, ast.Module]): Parsed source and test modules.
+            gateways (frozenset[str], default=EMPTY_MODULES): Excluded import names.
+        """
         super().__init__()
+        self.gateways = gateways
         self.paths: dict[str, str] = {}
         self.nodes: dict[str, ast.ClassDef] = {}
         self.imports: dict[str, dict[str, str | None]] = {}
@@ -168,6 +177,10 @@ class Contracts(ContractAnalysis):
 
     @override
     def local_module(self, resolved: str) -> bool:
+        if any(module not in self.modules and
+               (resolved == module or resolved.startswith(module + "."))
+               for module in self.gateways):
+            return False
         return resolved.split(".")[0] in self.customer_roots
 
     @override

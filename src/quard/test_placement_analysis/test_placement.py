@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from typing import override
 
-from quard.contract_analysis.contracts import module_name
+from quard.contract_analysis.contracts import EMPTY_MODULES, module_name
 from quard.folder_analysis.folder_ownership import FolderOwnership, snake_case
 from quard.test_placement_analysis.placement_utils import analyze, main, top_level_tests
 from quard.test_placement_analysis.test_placement_analysis import TestPlacementAnalysis
@@ -18,9 +18,9 @@ class TestPlacement(TestPlacementAnalysis):
     """Check test names and mirrored locations against discovered production declarations."""
 
     def __init__(self, trees: dict[str, ast.Module], production: set[str], tests: set[str],
-                 test_directories: set[str]):
+                 test_directories: set[str], gateways: frozenset[str] = EMPTY_MODULES):
         super().__init__()
-        self.folders = FolderOwnership(trees)
+        self.folders = FolderOwnership(trees, gateways)
         self.trees = trees
         self.production = production
         self.tests = tests

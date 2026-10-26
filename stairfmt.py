@@ -1397,6 +1397,9 @@ def _paths(root: Path, inputs: list[str]) -> list[Path]:
         matching = {candidate for candidate in available
                     if candidate == path or path.is_dir() and candidate.is_relative_to(path)}
         if not matching:
+            if path in {root / candidate for candidate in files["excluded_gateways"]
+                        if candidate.endswith(".py")}:
+                continue
             raise ValueError(f"Файл или каталог вне области проверки Quard: {value}")
         selected.update(matching)
     return sorted(selected)

@@ -12,7 +12,7 @@
     "run_id": {"type": "string"},
     "duration_seconds": {"type": "number", "minimum": 0},
     "summary": {"type": "object", "required": ["diagnostics", "infrastructure_errors"], "properties": {"diagnostics": {"type": "integer", "minimum": 0}, "infrastructure_errors": {"type": "integer", "minimum": 0}}},
-    "coverage": {"type": "object", "properties": {"lcom4": {"type": "object", "required": ["mode", "requested", "selected_files", "analyzed_files"], "properties": {"mode": {"enum": ["full", "selected", "skipped", "invalid"]}, "requested": {"type": ["string", "null"]}, "selected_files": {"type": "array", "items": {"type": "string"}}, "analyzed_files": {"type": "array", "items": {"type": "string"}}}}}},
+    "coverage": {"type": "object", "properties": {"production": {"type": "array", "items": {"type": "string"}}, "tests": {"type": "array", "items": {"type": "string"}}, "excluded_directories": {"type": "array", "items": {"type": "string"}}, "excluded_gateways": {"type": "array", "items": {"type": "string"}}, "lcom4": {"type": "object", "required": ["mode", "requested", "selected_files", "analyzed_files"], "properties": {"mode": {"enum": ["full", "selected", "skipped", "invalid"]}, "requested": {"type": ["string", "null"]}, "selected_files": {"type": "array", "items": {"type": "string"}}, "analyzed_files": {"type": "array", "items": {"type": "string"}}}}}},
     "tools": {"type": "array", "items": {"type": "object", "required": ["name", "tool", "status"], "properties": {"status": {"enum": ["passed", "violations", "error", "blocked", "skipped"]}}}},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
     "report_path": {"type": "string"},

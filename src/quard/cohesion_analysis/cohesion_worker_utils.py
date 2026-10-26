@@ -11,7 +11,7 @@ from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER,
 from quard.cohesion_analysis.declarations import Declarations
 from quard.folder_analysis.folder_ownership import FolderOwnership
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
-from quard.policy_utils import read_scope
+from quard.policy_utils import gateways, read_scope
 
 
 def assemblies(root: Path, trees: dict[str, ast.Module]) -> set[tuple[str, str]]:
@@ -24,8 +24,9 @@ def assemblies(root: Path, trees: dict[str, ast.Module]) -> set[tuple[str, str]]
     Returns:
         set[tuple[str, str]]: Proven source paths and class symbols.
     """
-    ownership = (GeneratedOwnership(trees) if generated(root)
-                 and read_json(root / MARKER) == IDENTITY else FolderOwnership(trees))
+    excluded = gateways(root)
+    ownership = (GeneratedOwnership(trees, excluded) if generated(root)
+                 and read_json(root / MARKER) == IDENTITY else FolderOwnership(trees, excluded))
     return ownership.assemblies(frozenset(read_scope(root)["test_directory_names"]))
 
 

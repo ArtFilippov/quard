@@ -74,7 +74,8 @@ class NativeCheckRunner(CheckRunner):
         run_dir.mkdir(parents=True, exist_ok=False)
         diagnostics: list[dict[str, Any]] = []
         versions: dict[str, str | None] = {}
-        files: dict[str, list[str]] = {"production": [], "tests": [], "excluded_directories": []}
+        files: dict[str, list[str]] = {"production": [], "tests": [], "excluded_directories": [],
+                                       "excluded_gateways": []}
         lcom_coverage: dict[str, Any] = {"mode": "full" if lcom_files is None else "selected",
                                          "requested": lcom_files, "selected_files": [],
                                          "analyzed_files": []}

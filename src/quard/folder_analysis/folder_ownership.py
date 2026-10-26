@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 from typing import override
 
-from quard.contract_analysis.contracts import Contracts, module_name
+from quard.contract_analysis.contracts import Contracts, EMPTY_MODULES, module_name
 from quard.folder_analysis.folder_analysis import FolderAnalysis
 from quard.folder_analysis.folder_utils import analyze, main, snake_case
 from quard.marker_utils import PROPERTY_DECORATORS
@@ -38,8 +38,9 @@ OPAQUE_BASES = {"builtins.object", "typing.Protocol", "typing_extensions.Protoco
 class FolderOwnership(Contracts, FolderAnalysis):
     """Resolve the local contract selected by each class's explicit ancestry."""
 
-    def __init__(self, trees: dict[str, ast.Module]):
-        super().__init__(trees)
+    def __init__(self, trees: dict[str, ast.Module],
+                 gateways: frozenset[str] = EMPTY_MODULES):
+        super().__init__(trees, gateways)
         self.trees = trees
         self.contracts = {name for name in self.nodes if self.declaration(name)}
 

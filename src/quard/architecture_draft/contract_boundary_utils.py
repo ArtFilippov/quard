@@ -13,6 +13,7 @@ from quard.architecture_draft.boundary_source_utils import (
 )
 from quard.contract_analysis.contract_utils import module_name
 from quard.folder_analysis.folder_ownership import FolderOwnership
+from quard.policy_utils import gateways
 
 
 STUB_SUFFIX = ".pyi"
@@ -215,7 +216,7 @@ def contract_boundaries(root: Path, files: list[str], draft: dict[str, Any],
         QuardError: Source parsing or contract folder ownership failed.
     """
     trees = parse_trees(root, files, "CONTRACT_BOUNDARY_SOURCE_ERROR")
-    ownership = FolderOwnership(trees)
+    ownership = FolderOwnership(trees, gateways(root))
     if validate_ownership and (violations := ownership.folder_violations()):
         first = violations[0]
         raise QuardError("INVALID_CONTRACT_OWNERSHIP", f"{first['path']}: {first['message']}")

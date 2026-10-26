@@ -5,6 +5,7 @@ import ast
 from typing import override
 
 from quard.contract_analysis.contract_utils import dotted, module_name
+from quard.contract_analysis.contracts import EMPTY_MODULES
 from quard.contract_analysis.value_factory_utils import ValueFactory, values
 from quard.folder_analysis.folder_ownership import FolderOwnership
 from quard.folder_analysis.generated_facades_utils import alias_evidence
@@ -17,13 +18,14 @@ _NON_CONTRACT_BASES = frozenset({"builtins.object", "typing.Protocol",
 class GeneratedOwnership(FolderOwnership):
     """Keep externally inherited identities separate from local class roles."""
 
-    def __init__(self, trees: dict[str, ast.Module]):
+    def __init__(self, trees: dict[str, ast.Module],
+                 gateways: frozenset[str] = EMPTY_MODULES):
         """Index exact external bases in discovered source and stubs.
 
         Args:
             trees (dict[str, ast.Module]): Discovered parsed modules.
         """
-        super().__init__(trees)
+        super().__init__(trees, gateways)
         self.value_evidence: dict[str, list[ValueFactory]] = {
             path: values(tree) for path, tree in trees.items()}
         for path, evidence in self.value_evidence.items():
