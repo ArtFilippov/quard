@@ -1,5 +1,5 @@
 {
-  "quard_version": "1.6.4",
+  "quard_version": "1.6.5",
   "python_minimum": "3.12",
   "dependencies": {
     "pylint": "4.0.8",
