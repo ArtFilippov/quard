@@ -12,6 +12,7 @@ sys.dont_write_bytecode = True
 from quard._architecture_compat import install_architecture_compat, install_pylint_protocol_compat
 from quard.folder_analysis.envelope_evidence_utils import proven
 from quard.pylint_config_utils import LEGACY_PLUGIN
+from quard.pylint_imports_utils import install as install_imports
 from quard.pylint_similarity_utils import install as install_similarity
 
 
@@ -98,6 +99,7 @@ def main() -> int:
                              + "reinstall Quard or run apply.py to migrate both profiles.")
     from pylint.lint import Run
     install_similarity()
+    install_imports()
     patch_pathlib_alias_check()
     if args.generated:
         install_pylint_protocol_compat()

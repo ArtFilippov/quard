@@ -16,8 +16,12 @@ import unittest
 from unittest.mock import patch
 
 from jsonschema import validate
+import isort
 import tomlkit
 from pylint.checkers import symilar
+from pylint.checkers.imports import ImportsChecker
+from pylint.lint import PyLinter, Run
+from pylint.reporters.collecting_reporter import CollectingReporter
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
@@ -31,6 +35,7 @@ from quard.check_runner.check_runner import CheckRunner
 from quard.check_runner.native_check_runner import NativeCheckRunner
 from quard.check_runner.runner_utils import binary, installed_versions
 from quard.report_utils import normalize
+from quard.pylint_imports_utils import install as install_imports
 from quard.pylint_similarity_utils import install as install_similarity
 from quard.tach_worker_utils import run as native_tach
 from offline_fixtures import create_repo, fake_tools
@@ -38,6 +43,34 @@ from offline_fixture_utils import native_result
 
 
 class TestNativeCheckRunner(unittest.TestCase):
+    def test_pylint_import_cache_preserves_native_order_and_config(self):
+        source = self.root / "sample.py"
+        source.write_text("import fictional_module\nimport os\n", encoding="utf-8")
+        original = ImportsChecker._isort_config
+        self.addCleanup(setattr, ImportsChecker, "_isort_config", original)
+
+        def findings() -> list[tuple[str, int, str]]:
+            reporter = CollectingReporter()
+            Run(["--disable=all", "--enable=wrong-import-order",
+                 "--known-third-party=fictional_module", str(source)],
+                reporter=reporter, exit=False)
+            return [(message.msg_id, message.line, message.msg)
+                    for message in reporter.messages]
+
+        expected = findings()
+        install_imports()
+        actual = findings()
+        first = ImportsChecker(PyLinter())
+        first.linter.config.known_third_party = ("fictional_module",)
+        second = ImportsChecker(PyLinter())
+        second.linter.config.known_standard_library = ("fictional_module",)
+        config = first._isort_config
+        self.assertEqual((bool(expected), actual, config is first._isort_config,
+                          isort.place_module("fictional_module", config=config),
+                          isort.place_module("fictional_module", config=second._isort_config)),
+                         (True, expected, True, "THIRDPARTY", "STDLIB"),
+                         "Native import findings changed or configs leaked between checkers")
+
     def test_pylint_similarity_preserves_native_matches(self):
         probe = symilar.Symilar(4, ignore_comments=True, ignore_docstrings=True,
                                ignore_imports=True, ignore_signatures=True)
