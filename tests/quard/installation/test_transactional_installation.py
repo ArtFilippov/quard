@@ -240,7 +240,8 @@ class TestTransactionalInstallation(unittest.TestCase):
         self.assertTrue(_policy.read_checks(root)["constructor_purity"])
         self.assertFalse(_policy.read_checks(root)["instance_fields"])
         self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS
-                            if key != "instance_fields"))
+                            if key not in {"instance_fields", "encapsulated_only"}))
+        self.assertFalse(_policy.read_checks(root)["encapsulated_only"])
         self.assertTrue(_policy.read_checks(root)["duplicate_detection"])
 
     def test_duplication_setting_survives_install_reinstall_and_apply_entry_point(self):
@@ -407,7 +408,9 @@ class TestTransactionalInstallation(unittest.TestCase):
         with patch.object(entry, "capture", fake_uv):
             self.installation().install(root, QUARD, progress=False)
         self.assertTrue(_policy.read_checks(root)["constructor_purity"])
-        self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS))
+        self.assertTrue(all(_policy.read_checks(root)[key] for key in OPTIONAL_JOBS
+                            if key != "encapsulated_only"))
+        self.assertFalse(_policy.read_checks(root)["encapsulated_only"])
         self.assertTrue(_policy.read_checks(root)["duplicate_detection"])
         self.assertFalse((root / ".quard/checks.toml").exists())
 

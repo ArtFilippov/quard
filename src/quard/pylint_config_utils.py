@@ -19,25 +19,24 @@ def clean_config(layer_dirs: dict[str, str]) -> dict[str, Any]:
 
 
 def policy_notes(plugins: list[str], production_disabled: dict[str, str],
-                 test_disabled: dict[str, str], test_arch_disabled: list[str]) -> dict[str, Any]:
+                 test_disabled: dict[str, str], test_arch_disabled: list[str],
+                 enabled: list[str]) -> dict[str, Any]:
     reviewed = LEGACY_PLUGIN in plugins
-    overlap = ["unused-variable/import: scopes differ",
-               "protected access: inference and types differ"]
-    if reviewed:
-        overlap.append("clean-arch-dependency and Tach: class-level and module-level checks differ")
     return {
         "production_disabled": production_disabled,
         "test_additional_disabled": test_disabled,
         "test_architecture_disabled_if_registered": test_arch_disabled if reviewed else [],
         "pyright_disabled": {
-            "reportImportCycles": "Pylint cyclic-import checks Python module cycles."},
+            "reportImportCycles": "Pyright and Pylint cycle findings are disabled; Tach checks configured module boundaries and cycles."},
+        "pylint_enabled": enabled,
+        "pylint_tests_enabled": [name for name in enabled if name not in test_disabled],
         "official_extensions_loaded": [name for name in plugins
                                        if name.startswith("pylint.extensions.")],
         "official_extension_not_loaded": {
             "pylint.extensions.docparams":
-            "Google docstrings validated by pydoclint, docstyle by Pylint; reviewed mode "
+            "Google docstrings validated by pydoclint; reviewed mode "
             + "also has plugin message-ID collisions. Not a claim of identical rule sets."},
-        "kept_partial_overlaps": overlap,
+        "kept_partial_overlaps": [],
         "deferred": ["Blanket ban on internal comments", "Function length in physical lines",
                      "Automatic dependency-community discovery",
                      "Universal Protocol/ABC-only proof"],

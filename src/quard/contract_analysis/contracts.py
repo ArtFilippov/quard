@@ -117,14 +117,15 @@ class Contracts(ContractAnalysis):
             seen.add(target)
             if target in self.nodes:
                 return target
-            for module in sorted(self.modules, key=len, reverse=True):
-                if not module or not target.startswith(module + "."):
-                    continue
-                first, dot, rest = target[len(module) + 1:].partition(".")
-                binding = self.imports[module].get(first)
-                if binding:
-                    target = binding + (dot + rest if dot else "")
-                    break
+            prefix = target
+            while "." in prefix:
+                prefix = prefix.rpartition(".")[0]
+                if prefix in self.modules:
+                    first, dot, rest = target[len(prefix) + 1:].partition(".")
+                    binding = self.imports[prefix].get(first)
+                    if binding:
+                        target = binding + (dot + rest if dot else "")
+                        break
             else:
                 return target
         return target

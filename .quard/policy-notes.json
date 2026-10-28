@@ -5,10 +5,7 @@
     "Automatic dependency-community discovery",
     "Universal Protocol/ABC-only proof"
   ],
-  "kept_partial_overlaps": [
-    "unused-variable/import: scopes differ",
-    "protected access: inference and types differ"
-  ],
+  "kept_partial_overlaps": [],
   "not_provided": [
     "Formatter",
     "Natural-language spell checking (requires Enchant and dictionaries)",
@@ -16,7 +13,7 @@
     "Dependency vulnerability scanner"
   ],
   "official_extension_not_loaded": {
-    "pylint.extensions.docparams": "Google docstrings validated by pydoclint, docstyle by Pylint; reviewed mode also has plugin message-ID collisions. Not a claim of identical rule sets."
+    "pylint.extensions.docparams": "Google docstrings validated by pydoclint; reviewed mode also has plugin message-ID collisions. Not a claim of identical rule sets."
   },
   "official_extensions_loaded": [
     "pylint.extensions.bad_builtin",
@@ -45,26 +42,28 @@
     "pylint.extensions.while_used"
   ],
   "production_disabled": {
-    "line-too-long": "Stairfmt owns supported layout; physical line length is not a style limit.",
-    "missing-class-docstring": "User policy: docstrings are optional.",
-    "missing-function-docstring": "User policy: docstrings are optional.",
-    "missing-module-docstring": "User policy: docstrings are optional.",
-    "possibly-used-before-assignment": "Pyright reportPossiblyUnboundVariable=error.",
-    "reimported": "Pyright reportDuplicateImport=error.",
-    "undefined-variable": "Pyright reportUndefinedVariable=error.",
-    "used-before-assignment": "Pyright reportUnboundVariable=error."
+    "all": "Only fatal errors, lost exceptions and selected design counts are retained."
   },
+  "pylint_enabled": [
+    "F",
+    "W0150",
+    "R0913",
+    "R0917",
+    "R0903",
+    "R0904"
+  ],
+  "pylint_tests_enabled": [
+    "F",
+    "W0150",
+    "R0913",
+    "R0917",
+    "R0904"
+  ],
   "pyright_disabled": {
-    "reportImportCycles": "Pylint cyclic-import checks Python module cycles."
+    "reportImportCycles": "Pyright and Pylint cycle findings are disabled; Tach checks configured module boundaries and cycles."
   },
   "test_additional_disabled": {
-    "duplicate-code": "Repeated arrange/assert sections need not become shared abstractions.",
-    "magic-value-comparison": "Concrete expected values make assertions readable.",
-    "no-self-use": "Test frameworks call instance methods without instance state.",
-    "protected-access": "White-box tests may access protected implementation details.",
-    "redefined-outer-name": "pytest fixture names are intentionally reused in test arguments.",
-    "too-few-public-methods": "Test containers and fakes may expose one operation.",
-    "unused-argument": "Fixtures can be requested only for their side effects."
+    "R0903": "Test containers and fakes may expose one operation."
   },
   "test_architecture_disabled_if_registered": []
 }

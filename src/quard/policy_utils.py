@@ -17,9 +17,8 @@ from quard.check_selection_utils import (DEPENDENCY_TYPES, architecture_defaults
 from quard.contract_analysis.contract_utils import module_name
 from quard.duplication_utils import validate_duplication
 from quard.architecture_draft.generated_selection_utils import generated
-from quard.pylint_config_utils import (LEGACY_PLUGIN, official_plugins,
-                                      clean_config as render_clean_config,
-                                      policy_notes as render_policy_notes)
+from quard.pylint_config_utils import (clean_config as render_clean_config,
+                                       official_plugins, policy_notes as render_policy_notes)
 
 LIMIT_MAP = {
     "max_module_lines": ("format", "max-module-lines"),
@@ -39,34 +38,12 @@ LIMIT_MAP = {
     "min_similarity_lines": ("similarities", "min-similarity-lines"),
     "max_try_statements": ("broad_try_clause", "max-try-statements"),
 }
-PRODUCTION_DISABLED = {
-    "line-too-long": "Stairfmt owns supported layout; physical line length is not a style limit.",
-    "missing-module-docstring": "User policy: docstrings are optional.",
-    "missing-class-docstring": "User policy: docstrings are optional.",
-    "missing-function-docstring": "User policy: docstrings are optional.",
-    "reimported": "Pyright reportDuplicateImport=error.",
-    "undefined-variable": "Pyright reportUndefinedVariable=error.",
-    "used-before-assignment": "Pyright reportUnboundVariable=error.",
-    "possibly-used-before-assignment": "Pyright reportPossiblyUnboundVariable=error.",
-}
-REVIEWED_PRODUCTION_DISABLED = {
-    "W9201": "Implementation-only members need not belong to an inherited public contract.",
-}
+PYLINT_ENABLED = ["F", "W0150", "R0913", "R0917", "R0903", "R0904"]
+PRODUCTION_DISABLED = {"all": "Only fatal errors, lost exceptions and selected design counts are retained."}
 TEST_DISABLED = {
-    "too-few-public-methods": "Test containers and fakes may expose one operation.",
-    "no-self-use": "Test frameworks call instance methods without instance state.",
-    "redefined-outer-name": "pytest fixture names are intentionally reused in test arguments.",
-    "unused-argument": "Fixtures can be requested only for their side effects.",
-    "protected-access": "White-box tests may access protected implementation details.",
-    "magic-value-comparison": "Concrete expected values make assertions readable.",
-    "duplicate-code": "Repeated arrange/assert sections need not become shared abstractions.",
+    "R0903": "Test containers and fakes may expose one operation.",
 }
-# Plugin 1.2.2: keep fragile-test-mocks W9101 and anti-bypass W9501.
-# Filter through the installed catalog before use to avoid unknown message IDs.
-TEST_ARCH_DISABLED = [
-    "W9001", "W9003", "W9004", "W9005", "W9006", "W9007", "W9009",
-    "W9010", "W9011", "W9012", "W9013", "W9015", "W9102", "W9202", "W9301", "W9601",
-]
+TEST_ARCH_DISABLED: list[str] = []
 PYRIGHT_EXTRA = [
     "reportCallInDefaultInitializer", "reportImplicitOverride",
     "reportMissingSuperCall", "reportPropertyTypeMismatch", "reportUninitializedInstanceVariable",
@@ -283,7 +260,7 @@ def base_pylint(plugins: list[str], scope: dict[str, list[str]]) -> dict[str, An
                  "fail-under": 0, "fail-on": ["I"], "recursive": True,
                  "py-version": f"{sys.version_info.major}.{sys.version_info.minor}",
                  "ignore-paths": [exclude_regex(scope)]},
-        "messages_control": {"enable": ["all"], "disable": list(PRODUCTION_DISABLED)},
+        "messages_control": {"enable": PYLINT_ENABLED.copy(), "disable": ["all"]},
         "reports": {"reports": False, "score": False, "output-format": "json2"},
         "format": {"indent-string": "    ", "indent-after-paren": 4,
                    "single-line-if-stmt": False, "single-line-class-stmt": False},
@@ -358,18 +335,14 @@ def clean_config() -> dict[str, Any]:
 def test_pylint(base: dict[str, Any], limits: dict[str, int], catalog: dict[str, Any]) -> dict[str, Any]:
     config = copy.deepcopy(base)
     apply_limits(config, limits)
-    disabled = list(dict.fromkeys(config.get("messages_control", {}).get("disable", []) + list(TEST_DISABLED)))
-    available_ids = set(catalog.get("message_ids", []))
-    if LEGACY_PLUGIN in config.get("main", {}).get("load-plugins", []):
-        disabled += [name for name in TEST_ARCH_DISABLED if name in available_ids]
-    config.setdefault("messages_control", {})["disable"] = disabled
+    config.setdefault("messages_control", {})["enable"] = [name for name in PYLINT_ENABLED
+                                                           if name not in TEST_DISABLED]
     return config
 
 
 def policy_notes(plugins: list[str]) -> dict[str, Any]:
-    disabled = {**PRODUCTION_DISABLED, **(REVIEWED_PRODUCTION_DISABLED
-                                     if LEGACY_PLUGIN in plugins else {})}
-    return render_policy_notes(plugins, disabled, TEST_DISABLED, TEST_ARCH_DISABLED)
+    return render_policy_notes(plugins, PRODUCTION_DISABLED, TEST_DISABLED,
+                               TEST_ARCH_DISABLED, PYLINT_ENABLED)
 
 
 def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = None,
@@ -413,22 +386,12 @@ def configure(root: Path, *, initial: bool = False, plugins: list[str] | None = 
                                               read_json(root / ".quard/pylint-catalog.json"))
             tool["pylint"].setdefault("main", {})["load-plugins"] = official_plugins(
                 native_catalog["plugins"])
-        # The reviewed-only W9201 disable has no registered rule in generated mode.
-        control = tool["pylint"].get("messages_control", {})
-        if "disable" in control and "W9201" in control["disable"]:
-            control["disable"] = [rule for rule in control["disable"] if rule != "W9201"]
         removed_layer_map = tool.pop("clean-arch", None) is not None
     else:
         removed_layer_map = False
-        # W9201 treats every extra method as public API, unlike Quard's inherited
-        # contract boundary. Apply on upgrades too, without replacing native settings.
-        control = tool["pylint"].setdefault("messages_control", {})
-        disabled = control.setdefault("disable", [])
-        if "W9201" not in disabled:
-            disabled.append("W9201")
-    disabled = tool["pylint"].setdefault("messages_control", {}).setdefault("disable", [])
-    if "line-too-long" not in disabled:
-        disabled.append("line-too-long")
+    control = tool["pylint"].setdefault("messages_control", {})
+    control["disable"] = ["all"]
+    control["enable"] = PYLINT_ENABLED.copy()
     apply_limits(tool["pylint"], limits["production"])
     tool["pylint"].get("format", {}).pop("max-line-length", None)
     # Scope is shared, while unrelated native settings are preserved on apply.

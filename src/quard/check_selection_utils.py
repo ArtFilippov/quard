@@ -24,7 +24,7 @@ TACH_JOBS = ("tach", "tach-external")
 DEPENDENCY_TYPES = "dependency_types"
 CHECK_DEFAULTS = {**dict.fromkeys(OPTIONAL_JOBS, True), "duplicate_detection": True,
                   "tach": True, DEPENDENCY_TYPES: False, CONSTRUCTOR_PURITY: True,
-                  "tuple_signatures": True}
+                  "tuple_signatures": True, "encapsulated_only": False}
 
 
 def architecture_defaults(root: Path) -> dict[str, bool]:

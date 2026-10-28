@@ -254,7 +254,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             self.assertNotIn("clean_architecture_linter", config["main"]["load-plugins"])
             self.assertFalse(set(config["messages_control"]["disable"]) & {"W9001", "W9201"})
 
-    def test_reviewed_w9201_is_disabled_on_install_and_upgrade(self):
+    def test_reviewed_policy_replaces_legacy_message_selection_on_install_and_upgrade(self):
         for fresh in (True, False):
             with self.subTest(fresh=fresh), TemporaryDirectory(
                     prefix="quard-reviewed-w9201-") as directory:
@@ -273,15 +273,16 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 self.assertNotIn("W9202", production["messages_control"]["disable"])
                 for config in (production, tests):
                     control = config["messages_control"]
-                    self.assertEqual(control["disable"].count("W9201"), 1)
-                    self.assertIn("consumer-own-rule", control["disable"])
+                    self.assertEqual(control["disable"], ["all"])
                     self.assertIn("foreign.Framework", config["design"]["ignored-parents"])
-                    self.assertIn("W9202", control["enable"])
+                    self.assertEqual(control["enable"], ["F", "W0150", "R0913", "R0917", "R0904"]
+                                     if config is tests else
+                                     ["F", "W0150", "R0913", "R0917", "R0903", "R0904"])
                 self.assertFalse(configure(root))
                 notes = read_json(root / ".quard/policy-notes.json")
-                self.assertIn("W9201", notes["production_disabled"])
+                self.assertIn("all", notes["production_disabled"])
 
-    def test_reviewed_native_w9202_and_unrelated_rules_still_report(self):
+    def test_reviewed_native_only_approved_rules_report(self):
         root = self.root
         (root / "src/demo/domain/api.py").write_text(
             "from typing import Protocol\nclass Port(Protocol):\n"
@@ -292,14 +293,11 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
             "import os\nfrom demo.domain.api import Port\n"
             "class Driver(Port):\n"
             "    def run(self): return 1\n"
-            "    def extra(self): pass\n", encoding="utf-8")
+            "    def extra(self): pass\n"
+            "class Small:\n    def run(self): pass\n", encoding="utf-8")
         report = selected_report(self, root, "pylint-production", "class-contracts")
-        rules = {(item["rule"], item["path"]) for item in report["diagnostics"]}
-        self.assertIn(("W9202", "src/demo/infrastructure/driver.py"), rules)
-        self.assertIn(("W0611", "src/demo/infrastructure/driver.py"), rules)
-        self.assertNotIn(("W9201", "src/demo/infrastructure/driver.py"), rules)
-        self.assertFalse(any(item["rule"] == "UNCOVERED_CLASS_MEMBER" for item in
-                             report["diagnostics"]))
+        rules = {item["rule"] for item in report["diagnostics"] if item["tool"] == "pylint"}
+        self.assertEqual(rules, {"R0903"}, "Reviewed Pylint emitted unapproved findings")
 
     def test_return_contract_and_naming_jobs_in_both_architecture_modes(self):
         for managed in (False, True):
@@ -332,15 +330,7 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                 self.assertIn(("LEADING_UNDERSCORE_NAME", "_old_helper"), findings)
                 rules = {(item["rule"], item["path"], item["symbol"])
                          for item in report["diagnostics"]}
-                driver = "src/demo/infrastructure/driver.py"
-                if managed:
-                    self.assertFalse(any(rule.startswith("W9") for rule, _, _ in rules), rules)
-                else:
-                    self.assertEqual({item["line"] for item in report["diagnostics"] if
-                                      item["rule"] == "W9007" and item["path"] == driver},
-                                     {4, 5})
-                    self.assertIn(("W9202", driver, "concrete-method-stub"), rules)
-                    self.assertFalse(any(rule == "W9201" for rule, _, _ in rules), rules)
+                self.assertFalse(any(rule.startswith("W9") for rule, _, _ in rules), rules)
                 config = root / ".quard/config.toml"
                 config.write_text(config.read_text(encoding="utf-8").replace(
                     "leading_underscores = true", "leading_underscores = false"), encoding="utf-8")
@@ -401,10 +391,8 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
                     self.assertEqual(report["exit_code"], 1, report["diagnostics"])
                     rules = {(item["tool"], item["rule"], item["path"])
                              for item in report["diagnostics"]}
-                    self.assertIn(("pylint", "W0611", "src/demo/domain/api.py"), rules)
-                    self.assertIn(("pylint", "W0611", "tests/test_value.py"), rules)
                     self.assertIn(("pylint", "R0903", "src/demo/domain/small.py"), rules)
-                    self.assertFalse(any(item["rule"].startswith("W9") for item in
+                    self.assertFalse(any(item["rule"].startswith("W") for item in
                                          report["diagnostics"]))
                     self.assertFalse(any(item["rule"] in {"E1111", "R0903"} and
                                          item["path"] == "src/demo/domain/api.py"

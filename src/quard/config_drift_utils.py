@@ -17,8 +17,10 @@ def limit_drift(root: Path) -> list[str]:
         for key, (section, option) in LIMIT_MAP.items():
             if actual.get(section, {}).get(option) != limits[profile][key]:
                 mismatches.append(f"{profile}.{key}")
+        control = actual.get("messages_control", {})
         if ("max-line-length" in actual.get("format", {}) or
-                "line-too-long" not in actual.get("messages_control", {}).get("disable", [])):
+                not ({"all", "line-too-long"} & set(control.get("disable", []))) or
+                "line-too-long" in control.get("enable", [])):
             mismatches.append(f"{profile}.physical_line_length")
     return mismatches
 

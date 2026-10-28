@@ -15,7 +15,7 @@ sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
 
 from quard._encapsulated_only_worker import analyze
-from quard._policy import discover_files, read_scope
+from quard._policy import discover_files, read_checks, read_scope
 from quard.check import execute_job, make_jobs
 from legacy_clone_fixture_utils import historical_cli
 
@@ -53,7 +53,8 @@ class Client:
         (self.root / "src").mkdir()
         (self.root / ".quard").mkdir()
         (self.root / ".quard/config.toml").write_text(
-            (QUARD / "defaults/config.toml").read_text().split("[scope]")[0]
+            (QUARD / "defaults/config.toml").read_text().replace(
+                "encapsulated_only = false", "encapsulated_only = true").split("[scope]")[0]
             + '[scope]\nexclude_directory_names = ["generated"]\n'
             'test_directory_names = ["tests"]\n', encoding="utf-8")
         self.run_dir.mkdir(parents=True)
@@ -65,7 +66,8 @@ class Client:
 
     def run_worker(self, name="encapsulated-only", selected=None):
         files = discover_files(self.root, read_scope(self.root))
-        job = next(job for job in make_jobs(self.root, self.run_dir, files, False, selected)
+        job = next(job for job in make_jobs(self.root, self.run_dir, files, False, selected,
+                                          checks=read_checks(self.root))
                    if job["name"] == name)
         result = execute_job(job, self.root, self.run_dir, 30)
         raw = json.loads((self.root / result["raw_output"]["stdout"]).read_text(encoding="utf-8"))

@@ -81,6 +81,13 @@ def identity(value: int) -> int:
     return value
 
 
+def lost() -> int:
+    try:
+        return 1
+    finally:
+        return 2
+
+
 def mismatched(value: int) -> int:
     """Return a number.
 
@@ -110,7 +117,7 @@ class Probe:
                         "--config", str(fixture / "pyproject.toml"), "--output", str(pylint_json),
                         *(["--generated"] if generated(root) else [])], fixture, "pylint-smoke", log_root)
         normalized = normalize("pylint", result, fixture, pylint_json)
-        if normalized["status"] == "error" or not any(d["rule"] == "W0611" for d in normalized["diagnostics"]):
+        if normalized["status"] == "error" or not any(d["rule"] == "W0150" for d in normalized["diagnostics"]):
             raise QuardError("PYLINT_SMOKE_FAILED", "Configured Pylint/plugins failed on a small fixture. See .quard/logs/install-probes/pylint-smoke.*.log")
         if any(d["rule"] in {"C0114", "C0115", "C0116"} for d in normalized["diagnostics"]):
             raise QuardError("DOCSTRING_POLICY_MISMATCH", "Pylint unexpectedly requires docstrings.")

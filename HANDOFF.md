@@ -1,10 +1,50 @@
 # Handoff: speeding up Quard's full check
 
+## Current status
+
+The approved narrow Pylint policy is implemented for both profiles: production
+enables `F`, `W0150`, `R0913`, `R0917`, `R0903`, `R0904`; tests omit `R0903`.
+All other Pylint messages, including R0401/R0801 and reviewed W9xxx, are off.
+`encapsulated_only` now defaults to false; explicit true remains an opt-in.
+Install/apply regenerate this policy and the installer smokes W0150. The prior
+Pylint-only W0640/W1501/W1514/W1510 and tbd clone coverage are lost by agreement.
+Generated architecture now resolves provenance by module prefixes rather than
+sorting all modules for every lookup.
+
+On the disposable tbd clone, the full **static-only** check passed (zero findings,
+zero infrastructure errors) in 38.874 s with the narrowed policy and disabled
+encapsulated-only (`20261028T125038Z-a704cd06`); another passed in 33.907 s
+after the provenance change (`20261028T125323Z-d994ee4f`). Archived reports
+are under `.quard/cache/tbd-checker-perf/.quard/reports/` in this checkout.
+These are noisy wall-clock measurements, not an isolated 5-second attribution.
+The previous profile had 13,381 provenance calls taking 2.296 s under cProfile;
+afterwards those calls took 0.030 s. The remaining generated architecture step
+took 6.428 s under cProfile; Pyright took 17.433 s and production Pylint 10.742 s
+in the first narrowed-policy full check. The 10-second target remains unmet;
+even cold Pyright alone exceeds it. The consumer clone and pinned submodule were
+restored clean. No tbd application or tests ran.
+
+`uv sync --locked --group dev` passed. Full Quard unittest suite passed 786
+tests with 7 skips, using the checkout's Rust toolchain. Quard's full check
+exited **1** with 17,977 existing/active findings and zero infrastructure errors;
+do not call it green. `git diff --check` passed. Do not update the tbd gitlink
+without a reachable Quard commit. The pre-existing protected Pylint API
+compatibility smell remains a separate refactoring issue.
+
+**Next:** Profile the remaining generated-architecture work and Pyright on a
+stable host. Investigate dependency-aware persistent analysis to approach 10 s
+without silently losing diagnostics. Maintain the static-only tbd restriction and
+separate tool/consumer histories. Review the Pylint protected-API compatibility
+smell separately rather than suppressing its diagnostics.
+
+## Earlier measurements and decisions
+
 The user wants the complete static check on private `ArtFilippov/tbd` to approach
 10 seconds. Do not run the tbd application or its tests: the user authorized
 only `quard/check.py` against its source. Clone detection and LCOM4 are disabled
-there and are outside this optimization. Preserve all enabled diagnostics and
-native policies; see `AGENTS.md`, `README.md`, `PROFILE.md` and `COMPATIBILITY.md`.
+there and are outside this optimization. This paragraph predates the approved
+Pylint policy reduction above; see `AGENTS.md`, `README.md`, `PROFILE.md` and
+`COMPATIBILITY.md` for the current coverage.
 
 Commit `25d60d6` contains the earlier cached native Pylint similarity hashes
 and faster generated v2 Tach serialization. Its original, longer handoff is
@@ -56,15 +96,10 @@ five findings in the new compatibility module concern its direct access to the
 protected, setter-free Pylint property. Do not report Quard's static check as
 green. `git diff --check` passed. No tbd application or tests were run.
 
-**Next:** A 10-second full check has not been achieved. The user has now
-approved a narrower Pylint policy; see the decision below before continuing
-performance work. Profile remaining Pylint and Pyright time on a stable host.
-Flag the protected native API compatibility warnings for separate refactoring
-rather than hiding them. Explore persistent analysis only with dependency-aware
-invalidation. Keep Quard and consumer histories separate, and do not update a
-consumer gitlink without a reachable tool commit.
+The following agreement was made after these earlier measurements and has now
+been implemented as described in the current status above.
 
-## Agreed next policy and optimization scope (not yet implemented)
+## Agreed policy and optimization scope (implemented above)
 
 The priority is Quard's custom checks and strict Pyright, not Pylint style or
 Pylint's general bug-finding rules. The user explicitly approved reducing the
@@ -93,12 +128,10 @@ diagnostics or that Pyright replaces every removed rule.
   manifest. Avoid altering the private consumer's committed history.
 - The native production policy is in `src/quard/policy_utils.py` and the test
   profile is derived from it by `test_pylint()`; the job defaults are in
-  `src/quard/check_selection_utils.py`. The current Pylint config enables
-  `all` and loads every official extension except `docparams`. Document exact
-  retained/removed coverage in `PROFILE.md`, `COMPATIBILITY.md` and the policy
-  notes. Update policy regressions, verify full Quard tests/check per `AGENTS.md`,
-  and compare static-only `tbd` reports and timings. Never run the `tbd`
-  application or its tests.
+  `src/quard/check_selection_utils.py`. Previously, Pylint enabled `all` and
+  loaded every official extension except `docparams`. Exact retained/removed
+  coverage is documented in `PROFILE.md`, `COMPATIBILITY.md` and the policy notes.
+  Never run the `tbd` application or its tests.
 
 Previous `tbd` timings (59.323 s total; Pylint production 48.902 s, tests
 22.405 s; Pyright 22.813 s; encapsulated-only 17.811 s) describe the **old**

@@ -1268,7 +1268,7 @@ import collections
                             for item in report["diagnostics"]))
         self.assertEqual(report["coverage"]["lcom4"]["mode"], "selected")
 
-    def test_old_unified_config_defaults_new_checks_on_without_upgrading(self):
+    def test_old_unified_config_defaults_except_encapsulated_on_without_upgrading(self):
         path = self.root / ".quard/config.toml"
         text = path.read_text(encoding="utf-8")
         for key in (*OPTIONAL_JOBS, "duplicate_detection"):
@@ -1277,7 +1277,13 @@ import collections
         fake, seen = fake_tools()
         report = self.run_report(fake)
         self.assertEqual(report["exit_code"], 0)
-        self.assertTrue(set(OPTIONAL_JOBS.values()) <= set(seen))
+        self.assertTrue(set(OPTIONAL_JOBS.values()) - {"encapsulated-only"} <= set(seen))
+        self.assertNotIn("encapsulated-only", seen)
+        job = next(item for item in report["tools"] if item["name"] == "encapsulated-only")
+        self.assertEqual((job["status"], job["exit_code"],
+                          ((self.root / report["report_path"]).parent /
+                           "encapsulated-only-files.json").exists()),
+                         ("skipped", None, False), "Missing switch started a worker or manifest")
         self.assertTrue(set(DUPLICATE_JOBS) <= set(seen))
 
     def test_native_switches_skip_jobs_manifests_and_raw_output(self):

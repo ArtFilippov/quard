@@ -1,36 +1,27 @@
 # Native analysis profile
 
-Quard 1.6.5 preserves the original strict profile. Exact tool pins live in
-`tools.json`; top-level versions are verified on every check. Consumers control
+Quard uses a narrow Pylint profile alongside strict Pyright and independent
+Quard jobs. Exact tool pins live in `tools.json`; top-level versions are verified
+on every check. Consumers control
 their native configs except generated contract-only `tach.toml`; there is no hidden
 violations baseline.
 
 ## Tools and scope
 
-* **Pylint 4.0.8**: core and every discovered official extension except docparams.
-  Readability, naming, exceptions, logging, inference, duplicates and import cycles.
-* **clean-architecture-linter-plugin 1.2.2**: reviewed-policy projects retain
-  architecture, DI, Protocol, I/O and structural heuristics. Generated-policy
-  projects do not load this legacy five-layer plugin in either Pylint profile or
-  maintain its layer map. Plugin-only messages are absent, not passing checks.
-  Reviewed production disables W9201, which incorrectly requires implementation-only
-  members to be declared by a Domain Protocol; W9202 and the other enabled plugin
-  rules remain active. Both modes retain pinned Pylint Protocol fixes; reviewed mode retains the
-  version-guarded plugin fixes in `COMPATIBILITY.md`.
-  Reviewed W9007 checks returns on contract-facing methods in Infrastructure and
-  Bootstrap, including underscored members and resolvable alias/ancestor chains.
-  Contract declarations must belong to the selected discovered first-party source
-  manifest; external packages remain opaque even inside a project's `.venv/`.
-  An Infrastructure method absent from its explicitly inherited local contracts
-  receives the existing precise Domain Protocol return exception regardless of
-  spelling; free functions retain that exception. Bootstrap wiring is exempt only
-  outside proven contract methods. Unknown ancestry, an unrelated same-named
-  contract and a `*Repository` suffix do not prove membership. Raw returns,
-  infrastructure returns without a qualifying annotation, context-manager self
-  returns and other native findings retain their existing checks. The optional
-  leading-underscore job does not control reviewed Pylint.
+* **Pylint 4.0.8**: production enables only F-category fatal errors, W0150
+  (`lost-exception`), R0913/R0917 (total/positional arguments), R0903/R0904
+  (too few/too many public methods). Tests omit R0903. All other C/E/W/R/I
+  messages are disabled, including R0401 cycles, R0801 duplication, import order,
+  unused names, style and general bug-finding. Enabled rules still use the configured
+  readability limits. A fatal or worker/configuration failure is not a passing check.
+* **clean-architecture-linter-plugin 1.2.2**: reviewed projects still load the
+  legacy plugin, but its W9xxx messages are disabled in both ordinary Pylint
+  profiles. Generated projects do not load it or maintain its layer map. These
+  absent diagnostics are not passing checks. Version-guarded compatibility fixes
+  remain available for explicit native regression probes; see `COMPATIBILITY.md`.
 * **Pyright 1.1.414** with its Node runtime: strict plus the additional diagnostics
-  in `_policy.PYRIGHT_EXTRA`. Cycles are assigned to Pylint.
+  in `_policy.PYRIGHT_EXTRA`. `reportImportCycles` remains disabled; Tach checks
+  configured module boundaries and cycles, not all Python import cycles.
 * **Tach 0.35.1**: both internal and external checks, explicit module/public API
   boundaries, layers, cycles, exact dependencies (including unused declarations).
   The adapter uses pinned native APIs: this CLI version's JSON path would skip the
@@ -114,7 +105,7 @@ violations baseline.
    properties and special methods remain behavioral. Excluded material and the
    length of a reported original range cannot raise the prepared minimum.
    Declarations do not enter renamed/similar. This minimum is
-   distinct from Pylint's mandatory `min_similarity_lines` readability limit.
+   distinct from Pylint's configured but inactive `min_similarity_lines` limit.
    With the ordinary source-built first-party `quard-clones==0.1.0` component
    (from a local locked path in the Quard checkout, or the consumer's pinned
    Git source), all three jobs use the linked `cpd-core==0.1.20`,
@@ -161,8 +152,8 @@ violations baseline.
   that prepared gap, while fragment ranges, `lines` and text refer to original
   source. Separate functions and classes (including adjacent or nested ones)
   remain separate detection and merge units, even in the same file.
-  Set `duplicate_detection = false` under `[checks]` to skip all three jobs; the
-  Pylint profile and its duplicate-code rule are unaffected.
+  Set `duplicate_detection = false` under `[checks]` to skip all three jobs;
+  Pylint's duplicate-code rule is disabled in both profiles.
 * **LCOM4**: Quard's basic AST-based class cohesion check, run as its own job.
 * **Constructor purity (default-on, optional)**: the independent `CONSTRUCTOR_PURITY` rule checks
   eager constructor syntax in discovered production and test `.py` files, including
@@ -222,11 +213,11 @@ violations baseline.
    and preserving value, AST and escape spelling. An unsplittable escape retains
    `ST011` and a reason. It excludes call arguments, docstrings, protected
    inline expressions, raw, bytes, triple-quoted and f-string literals. Generated
-   Pyright sets `reportImplicitStringConcatenation = none`; Pylint keeps
-   `implicit-str-concat` enabled (same-line concatenation still fails).
+   Pyright sets `reportImplicitStringConcatenation = none`; Pylint also disables
+   `implicit-str-concat`, so same-line concatenation has no native check.
    Pylint C0301 (`line-too-long`) is disabled in both production and test profiles:
    Stairfmt limits supported expressions and ordinary strings, not all physical
-   lines. Module length and other Pylint format and design checks remain enabled.
+   lines. Other Pylint format rules are disabled; selected design counts remain.
    UTF-8 BOM and declared non-UTF-8 Python source are supported by check and fix;
    fixes preserve the original encoding and BOM. CRLF files keep CRLF, and mixed
    files retain untouched endings while new lines follow the edited region's style.
@@ -963,23 +954,17 @@ types are expected in annotations and Google Args. Upstream check-arg-defaults
 only adds NumPy checks; it does not prove Google default-value consistency.
 
 `pylint.extensions.docparams` collides with the architecture plugin's W900x/W901x
-IDs and is not loaded. Pylint docstyle and pydoclint cover documentation without
+IDs and is not loaded. pydoclint covers existing documentation without
 claiming identical rule sets. The discovered catalog and policy notes are saved
 in `.quard/pylint-catalog.json` and `.quard/policy-notes.json`.
 
-Production disables mandatory docstrings and four checks explicitly delegated to
-Pyright: reimported, undefined-variable, used-before-assignment and
-possibly-used-before-assignment. Unused/private/unreachable diagnostics and
-architecture W9001/W9003 remain in reviewed mode: partial overlap is not identical
-coverage. Reviewed production also disables W9201; W9202 remains enabled.
-
-Tests retain strict typing, execution/syntax/exception checks and validation of
-existing docs. They allow fixture/reused names and unused fixture arguments,
-protected access, one-operation containers, literal expected values and repeated
-arrange/assert blocks. Production-only architecture rules are disabled for tests;
-W9101 (mock-count heuristic) and W9501 (anti-bypass) remain. W9102 is disabled to
-allow white-box tests. Test Pyright environments allow private access and ignored
-call results. Exact disable lists and rationales are in generated policy notes.
+Production and tests disable all Pylint messages before enabling the IDs listed
+above. The test profile also omits R0903. The plugin's W9xxx rules, native
+similarity R0801 and import cycles R0401 no longer run. Pyright and Quard cover
+some removed findings but not all: Pylint-only W0640, W1501, W1514 and W1510
+are lost. Where Quard duplicate detection is disabled, there is no clone coverage.
+Test Pyright environments still allow private access and ignored call results.
+Exact selections and rationales are in generated policy notes.
 
 ## Architecture
 

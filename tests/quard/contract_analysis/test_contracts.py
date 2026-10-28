@@ -1,6 +1,7 @@
 """End-to-end scope and report regressions for explicit class contracts."""
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import sys
@@ -14,9 +15,22 @@ sys.path.insert(0, str(QUARD / "src"))
 from quard._policy import discover_files, read_scope
 from quard.check import execute_job, make_jobs
 from quard.check_selection_utils import CHECK_DEFAULTS
+from quard.contract_analysis.contracts import Contracts
 
 
 class TestContracts(unittest.TestCase):
+    def test_nested_module_provenance_prefers_nearest_binding_and_falls_back(self):
+        trees = {
+            "src/pkg/__init__.py": ast.parse("from pkg.impl import Item as long\n"),
+            "src/pkg/long/__init__.py": ast.parse("from pkg.impl import Item as Closest\n"),
+            "src/pkg/impl.py": ast.parse("class Item:\n    class Exported: pass\n"),
+        }
+        contracts = Contracts(trees)
+        self.assertEqual((contracts.provenance("pkg.long.Closest"),
+                          contracts.provenance("pkg.long.Exported")),
+                         ("pkg.impl.Item", "pkg.impl.Item.Exported"),
+                         "Provenance lost a nested binding or parent fallback")
+
     @override
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)

@@ -8,6 +8,9 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
+from pylint.lint import Run
+from pylint.reporters.collecting_reporter import CollectingReporter
+
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
 sys.path.insert(0, str(QUARD / "tests"))
@@ -183,7 +186,7 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
                           "production.physical_line_length" in drift,
                           production["format"]["max-module-lines"],
                           tests["format"]["max-module-lines"],
-                          all("line-too-long" in profile["messages_control"]["disable"]
+                          all("all" in profile["messages_control"]["disable"]
                               for profile in (production, tests))),
                          (False, False, True, 400, 800, True))
 
@@ -232,17 +235,73 @@ class TestConfiguredConsumerPolicy(unittest.TestCase):
 
     def test_optional_docs_and_core_checks(self):
         pylint = load_toml(self.root / "pyproject.toml")["tool"]["pylint"]
-        self.assertEqual(pylint["messages_control"]["enable"], ["all"])
-        self.assertIn("missing-function-docstring", pylint["messages_control"]["disable"])
-        self.assertNotIn("protected-access", pylint["messages_control"]["disable"])
-        self.assertNotIn("unused-variable", pylint["messages_control"]["disable"])
+        self.assertEqual(pylint["messages_control"], {
+            "disable": ["all"],
+            "enable": ["F", "W0150", "R0913", "R0917", "R0903", "R0904"]},
+            "Unapproved production rules remained enabled")
 
-    def test_test_whitebox_no_conflict(self):
+    def test_pylint_native_policy_keeps_only_approved_messages(self):
+        source = self.root / "src/demo/domain/api.py"
+        source.write_text("class Small:\n    def run(self, a, b, c, d, e, f):\n"
+                          "        try:\n            return a\n"
+                          "        finally:\n            return b\n"
+                          "class Wide:\n" + "".join(
+                              f"    def method{index}(self): pass\n" for index in range(13)),
+                          encoding="utf-8")
+        reporter = CollectingReporter()
+        Run(["--rcfile=" + str(self.root / "pyproject.toml"), str(source)],
+            reporter=reporter, exit=False)
+        self.assertEqual({item.msg_id for item in reporter.messages},
+                         {"W0150", "R0913", "R0917", "R0903", "R0904"},
+                         "Unapproved Pylint diagnostics remained enabled")
+
+    def test_pylint_fatal_file_failure_is_not_disabled(self):
+        reporter = CollectingReporter()
+        Run(["--rcfile=" + str(self.root / "pyproject.toml"),
+             str(self.root / "src/demo/missing.py")], reporter=reporter, exit=False)
+        self.assertIn("F0001", {item.msg_id for item in reporter.messages},
+                      "Fatal Pylint failure was suppressed")
+
+    def test_pylint_worker_does_not_accept_unparseable_source(self):
+        source = self.root / "src/demo/domain/api.py"
+        source.write_text("def broken(:\n    pass\n", encoding="utf-8")
+        manifest = self.root / ".quard/invalid-files.json"
+        manifest.write_text(json.dumps(["src/demo/domain/api.py"]), encoding="utf-8")
+        result = subprocess.run([sys.executable, str(QUARD / "src/quard/_pylint_worker.py"),
+                                 "--manifest", str(manifest), "--config",
+                                 str(self.root / "pyproject.toml"), "--output",
+                                 str(self.root / ".quard/pylint-invalid.json")],
+                                cwd=self.root, capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0,
+                            "Invalid source passed the Pylint worker")
+
+    def test_missing_encapsulated_switch_skips_worker(self):
+        from quard.check_runner.runner_utils import make_jobs
+
+        setting = self.root / ".quard/config.toml"
+        setting.write_text(setting.read_text().replace("encapsulated_only = true\n", ""))
+        jobs = make_jobs(self.root, self.root / ".quard/runs", self.policy().files(), True,
+                         checks=self.policy().checks())
+        self.assertNotIn("encapsulated-only", {job["name"] for job in jobs},
+                         "Missing switch started the encapsulated-only worker")
+
+    def test_explicit_encapsulated_opt_in_runs_worker(self):
+        from quard.check_runner.runner_utils import make_jobs
+
+        setting = self.root / ".quard/config.toml"
+        setting.write_text(setting.read_text().replace("encapsulated_only = false",
+                                                     "encapsulated_only = true"))
+        jobs = make_jobs(self.root, self.root / ".quard/runs", self.policy().files(), True,
+                         checks=self.policy().checks())
+        self.assertIn("encapsulated-only", {job["name"] for job in jobs},
+                      "Explicit opt-in did not start the encapsulated-only worker")
+
+    def test_test_profile_excludes_only_few_public_methods(self):
         tests = load_toml(self.root / ".quard/pylint-tests.toml")["tool"]["pylint"]
-        disabled = tests["messages_control"]["disable"]
-        self.assertIn("W9102", disabled)
-        self.assertNotIn("W9101", disabled)
-        self.assertIn("protected-access", disabled)
+        self.assertEqual(tests["messages_control"], {
+            "disable": ["all"],
+            "enable": ["F", "W0150", "R0913", "R0917", "R0904"]},
+            "Unapproved test rules remained enabled")
 
     def test_symlink_managed_target_rejected(self):
         target = self.root / "elsewhere.txt"

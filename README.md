@@ -171,12 +171,11 @@ reports source-root layout; reviewed and generated version-1 projects retain the
 contract-name folder diagnostics. Malformed
 source and regeneration failures are configuration errors (exit 2).
 
-Generated projects run Pylint core and configured official extensions without the
-legacy clean-architecture plugin or its layer map. Protocol compatibility fixes
-still apply. Reinstall to migrate an older generated Pylint configuration; apply
-also restores the generated profile. Plugin-only W9xxx findings are not checks in
-generated mode. Existing consumer-owned Tach configurations remain on the
-reviewed-policy path:
+Generated projects run the narrowed Pylint profile without the legacy
+clean-architecture plugin or its layer map. Protocol compatibility fixes
+still apply. Apply after upgrading to select the new native policy. Plugin-only
+W9xxx findings are not checks in either architecture mode. Existing consumer-owned
+Tach configurations remain on the reviewed-policy path:
 
 Installation does **not** accept reviewed architecture. For a reviewed project:
 
@@ -249,7 +248,7 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `free_function_placement = true` | `free-function-placement` |
 | `leading_underscores = true` | `leading-underscores` (first-party names and paths) |
 | `cached_property_migration = true` | `cached-property-migration` |
-| `encapsulated_only = true` | `encapsulated-only` |
+| `encapsulated_only = false` | `encapsulated-only` (explicit opt-in) |
 | `constructor_purity = true` | `constructor-purity` |
 | `lambda_injection = true` | `lambda-injection` |
 | `pyright = true` | `pyright` |
@@ -260,15 +259,18 @@ Select independent jobs under `[checks]` in `.quard/config.toml`:
 | `tuple_signatures = true` | `tuple-signatures` |
 | `stairfmt = true` | `stairfmt` (layout of composed calls) |
 
-Pylint's production and test profiles remain required. `dependency_types` defaults
-to `true` on generated projects and `false` on reviewed projects, including upgrades.
+Pylint's production and test profiles remain required. They retain fatal errors,
+W0150, R0913, R0917 and R0904; production additionally retains R0903.
+`dependency_types` defaults to `true` on generated projects and `false` on
+reviewed projects, including upgrades.
 Explicitly enabling it on a reviewed project is a configuration error (exit 2).
 `tach` defaults to `true`; disabling it skips both Tach jobs and removes the
 Tach-only acceptance requirement for reviewed projects. Generated architecture
 still regenerates `tach.toml` even with Tach disabled. With Tach enabled,
 reviewed projects still require acceptance.
-Other switches default to `true` on fresh installations and upgrades; explicit
-values survive reinstallation. Missing new keys use those defaults until upgrade.
+Other switches except `encapsulated_only` default to `true` on fresh installations
+and upgrades; explicit values survive reinstallation. Missing new keys use those
+defaults until upgrade.
 All values must be booleans; unknown keys fail
 with exit 2. Disabled jobs appear as `skipped` with null exit codes and have no
 manifest or worker execution. Missing `constructor_purity` also defaults to `true`;
@@ -285,7 +287,7 @@ above `@override` when implementing a property contract. Check descriptor semant
 before migrating writable properties. The report records this job's independent
 status and positioned findings; worker or malformed-source failures exit 2.
 Disabling duplicate detection skips all three clone jobs, their manifests and their
-native JSON, without changing Pylint's required duplicate-code rule. Pyright and
+native JSON; Pylint's R0801 duplicate-code rule is also disabled. Pyright and
 pydoclint likewise skip only their own jobs; their native configuration remains
 consumer-owned. All consumer-pinned tools are still installed and version-checked
 on every check; installation runs source-built clone and other native smoke
@@ -350,7 +352,7 @@ continuations in lists and function signatures are outside `ST010`'s scope.
 `--indent` accepts only 4; other widths fail with exit 2 before source
 edits, in both check and fix.
 Pylint's physical `line-too-long` (C0301) check is disabled in both profiles;
-`max_module_lines` and unrelated native checks remain active. Stairfmt governs its
+other Pylint formatting and style rules are disabled too. Stairfmt governs its
 documented expression, indentation and string scope, not every physical line.
 Remove the retired `max_line_length` setting from any existing
 `.quard/config.toml` and run `apply.py`: until then install, apply and check reject
@@ -414,9 +416,9 @@ physical newline inside a long literal is reported but retained with a manual-fi
 reason.
 Call arguments, docstrings, protected inline expressions, raw, bytes, triple-quoted,
 f-string and Python 3.14 template string literals are excluded. Generated Pyright
-disables `reportImplicitStringConcatenation`; Pylint retains `implicit-str-concat`,
-which still flags same-line concatenation but does not flag Stairfmt's multiline
-pieces. Source files with a UTF-8 BOM or a declared non-UTF-8 encoding are decoded
+disables `reportImplicitStringConcatenation`; Pylint also disables
+`implicit-str-concat`, so same-line concatenation is not checked there. Source
+files with a UTF-8 BOM or a declared non-UTF-8 encoding are decoded
 as Python source by both entry points;
 fix retains the original encoding and BOM. Fixes also retain CRLF in CRLF files;
 in mixed-ending files untouched lines keep their endings and inserted lines use
@@ -475,7 +477,8 @@ positive `min_lines` value to `min_units` without changing its number. Check and
 apply require reinstall until that migration is done. Both names together, unknown
 keys and invalid numbers fail with exit 2. An explicit `min_units` choice survives
 install, reinstall and apply. This setting is independent of
-Pylint's required `[readability.production] min_similarity_lines` limit and
+Pylint's configured but inactive `[readability.production] min_similarity_lines`
+limit and
 `[checks] duplicate_detection`, which selects the three jscpd jobs together.
 The historical native CLI scans unprepared `.py` files and counts physical source
 lines. The installed Rust path prepares discovered files in memory, applying the
@@ -563,8 +566,8 @@ dependencies, including linked jscpd 5.4.0 crates `cpd-core 0.1.20`,
 `cpd-finder 0.1.20`, `cpd-tokenizer 0.1.19` and `cpd-reporter 0.1.21`.
 Install and check validate the distribution, wheel ABI and linked crate versions;
 install also runs packaged exact/renamed/gap-similar and clean probes with logs
-under `.quard/logs/install-probes/`. Pylint's required duplication analysis
-remains independent. The jscpd CLI is retained in Quard's dev group solely for
+under `.quard/logs/install-probes/`. Pylint's duplication analysis is disabled.
+The jscpd CLI is retained in Quard's dev group solely for
 historical benchmark comparisons, not installed or probed in consumers. This
 checkout's locked dev group builds `quard-clones` from `rust/quard-clones`; its
 ordinary full check runs the same three native jobs as consumers. Consumers
@@ -627,20 +630,20 @@ The class-contract rule checks every discovered `.py` and `.pyi` class in both
 profiles for an explicit inherited contract, independently of LCOM4 selection.
 Implementation methods and properties absent from inherited local contracts are
 implementation-only members, including when an unrelated contract has the same name.
-Reviewed production Pylint disables W9201 through its native configuration on
-installation and apply; W9202 and other enabled rules remain active. Generated
-projects do not load the legacy plugin. This policy is independent of the optional
-leading-underscore check.
+Reviewed production Pylint disables all plugin W9xxx diagnostics, including
+W9201 and W9202. Generated projects do not load the legacy plugin. This policy
+is independent of the optional leading-underscore check.
 It also rejects redeclarations of methods and recognized properties from any
 resolvable customer-owned non-contract ancestor, while allowing declarations supplied
 only by local contracts. Each member receives one violation per class and source file.
-Reviewed W9007 treats methods declared in explicitly inherited local Protocols
-or abstract interfaces as contract-facing, including inherited aliases and `_`
+Historical reviewed W9007 compatibility tests treat methods declared in
+explicitly inherited local Protocols or abstract interfaces as contract-facing,
+including inherited aliases and `_`
 names. Helpers outside those contracts can use the precise annotated Domain
 Protocol return exception regardless of spelling. Bootstrap wiring is exempt
 outside proven contract methods; unknown bases, unrelated same-named contracts
 and `*Repository` suffixes grant no contract status. Disabling the naming job
-does not change W9007; see [ADR 0006](docs/adr/0006-inherited-contract-return-boundaries.md).
+does not enable W9007; see [ADR 0006](docs/adr/0006-inherited-contract-return-boundaries.md).
 The independent outer-class rule checks every discovered production and test `.py` and
 `.pyi` file, even when LCOM4 is narrowed or skipped. A file may declare at most one
 class outside another class; function-local classes count as outer classes.

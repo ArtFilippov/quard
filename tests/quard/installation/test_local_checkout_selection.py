@@ -8,6 +8,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import tomllib
+import tomlkit
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "check_runner"))
@@ -40,6 +41,16 @@ class TestLocalCheckoutSelection(unittest.TestCase):
             command(["git", "clone", "--shared", str(ROOT), str(origin)], base)
             revision = command(["git", "rev-parse", "HEAD"], origin)
             adoption_consumer(consumer)
+            # The pinned older tool owns the broad native policy in this fixture.
+            project = consumer / "pyproject.toml"
+            doc = tomlkit.parse(project.read_text(encoding="utf-8"))
+            control = doc["tool"]["pylint"]["messages_control"]
+            control["enable"] = ["all"]
+            control["disable"] = ["line-too-long", "missing-module-docstring",
+                                  "missing-class-docstring", "missing-function-docstring",
+                                  "reimported", "undefined-variable", "used-before-assignment",
+                                  "possibly-used-before-assignment"]
+            project.write_text(tomlkit.dumps(doc), encoding="utf-8")
             setting = consumer / ".quard/config.toml"
             setting.write_text(setting.read_text(encoding="utf-8").replace(
                 "cached_property_migration = true\n", "").replace(
