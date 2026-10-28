@@ -33,7 +33,7 @@ from quard.architecture_draft.configured_architecture_draft import ConfiguredArc
 from quard.check import display
 from quard.check_runner.check_runner import CheckRunner
 from quard.check_runner.native_check_runner import NativeCheckRunner
-from quard.check_runner.runner_utils import binary, installed_versions
+from quard.check_runner.runner_utils import binary, envelope_jobs, installed_versions
 from quard.report_utils import normalize
 from quard.pylint_imports_utils import install as install_imports
 from quard.pylint_similarity_utils import install as install_similarity
@@ -113,7 +113,7 @@ class TestNativeCheckRunner(unittest.TestCase):
             symilar.hash_lineset = native
         self.assertEqual(len(calls), len(probe.linesets), "Source lines were hashed repeatedly")
 
-    def test_pylint_waits_for_folder_evidence(self):
+    def test_pyright_starts_early_and_pylint_waits_for_folder_evidence(self):
         ready = Event()
         observed = []
 
@@ -121,15 +121,20 @@ class TestNativeCheckRunner(unittest.TestCase):
             if job["name"] == "contract-folders":
                 time.sleep(0.05)
                 ready.set()
-            else:
+            elif job["name"] == "pylint-production":
                 observed.append(ready.is_set())
             return {"name": job["name"], "tool": job["name"], "diagnostics": []}
 
-        self.runner.run_jobs([{"name": "pylint-production", "tool": "pylint",
-                               "argv": ["--envelope-evidence"]},
-                              {"name": "contract-folders", "tool": "contract-folders",
-                               "argv": []}], serial=False, execute=execute)
-        self.assertEqual(observed, [True], "Pylint started before the folder proof")
+        jobs = [{"name": name, "tool": name, "argv": argv} for name, argv in (
+            ("pylint-production", ["--envelope-evidence"]),
+            ("pylint-tests", []), ("contract-folders", []),
+            ("instance-fields", []), ("pyright", []))]
+        order = [job["name"] for job in envelope_jobs(jobs)]
+        self.runner.run_jobs(jobs, serial=False, execute=execute)
+        self.assertEqual((order, observed),
+                         (["pyright", "contract-folders", "pylint-production",
+                           "pylint-tests", "instance-fields"], [True]),
+                         "Pyright was delayed or Pylint started before folder proof")
 
     def test_pylint_runs_when_folder_proof_fails(self):
         fake, seen = fake_tools({"contract-folders": {"stdout": "broken", "code": 2}})

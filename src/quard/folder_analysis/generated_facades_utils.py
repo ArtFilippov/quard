@@ -5,6 +5,7 @@ import ast
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from quard.architecture_draft.boundary_source_utils import destination
 from quard.contract_analysis.contract_utils import dotted, module_name
 if TYPE_CHECKING:
     from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
@@ -223,28 +224,25 @@ def facade_evidence(trees: dict[str, ast.Module], ownership: GeneratedOwnership
             return None
         if ownership.node_for(target) is not None:
             return target
-        for module in sorted(by_module, key=len, reverse=True):
-            if target.startswith(module + "."):
-                symbol, _, suffix = target[len(module) + 1:].partition(".")
-                entry = bindings[by_module[module]][0].get(symbol)
-                if entry is None or entry[0] is None:
-                    return None
-                return resolve(entry[0] + ("." + suffix if suffix else ""),
-                               seen | {target})
-        for module in sorted(module_paths, key=len, reverse=True):
-            if not target.startswith(module + "."):
-                continue
+        module = destination(target.rpartition(".")[0], by_module)
+        if module is not None:
+            symbol, _, suffix = target[len(module) + 1:].partition(".")
+            entry = bindings[by_module[module]][0].get(symbol)
+            if entry is None or entry[0] is None:
+                return None
+            return resolve(entry[0] + ("." + suffix if suffix else ""),
+                           seen | {target})
+        module = destination(target.rpartition(".")[0], module_paths)
+        if module is not None:
             symbol = target[len(module) + 1:].partition(".")[0]
             path = module_paths[module]
             stub = str(Path(path).with_suffix(".pyi"))
-            if path not in intermediate:
-                break
-            source_entries, conflicts = intermediate[path]
-            if symbol in {name for name, _ in conflicts} or (stub in intermediate and
-                    symbol in source_entries and symbol in intermediate[stub][0] and
-                    source_entries[symbol][0] != intermediate[stub][0][symbol][0]):
-                return None
-            break
+            if path in intermediate:
+                source_entries, conflicts = intermediate[path]
+                if symbol in {name for name, _ in conflicts} or (stub in intermediate and
+                        symbol in source_entries and symbol in intermediate[stub][0] and
+                        source_entries[symbol][0] != intermediate[stub][0][symbol][0]):
+                    return None
         return ownership.provenance(target)
 
     results: list[dict[str, object]] = []

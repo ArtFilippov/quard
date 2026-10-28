@@ -40,7 +40,7 @@ def inactive_job(name: str, status: str, error: str | None = None) -> dict[str, 
 
 
 def envelope_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Schedule folder proof before Pylint, retaining standalone Pylint behavior.
+    """Start Pyright early and finish folder proof before dependent Pylint.
 
     Args:
         jobs (list[dict[str, Any]]): Selected native analyzer jobs.
@@ -51,14 +51,14 @@ def envelope_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     folder = next((job for job in jobs if job["name"] == CONTRACT_FOLDERS), None)
     pylint = next((job for job in jobs if job["name"] == PYLINT_PRODUCTION
                    and ENVELOPE_EVIDENCE in job["argv"]), None)
-    if pylint is None:
-        return jobs
-    if folder is None:
+    priority = [job for job in jobs if job["name"] == "pyright"]
+    if pylint is not None and folder is None:
         argv = pylint["argv"]
         argv.pop(argv.index(ENVELOPE_EVIDENCE) + 1)
         argv.remove(ENVELOPE_EVIDENCE)
-        return jobs
-    return [folder, pylint, *(job for job in jobs if job is not folder and job is not pylint)]
+    if pylint is not None and folder is not None:
+        priority.extend((folder, pylint))
+    return [*priority, *(job for job in jobs if all(job is not item for item in priority))]
 
 
 def dependent_job(job: dict[str, Any], execute: Callable[[dict[str, Any]], dict[str, Any]],

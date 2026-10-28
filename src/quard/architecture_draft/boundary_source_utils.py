@@ -35,5 +35,9 @@ def source_imports(name: str, path: str, tree: ast.Module) -> list[str]:
 
 
 def destination(target: str, paths: Mapping[str, object]) -> str | None:
-    return next((module for module in sorted(paths, key=len, reverse=True)
-                 if target == module or target.startswith(module + ".")), None)
+    prefix = target
+    while prefix:
+        if prefix in paths:
+            return prefix
+        prefix = prefix.rpartition(".")[0]
+    return None
