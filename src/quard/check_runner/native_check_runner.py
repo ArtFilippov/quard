@@ -10,6 +10,7 @@ from functools import partial
 import os
 from pathlib import Path
 import sys
+from threading import Event
 import time
 import uuid
 from typing import Any, override
@@ -24,8 +25,8 @@ from quard.check_runner.check_runner import CheckRunner
 from quard.check_selection_utils import (CHECK_DEFAULTS, CONSTRUCTOR_PURITY, DUPLICATE_JOBS,
                                          OPTIONAL_JOBS, TACH_JOBS, validate_architecture_checks)
 from quard.check_runner.runner_utils import (binary, execute_job, installed_versions,
-                                               inactive_job, make_jobs, select_lcom_files,
-                                               capture_clone_batch)
+                                                inactive_job, make_jobs, select_lcom_files,
+                                                capture_clone_batch, dependent_job, envelope_jobs)
 from quard.clone_engine_utils import require_source_pin
 
 __all__ = ["NativeCheckRunner", "binary", "execute_job", "installed_versions",
@@ -44,10 +45,13 @@ class NativeCheckRunner(CheckRunner):
         results: list[dict[str, Any]] = []
         diagnostics: list[dict[str, Any]] = []
         workers = 1 if serial else min(4, max(1, os.cpu_count() or 1), len(jobs))
+        ready = Event()
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(execute, job): job for job in jobs}
+            futures = {pool.submit(dependent_job, job, execute, ready): job
+                       for job in envelope_jobs(jobs)}
             for future in as_completed(futures):
                 job = futures[future]
+                result: dict[str, Any]
                 try:
                     result = future.result()
                 except Exception as exc:

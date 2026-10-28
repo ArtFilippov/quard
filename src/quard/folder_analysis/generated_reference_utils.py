@@ -81,24 +81,44 @@ def _imported(path: str, statement: ast.Import | ast.ImportFrom) -> list[tuple[s
             for alias in statement.names]
 
 
-def _concrete_module(target: str, trees: dict[str, ast.Module],
-                     ownership: FolderAnalysis) -> bool:
-    paths = [path for path in trees if module_name(path) == target and path.startswith("src/")]
-    if not paths:
-        return False
-    # Package facades are validated independently. Reuse the generated role
-    # classification so stub-only imports cannot disagree with Tach's source role.
-    if any(path.endswith(("/__init__.py", "/__init__.pyi")) for path in paths):
-        return False
+def concrete_modules(trees: dict[str, ast.Module], ownership: FolderAnalysis) -> set[str]:
+    """Index concrete source modules once for every import in a check.
+
+    Args:
+        trees (dict[str, ast.Module]): Discovered source, test and stub syntax.
+        ownership (FolderAnalysis): Resolved contract and facade evidence.
+
+    Returns:
+        set[str]: Importable concrete modules outside validated package facades.
+    """
+    paths: dict[str, list[str]] = {}
+    for path in trees:
+        if path.startswith("src/"):
+            paths.setdefault(module_name(path), []).append(path)
     contracts = {name for name, _, _ in ownership.all_declarations()
                  if ownership.is_contract(name)}
-    return any(area(path)[1] != ORDINARY or
-               not contract_only(path, trees[path], ownership, contracts) for path in paths)
+    # Package facades are validated independently. Classify all source/stub views
+    # together so a stub-only import cannot disagree with Tach's source role.
+    return {name for name, files in paths.items()
+            if not any(path.endswith(("/__init__.py", "/__init__.pyi")) for path in files)
+            and any(area(path)[1] != ORDINARY or
+                    not contract_only(path, trees[path], ownership, contracts)
+                    for path in files)}
 
 
-def concrete_imports(path: str, tree: ast.Module, trees: dict[str, ast.Module],
-                     ownership: FolderAnalysis) -> list[dict[str, object]]:
-    """Check source and stub imports, including those under TYPE_CHECKING."""
+def concrete_imports(path: str, tree: ast.Module, ownership: FolderAnalysis,
+                     modules: set[str]) -> list[dict[str, object]]:
+    """Check source and stub imports, including those under TYPE_CHECKING.
+
+    Args:
+        path (str): Importing source or stub path.
+        tree (ast.Module): Its parsed syntax.
+        ownership (FolderAnalysis): Resolved contract evidence.
+        modules (set[str]): Concrete module names for this check.
+
+    Returns:
+        list[dict[str, object]]: Positioned concrete import findings.
+    """
     if area(path)[1] != ORDINARY:
         return []
     results: list[dict[str, object]] = []
@@ -113,10 +133,9 @@ def concrete_imports(path: str, tree: ast.Module, trees: dict[str, ast.Module],
             concrete = (ownership.node_for(target) is not None and
                         not ownership.is_contract(target))
             module_target = target.rpartition(".")[0]
-            private_member = (_concrete_module(module_target, trees, ownership) and
+            private_member = (module_target in modules and
                               not ownership.export_contract(target))
-            if not concrete and not private_member and not _concrete_module(
-                    target, trees, ownership):
+            if not concrete and not private_member and target not in modules:
                 continue
             results.append({"rule": "CONCRETE_IMPLEMENTATION_IMPORT", "path": path,
                             "line": statement.lineno, "column": statement.col_offset + 1,

@@ -124,6 +124,36 @@ class TestFolderOwnership(unittest.TestCase):
         self.assertEqual({item["obj"] for item in findings if item["messageId"] == "R0903"},
                          {"Invalid", "Ordinary"}, "R0903 exempted an unproved class")
 
+    def test_native_pylint_reuses_folder_envelope_evidence(self):
+        self.put("src/pkg/port/port.py", "from typing import Protocol\n"
+                 "class Port(Protocol):\n    def run(self) -> int: ...\n")
+        self.put("src/pkg/port/envelopes/proven.py", "from pkg.port.port import Port\n"
+                 "class Proven(Port):\n    def __init__(self, delegate: Port) -> None:\n"
+                 "        self.delegate = delegate\n    def run(self) -> int:\n"
+                 "        return self.delegate.run()\n")
+        self.put("src/pkg/port/envelopes/invalid.py", "from pkg.port.port import Port\n"
+                 "class Invalid(Port):\n    def run(self) -> int:\n        return 1\n")
+        files = discover_files(self.root, read_scope(self.root))["production"]
+        evidence = self.run_dir / "envelope-evidence.json"
+        from quard.folder_analysis.folder_utils import analyze
+        analyze(self.root, files, evidence=evidence)
+        config = self.root / "pylint.toml"
+        config.write_text(tomlkit.dumps({"tool": {"pylint": base_pylint([], read_scope(self.root))}}))
+        manifest = self.run_dir / "files.json"
+        manifest.write_text(json.dumps(files))
+        findings = []
+        for shared in (False, True):
+            output = self.run_dir / f"pylint-{shared}.json"
+            subprocess.run([sys.executable, str(QUARD / "_pylint_worker.py"),
+                            "--manifest", str(manifest), "--envelopes-manifest", str(manifest),
+                            "--config", str(config), "--output", str(output), "--generated",
+                            *(["--envelope-evidence", str(evidence)] if shared else [])],
+                           cwd=self.root, capture_output=True, text=True, check=False)
+            findings.append(json.loads(output.read_text())["messages"])
+        self.assertEqual((findings[0] == findings[1], json.loads(evidence.read_text())),
+                         (True, [["src/pkg/port/envelopes/proven.py", 2]]),
+                         "shared proof changed Pylint diagnostics or lost a valid Envelope")
+
     def test_native_pylint_restores_r0903_without_contract_folders(self):
         self.put("src/pkg/port/port.py", "from typing import Protocol\n"
                  "class Port(Protocol):\n    def run(self, value: int) -> int: ...\n")
