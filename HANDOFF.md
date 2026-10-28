@@ -1,4 +1,66 @@
-# Handoff: test-suite profiling
+# Handoff: Quard
+
+## Current task: full-check performance (28 October 2026)
+
+The user wants Quard's full check to approach 10 seconds on private `tbd`.
+**Do not run the tbd application or its tests.** The user authorized only
+`quard/check.py` for static analysis of its sources. Clone detection and LCOM4
+are disabled in that consumer; do not optimize those jobs for this task.
+
+The current Quard changes are in `src/quard/pylint_similarity_utils.py`,
+`src/quard/pylint_worker_utils.py` and
+`src/quard/architecture_draft/generated_architecture_utils.py`; the tests are
+in the corresponding `tests/quard/check_runner/` and
+`tests/quard/architecture_draft/` files. `COMPATIBILITY.md` describes the
+version-guarded Pylint hash cache and linear-output generated v2 TOML rendering.
+No native rule, diagnostic limit or consumer configuration was disabled.
+
+Evidence on the same 624-file private checkout (563 production, 61 test files):
+
+- Before this session's changes, the then-current Quard checkout took **99.631 s**
+  with exit 0 and no diagnostics. Report: the consumer clone's
+  `.quard/reports/20261028T090632Z-d499f9aa/report.json`.
+- With the hash cache and fast rendering, one full static check took **66.224 s**,
+  exit 0, no diagnostics. Report:
+  `.quard/reports/20261028T092750Z-c20d48aa/report.json` in that clone.
+  On a much busier host, the pinned old gitlink took **152.819 s** versus
+  **113.654 s** with the new code, both exit 0 with no diagnostics. Reports:
+  `20261028T100137Z-6e33064d` and `20261028T100425Z-c3493b50` respectively.
+  Host load varied markedly; these are observations, not a controlled 10-second
+  benchmark. The pinned gitlink is older than this checkout and also predates
+  the already-committed Envelope optimization (#184).
+- Parent cProfile isolated generated TOML serialization: **16.112 s before**,
+  **0.119 s after** (profiling overhead affects absolute times). The generated
+  architecture still analyzes all source files and regenerates `tach.toml`.
+  Pylint's own native R0801 used 35.7 s in the pre-change Pylint profile because
+  it hashed the same files again for each pair. The installed patch caches that
+  native function's result; comparisons and findings still run unchanged.
+
+Verification: `uv sync --locked --group dev` exited 0. Full Quard unittest
+suite: **779 tests, 7 expected skips, exit 0** (Rust requires the existing
+`.quard/cache/cargo/bin` on PATH, with `CARGO_HOME`/`RUSTUP_HOME` in this
+checkout's ignored cache). Final checkout `uv run --locked --group dev python
+check.py --max-diagnostics 0` exited **1** with **19,607 native diagnostics**
+and **zero infrastructure errors**, not a passing static check. The consumer's
+static check exited **0**; its Git tree and Quard submodule stayed clean. The
+temporary 6.4 GB consumer virtual environment has been cleared.
+
+**Next:** 10 seconds was not reached. Production Pylint still takes tens of
+seconds and Pyright alone around 20 seconds in a faster run. Profile those native
+costs separately on the same host before choosing the next change. Retaining
+full coverage across edits may require a persistent/incremental analysis design
+with proven invalidation, not a blanket skip or a weaker Pylint profile. Read
+`README.md`, `PROFILE.md`, `COMPATIBILITY.md` and `AGENTS.md` before changing
+analyzer policy. The consumer's pinned Quard gitlink was not updated: its own
+`quard/check.py` still runs the older version; the post-change measurements used
+the checkout's `check.py --project .` against the consumer clone.
+
+## Suggested skills for the next agent
+
+- `diagnosing-bugs` for a reproducible performance feedback loop and profiling.
+- `codebase-design` if designing a persistent incremental-analysis boundary.
+
+## Earlier handoff: test-suite profiling (historical)
 
 The current migration practices and the one-to-two integration-scenarios-per-
 directory requirement are in `TEST_MIGRATION_RUNBOOK.md`. Sections below record

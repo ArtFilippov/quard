@@ -461,6 +461,13 @@ class TestConfiguredArchitectureDraft(unittest.TestCase):
         self.assertFalse(regenerate(root))
         self.assertEqual(read_json(root / ".quard/architecture.generated.json"), LEGACY_IDENTITY)
 
+    def test_generated_toml_retains_every_boundary(self):
+        root = self.generated_fixture()
+        write_json(root / ".quard/architecture.generated.json", IDENTITY)
+        config, content = render(root)
+        self.assertEqual(tomlkit.loads(content).unwrap(), config,
+                         "Generated TOML lost architecture boundaries")
+
     def multi_package_fixture(self, root: Path) -> Path:
         create_repo(root, ready=False)
         (root / "src/demo/domain/api.py").write_text("")

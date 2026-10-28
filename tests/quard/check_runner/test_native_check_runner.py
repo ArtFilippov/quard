@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from jsonschema import validate
 import tomlkit
+from pylint.checkers import symilar
 
 QUARD = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(QUARD / "src"))
@@ -30,12 +31,55 @@ from quard.check_runner.check_runner import CheckRunner
 from quard.check_runner.native_check_runner import NativeCheckRunner
 from quard.check_runner.runner_utils import binary, installed_versions
 from quard.report_utils import normalize
+from quard.pylint_similarity_utils import install as install_similarity
 from quard.tach_worker_utils import run as native_tach
 from offline_fixtures import create_repo, fake_tools
 from offline_fixture_utils import native_result
 
 
 class TestNativeCheckRunner(unittest.TestCase):
+    def test_pylint_similarity_preserves_native_matches(self):
+        probe = symilar.Symilar(4, ignore_comments=True, ignore_docstrings=True,
+                               ignore_imports=True, ignore_signatures=True)
+        for name, source in (
+            ("first.py", "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n"),
+            ("second.py", "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n"),
+            ("third.py", "z = 3\ny = 4\nx = 5\nw = 6\nv = 7\n"),
+        ):
+            probe.append_stream(str(self.root / name), io.StringIO(source))
+        original = symilar.Symilar._iter_sims
+        expected = list(probe._iter_sims())
+        try:
+            install_similarity()
+            actual = list(probe._iter_sims())
+        finally:
+            symilar.Symilar._iter_sims = original
+        self.assertEqual((bool(expected), actual), (True, expected),
+                         "Native duplicate findings changed or were not exercised")
+
+    def test_pylint_similarity_hashes_each_source_once(self):
+        probe = symilar.Symilar(4)
+        for index in range(5):
+            probe.append_stream(str(self.root / f"{index}.py"), io.StringIO(
+                f"a{index} = 1\nb{index} = 2\nc{index} = 3\nd{index} = 4\ne{index} = 5\n"))
+        original = symilar.Symilar._iter_sims
+        native = symilar.hash_lineset
+        calls: list[symilar.LineSet] = []
+
+        def counted(lineset: symilar.LineSet, minimum: int = 4) -> tuple[
+                symilar.HashToIndex_T, symilar.IndexToLines_T]:
+            calls.append(lineset)
+            return native(lineset, minimum)
+
+        symilar.hash_lineset = counted
+        try:
+            install_similarity()
+            _ = list(probe._iter_sims())
+        finally:
+            symilar.Symilar._iter_sims = original
+            symilar.hash_lineset = native
+        self.assertEqual(len(calls), len(probe.linesets), "Source lines were hashed repeatedly")
+
     def test_pylint_waits_for_folder_evidence(self):
         ready = Event()
         observed = []
