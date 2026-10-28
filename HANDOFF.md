@@ -56,14 +56,57 @@ five findings in the new compatibility module concern its direct access to the
 protected, setter-free Pylint property. Do not report Quard's static check as
 green. `git diff --check` passed. No tbd application or tests were run.
 
-**Next:** A 10-second full check has not been achieved. Profile remaining
-native Pylint AST inference and Pyright startup/analysis on a stable host;
-Pylint still takes tens of seconds, and Pyright alone about 20 seconds on a
-faster run. Flag the protected native API compatibility warnings for separate
-refactoring rather than hiding them. Explore persistent analysis only with
-dependency-aware invalidation and unchanged coverage. Keep Quard and consumer
-histories separate, and do not update a consumer gitlink without a reachable
-tool commit.
+**Next:** A 10-second full check has not been achieved. The user has now
+approved a narrower Pylint policy; see the decision below before continuing
+performance work. Profile remaining Pylint and Pyright time on a stable host.
+Flag the protected native API compatibility warnings for separate refactoring
+rather than hiding them. Explore persistent analysis only with dependency-aware
+invalidation. Keep Quard and consumer histories separate, and do not update a
+consumer gitlink without a reachable tool commit.
+
+## Agreed next policy and optimization scope (not yet implemented)
+
+The priority is Quard's custom checks and strict Pyright, not Pylint style or
+Pylint's general bug-finding rules. The user explicitly approved reducing the
+native Pylint policy and reporting the resulting coverage loss, including
+findings for which Pyright has **no** equivalent. Do not claim unchanged
+diagnostics or that Pyright replaces every removed rule.
+
+- Retain Pylint `W0150` (`lost-exception`) and the argument/method counts:
+  `R0913`, `R0917`, `R0903`, `R0904`. `R0903` is already disabled in the test
+  profile; keep that test-profile exception. Retain fatal `F...` tool failures
+  and ensure source/config/worker failures remain infrastructure errors rather
+  than successful checks. Confirm exact enabled message IDs against pinned
+  Pylint 4.0.8 when implementing the profile.
+- Disable Pylint `R0401` import cycles, `R0801` similarity, import ordering,
+  other style/refactoring rules, and other `E...`/`W...` findings besides
+  `W0150`. Pyright and Quard cover some but not all removed rules. In
+  particular, the user explicitly accepted losing Pylint-only `W0640`,
+  `W1501`, `W1514` and `W1510`. On private `tbd`, Quard clone detection is
+  also off, so disabling `R0801` removes clone coverage there altogether.
+- Change the `encapsulated_only` default to `false` (including projects whose
+  config omits the key); preserve an explicit `true` opt-in. Do not run this job
+  during performance optimization. The disposable `tbd` consumer clone has an
+  explicit `encapsulated_only = true` in `.quard/config.toml`: setting only the
+  Quard default will **not** skip it there. Use a disposable configuration for
+  benchmarks, then check that reports show it as `skipped`, with no worker or
+  manifest. Avoid altering the private consumer's committed history.
+- The native production policy is in `src/quard/policy_utils.py` and the test
+  profile is derived from it by `test_pylint()`; the job defaults are in
+  `src/quard/check_selection_utils.py`. The current Pylint config enables
+  `all` and loads every official extension except `docparams`. Document exact
+  retained/removed coverage in `PROFILE.md`, `COMPATIBILITY.md` and the policy
+  notes. Update policy regressions, verify full Quard tests/check per `AGENTS.md`,
+  and compare static-only `tbd` reports and timings. Never run the `tbd`
+  application or its tests.
+
+Previous `tbd` timings (59.323 s total; Pylint production 48.902 s, tests
+22.405 s; Pyright 22.813 s; encapsulated-only 17.811 s) describe the **old**
+policy and do not predict the speedup from disabling messages. Another profiled
+run spent about 21 s generating architecture before launching jobs; its
+`Contracts.provenance()` repeatedly sorted and searched all modules. After
+the policy change, profile that path and Quard-specific work instead of
+assuming that disabled Pylint messages remove all Astroid inference.
 
 ## Suggested skills
 
