@@ -9,6 +9,8 @@ from importlib import metadata
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event
+import time
 from typing import Any, override, cast
 import unittest
 from unittest.mock import patch
@@ -34,6 +36,30 @@ from offline_fixture_utils import native_result
 
 
 class TestNativeCheckRunner(unittest.TestCase):
+    def test_pylint_waits_for_folder_evidence(self):
+        ready = Event()
+        observed = []
+
+        def execute(job: dict[str, Any]) -> dict[str, Any]:
+            if job["name"] == "contract-folders":
+                time.sleep(0.05)
+                ready.set()
+            else:
+                observed.append(ready.is_set())
+            return {"name": job["name"], "tool": job["name"], "diagnostics": []}
+
+        self.runner.run_jobs([{"name": "pylint-production", "tool": "pylint",
+                               "argv": ["--envelope-evidence"]},
+                              {"name": "contract-folders", "tool": "contract-folders",
+                               "argv": []}], serial=False, execute=execute)
+        self.assertEqual(observed, [True], "Pylint started before the folder proof")
+
+    def test_pylint_runs_when_folder_proof_fails(self):
+        fake, seen = fake_tools({"contract-folders": {"stdout": "broken", "code": 2}})
+        report = self.run_report(fake)
+        self.assertEqual((report["exit_code"], "pylint-production" in seen), (2, True),
+                         "folder failure prevented the independent Pylint job")
+
     def test_tool_checkout_is_a_valid_consumer(self):
         self.assertEqual(project_dir(QUARD), QUARD)
         self.assertEqual(project_dir(self.root), self.root)

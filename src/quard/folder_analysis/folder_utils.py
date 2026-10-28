@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 import re
 
-from quard._common import read_json
+from quard._common import read_json, write_json
 from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER, generated
+from quard.folder_analysis.envelope_evidence_utils import proven
 from quard.policy_utils import gateways, read_scope
 
 SOURCE_ROOT = "src"
@@ -20,7 +21,8 @@ def snake_case(name: str) -> str:
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
 
-def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str | None]:
+def analyze(root: Path, paths: list[str], *, evidence: Path | None = None
+            ) -> tuple[list[dict[str, object]], str | None]:
     from quard.folder_analysis.folder_ownership import FolderOwnership
 
     trees: dict[str, ast.Module] = {}
@@ -61,19 +63,23 @@ def analyze(root: Path, paths: list[str]) -> tuple[list[dict[str, object]], str 
     else:
         ownership = FolderOwnership(trees, gateways(root))
         diagnostics.extend(ownership.folder_violations())
-    diagnostics.extend(ownership.base_violations(frozenset(scope["test_directory_names"])))
+    failures = ownership.base_violations(frozenset(scope["test_directory_names"]))
+    diagnostics.extend(failures)
+    if evidence is not None and error is None:
+        _ = write_json(evidence, proven(ownership, failures), root)
     return diagnostics, error
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check folder ownership of customer contracts and implementations.")
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--evidence", type=Path)
     args = parser.parse_args()
     try:
         paths = json.loads(args.manifest.read_text(encoding="utf-8"))
         if not isinstance(paths, list):
             raise ValueError("Contract folder manifest must be a list of Python paths")
-        diagnostics, error = analyze(Path.cwd(), paths)
+        diagnostics, error = analyze(Path.cwd(), paths, evidence=args.evidence)
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         error = "CONTRACT_FOLDERS_EXECUTION_ERROR"
         diagnostics = [{"rule": error, "message": str(exc), "is_infrastructure_error": True}]

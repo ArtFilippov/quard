@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shlex
 import sys
+from threading import Event
 from typing import Any
 
 from quard._common import QuardError, atomic_write, capture, read_json, tool_dir, write_json
@@ -17,6 +18,10 @@ from quard.clone_engine_utils import (EXPECTED, enabled as clone_engine_enabled,
                                       installed_engine, require_source_pin)
 from quard.check_selection_utils import architecture_defaults
 from quard.duplication_utils import read_duplication_min_units
+
+PYLINT_PRODUCTION = "pylint-production"
+CONTRACT_FOLDERS = "contract-folders"
+ENVELOPE_EVIDENCE = "--envelope-evidence"
 
 
 def inactive_job(name: str, status: str, error: str | None = None) -> dict[str, Any]:
@@ -32,6 +37,49 @@ def inactive_job(name: str, status: str, error: str | None = None) -> dict[str, 
     """
     return {"name": name, "tool": name, "status": status, "exit_code": None,
             "duration_seconds": 0, "error": error, "raw_output": {}}
+
+
+def envelope_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Schedule folder proof before Pylint, retaining standalone Pylint behavior.
+
+    Args:
+        jobs (list[dict[str, Any]]): Selected native analyzer jobs.
+
+    Returns:
+        list[dict[str, Any]]: Jobs in dependency order.
+    """
+    folder = next((job for job in jobs if job["name"] == CONTRACT_FOLDERS), None)
+    pylint = next((job for job in jobs if job["name"] == PYLINT_PRODUCTION
+                   and ENVELOPE_EVIDENCE in job["argv"]), None)
+    if pylint is None:
+        return jobs
+    if folder is None:
+        argv = pylint["argv"]
+        argv.pop(argv.index(ENVELOPE_EVIDENCE) + 1)
+        argv.remove(ENVELOPE_EVIDENCE)
+        return jobs
+    return [folder, pylint, *(job for job in jobs if job is not folder and job is not pylint)]
+
+
+def dependent_job(job: dict[str, Any], execute: Callable[[dict[str, Any]], dict[str, Any]],
+                  ready: Event) -> dict[str, Any]:
+    """Run Pylint after its evidence is ready, even if the folder job fails.
+
+    Args:
+        job (dict[str, Any]): Current analyzer job.
+        execute (Callable[[dict[str, Any]], dict[str, Any]]): Native job execution.
+        ready (Event): Folder job completion signal.
+
+    Returns:
+        dict[str, Any]: Native job result.
+    """
+    if job["name"] == PYLINT_PRODUCTION and ENVELOPE_EVIDENCE in job["argv"]:
+        _ = ready.wait()
+    try:
+        return execute(job)
+    finally:
+        if job["name"] == CONTRACT_FOLDERS:
+            ready.set()
 
 
 def installed_versions(root: Path) -> tuple[dict[str, str | None], list[dict[str, Any]]]:
@@ -128,6 +176,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     jobs: list[dict[str, Any]] = []
     enabled = architecture_defaults(root) if checks is None else checks
+    evidence = run_dir / "envelope-evidence.json"
 
     def add_worker(key: str, name: str, scope: object) -> None:
         if not enabled[key]:
@@ -154,6 +203,7 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
             envelopes = run_dir / "pylint-envelope-files.json"
             write_json(envelopes, files["production"], root)
             argv.extend(["--envelopes-manifest", str(envelopes)])
+            argv.extend([ENVELOPE_EVIDENCE, str(evidence)])
         jobs.append({"name": f"pylint-{profile}", "tool": "pylint", "profile": profile,
                      "argv": argv, "json_file": output})
     source_files = select_lcom_files(files, None) if lcom_files is None else lcom_files
@@ -207,6 +257,8 @@ def make_jobs(root: Path, run_dir: Path, files: dict[str, list[str]], architectu
         jobs.append({"name": "dependency-types", "tool": "dependency-types", "argv": [sys.executable,
                      str(tool_dir() / "_dependency_types_worker.py"), "--manifest", str(manifest)]})
     add_worker("contract_folders", "contract-folders", full_scope)
+    if enabled["contract_folders"]:
+        jobs[-1]["argv"].extend(["--evidence", str(evidence)])
     add_worker("test_placement", "test-placement", {
         "production": files["production"], "tests": files["tests"],
         "test_directory_names": test_directory_names or ["tests"]})

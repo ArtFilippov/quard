@@ -11,7 +11,7 @@ from quard.folder_analysis.folder_analysis import FolderAnalysis
 from quard.folder_analysis.generated_external_contracts import GeneratedOwnership
 from quard.folder_analysis.generated_facades_utils import facade_evidence
 from quard.folder_analysis.generated_reference_utils import (
-    concrete_imports, concrete_references, other_declarations,
+    concrete_imports, concrete_modules, concrete_references, other_declarations,
 )
 
 SOURCE_ROOT = "src"
@@ -213,13 +213,14 @@ def analyze(trees: dict[str, ast.Module], ownership: GeneratedOwnership) -> list
     results.extend(facade_evidence(trees, ownership)[1])
     sources = {module_name(path): path for path in sorted(trees)
                if Path(path).parts[0] == SOURCE_ROOT}
+    modules = concrete_modules(trees, ownership)
     for path, tree in sorted(trees.items()):
         if Path(path).parts[0] != SOURCE_ROOT:
             continue
         declared = declarations.get(path, [])
         results.extend(_bootstrap_imports(path, tree, sources))
         results.extend(_value_imports(path, tree, ownership))
-        results.extend(concrete_imports(path, tree, trees, ownership))
+        results.extend(concrete_imports(path, tree, ownership, modules))
         results.extend(concrete_references(path, tree, ownership))
         for value in ownership.value_evidence.get(path, []):
             if value.declaration is None:
