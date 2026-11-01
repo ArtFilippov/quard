@@ -139,9 +139,12 @@ other modules require local contract types. Own types and `Self` are allowed;
 references that cannot be resolved receive separate diagnostics.
 Generated version-2 folder analysis also proves roles from local Protocol and
 abstract-interface declarations: a directory may own multiple contracts and an
-implementation may inherit several of its own group's contracts. An implementation
-using contracts from another directory must directly inherit a combined contract
-declared in its own group that covers those contracts. Mixed contract/concrete
+implementation may inherit several contracts declared in its own directory or any
+enclosing directory, even across intervening directories with other contracts.
+An implementation using contracts from sibling or unrelated branches must directly
+inherit a combined contract declared in its own directory or an enclosing directory
+that covers those foreign contracts. The combined contract owns implementations only
+within its subtree. Mixed contract/concrete
 modules, conflicting source/stub class roles and unresolved local bases receive
 positioned violations. Reviewed configurations keep their existing folder rules.
 Exact external types explicitly inherited by a local class, including generic
@@ -648,9 +651,11 @@ The independent outer-class rule checks every discovered production and test `.p
 `.pyi` file, even when LCOM4 is narrowed or skipped. A file may declare at most one
 class outside another class; function-local classes count as outer classes.
 The contract-folder job checks local Protocol and abstract-interface declarations and
-their implementations across the same scope, including companion stubs. A contract
-named `HTTPPort` belongs in `http_port/http_port.py` (or `.pyi`); implementations
-belong in that folder or its nested folders. See [PROFILE.md](PROFILE.md#tools-and-scope).
+their implementations across the same scope, including companion stubs. In reviewed
+and generated-v1 projects, a contract named `HTTPPort` belongs in
+`http_port/http_port.py` (or `.pyi`); implementations belong in that folder or its
+nested folders. Generated v2 uses enclosing declaration directories instead; tests
+still mirror the exact production directory. See [PROFILE.md](PROFILE.md#tools-and-scope).
 In reviewed and both generated architecture versions, a base Envelope anywhere in an
 `envelopes/` subtree must inherit one proven contract, store one constructor delegate
 with either no other work or one preceding zero-argument `super().__init__()`,

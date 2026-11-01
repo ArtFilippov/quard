@@ -70,7 +70,8 @@ def _foreign_contracts(ownership: FolderAnalysis, name: str, node: ast.ClassDef,
         parent = ownership.resolved(name, base, source)
         ancestor = ownership.node_for(parent)
         if parent is not None and ancestor is not None:
-            if ownership.is_contract(parent) and Path(ownership.path_for(parent)).parent != group:
+            if ownership.is_contract(parent) and not group.is_relative_to(
+                    Path(ownership.path_for(parent)).parent):
                 foreign.add(parent)
             inherited, unknown = _foreign_contracts(ownership, parent, ancestor,
                                                      ownership.path_for(parent), group,
@@ -93,7 +94,7 @@ def _implementation(path: str, name: str, node: ast.ClassDef,
                         "message": f"{name}: resolve local bases before verifying group ownership."})
     direct = [ownership.resolved(name, base, path) for base in node.bases]
     local = [item for item in direct if item is not None and ownership.is_contract(item)
-             and Path(ownership.path_for(item)).parent == Path(path).parent]
+             and Path(path).parent.is_relative_to(Path(ownership.path_for(item)).parent)]
     covered: set[str] = set()
     for item in local:
         covered.update(ownership.contract_ancestors(item))

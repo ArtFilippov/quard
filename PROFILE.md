@@ -398,6 +398,17 @@ violations baseline.
   resolves aliases and imports through the class-contract index, and prefers source
   ancestry when a companion stub exists. Parse and worker failures are infrastructure
   errors; all structural violations retain one-based class positions.
+* **Generated version-2 contract folders**: a concrete class may directly inherit
+   a contract declared in its own directory or any enclosing production directory,
+   regardless of intermediate folders or their other contract declarations. Contracts
+   from sibling or unrelated branches require a directly inherited combined contract
+   declared in an enclosing directory that covers those foreign contracts. That
+   combined contract owns implementations only in its directory and descendants;
+   a direct sibling contract or a combined contract used outside its subtree receives
+   `CROSS_GROUP_CONTRACT`. Source and companion stubs are checked separately;
+   unresolved local ancestry retains `UNRESOLVED_GROUP_OWNER`. Ordinary subfolders
+   do not acquire `main/` or `envelopes/` assembly privileges. Reviewed and generated
+   version-1 folder placement remains as described above.
 * **Test placement**: every discovered test class (including in companion stubs and
   configured test directories inside `src/`) is named `Test<Class>` in
   `test_<class>.py` or `.pyi`, with `<class>` converted to snake_case. It maps to
