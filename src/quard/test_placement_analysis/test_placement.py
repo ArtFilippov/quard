@@ -18,13 +18,15 @@ class TestPlacement(TestPlacementAnalysis):
     """Check test names and mirrored locations against discovered production declarations."""
 
     def __init__(self, trees: dict[str, ast.Module], production: set[str], tests: set[str],
-                 test_directories: set[str], gateways: frozenset[str] = EMPTY_MODULES):
+                 test_directories: set[str], gateways: frozenset[str] = EMPTY_MODULES,
+                 *, generated_v2: bool = False):
         super().__init__()
         self.folders = FolderOwnership(trees, gateways)
         self.trees = trees
         self.production = production
         self.tests = tests
         self.test_directories = test_directories
+        self.generated_v2 = generated_v2
         self.targets: dict[str, dict[str, str]] = {}
         for name, node, path in self.folders.all_declarations():
             if path not in production:
@@ -95,10 +97,13 @@ class TestPlacement(TestPlacementAnalysis):
                 continue
             target, _ = local[0]
             owners, unknown = self.folders.owners(target)
-            if not self.folders.is_contract(target) and (unknown or len(owners) != 1 or any(
+            if not self.folders.is_contract(target) and (unknown or not owners or
+                    (not self.generated_v2 and len(owners) != 1) or any(
                     self.folders.path_for(owner) not in self.production for owner in owners)):
                 results.append({**location, "rule": "TEST_TARGET_CONTRACT", "message":
-                                f"{name}: production class {target} needs one resolvable local contract."})
+                                f"{name}: production class {target} needs "
+                                + ("a resolvable production contract." if self.generated_v2 else
+                                   "one resolvable local contract.")})
         return results
 
 

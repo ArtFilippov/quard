@@ -688,7 +688,10 @@ Turning off `contract_folders` restores both native rules for Envelopes. See
 The independent test-placement job maps `TestHTTPPort` in
 `tests/pkg/http_port/test_http_port.py` to the production `HTTPPort` declaration
 in `src/pkg/http_port/`. The same mirrored layout applies to implementations
-and envelopes; top-level `test_*` functions are violations.
+and envelopes; generated-v2 targets may inherit multiple resolved production
+contracts, including contracts in their own and enclosing directories. Reviewed
+and generated-v1 targets retain the single-owner rule. Top-level `test_*`
+functions are violations.
 The independent free-function-placement job checks discovered production and test
 `.py` and `.pyi` files. Free synchronous and asynchronous functions belong in
 class-free `<group_name>_utils.py` modules (or companion stubs); related functions

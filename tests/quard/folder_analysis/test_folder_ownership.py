@@ -370,6 +370,23 @@ class TestFolderOwnership(unittest.TestCase):
         self.assertTrue(all(d["line"] > 0 and d["column"] > 0 and
                             not d["is_infrastructure_error"] for d in result["diagnostics"]))
 
+    def test_reviewed_direct_contracts_keep_competing_owner_and_test_diagnostic(self):
+        self.put("src/pkg/first/first.py", "from typing import Protocol\n"
+                 "class First(Protocol): pass\n")
+        self.put("src/pkg/second/second.py", "from typing import Protocol\n"
+                 "class Second(Protocol): pass\n")
+        self.put("src/pkg/first/double.py", "from pkg.first.first import First\n"
+                 "from pkg.second.second import Second\n"
+                 "class Double(First, Second): pass\n")
+        self.put("tests/pkg/first/test_double.py", "class TestDouble: pass\n")
+        folders, _ = self.run_worker()
+        placement, _ = self.run_worker("test-placement")
+        self.assertEqual(({(item["path"], item["rule"]) for item in folders["diagnostics"]},
+                          {(item["path"], item["rule"]) for item in placement["diagnostics"]}),
+                         ({("src/pkg/first/double.py", "COMPETING_LOCAL_BASES")},
+                          {("tests/pkg/first/test_double.py", "TEST_TARGET_CONTRACT")}),
+                         "Reviewed multiple contracts lost their competing-owner diagnostics")
+
     def test_source_stub_pairs_and_existing_contract_diagnostics_unchanged(self):
         self.put("src/pkg/service_port/service_port.py", "from typing import Protocol\n"
                  "class ServicePort(Protocol):\n    def serve(self): ...\n")

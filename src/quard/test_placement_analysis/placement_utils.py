@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import cast
 
+from quard._common import read_json
+from quard.architecture_draft.generated_selection_utils import IDENTITY, MARKER, generated
 from quard.policy_utils import gateways
 
 
@@ -45,7 +47,8 @@ def analyze(root: Path, production: list[str], tests: list[str],
                                 "column": getattr(exc, "offset", None), "message": str(exc),
                                 "is_infrastructure_error": True})
     placement = TestPlacement(trees, set(production), set(tests), set(test_directories),
-                              gateways(root))
+                              gateways(root), generated_v2=(generated(root) and
+                                                             read_json(root / MARKER) == IDENTITY))
     diagnostics.extend(placement.violations())
     return diagnostics, error
 

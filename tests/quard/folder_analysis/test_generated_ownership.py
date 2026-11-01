@@ -16,7 +16,7 @@ sys.path.insert(0, str(QUARD / "tests"))
 
 from offline_fixtures import CATALOG, create_repo
 from quard._common import write_json
-from quard.architecture_draft.generated_selection_utils import IDENTITY
+from quard.architecture_draft.generated_selection_utils import IDENTITY, LEGACY_IDENTITY
 from quard.check_runner import native_check_runner
 from quard.policy_utils import configure
 
@@ -127,3 +127,91 @@ class TestGeneratedOwnership(unittest.TestCase):
                  ("src/demo/records/deep/ordinary.py", "CONCRETE_IMPLEMENTATION_IMPORT", 1, 1),
                  ("tests/demo/records/deep/test_leaf.py", "TEST_CLASS_PLACEMENT", 1, 1)},
                 "A foreign contract, stub, ordinary import or misplaced test passed")
+
+    def test_multiple_enclosing_and_same_directory_contracts_have_mirrored_tests(self) -> None:
+        with self.consumer() as root:
+            self.put(root, "src/demo/records/deep/other.py",
+                     "from typing import Protocol\nclass Other(Protocol): pass\n")
+            self.put(root, "src/demo/records/deep/another.py",
+                     "from typing import Protocol\nclass Another(Protocol): pass\n")
+            self.put(root, "src/demo/records/deep/same.py",
+                     "from demo.records.deep.other import Other\n"
+                     "from demo.records.deep.another import Another\n"
+                     "class Same(Other, Another): pass\n")
+            self.put(root, "src/demo/records/deep/branch/leaf/local.py",
+                     "from typing import Protocol\nclass Local(Protocol): pass\n")
+            self.put(root, "src/demo/records/deep/branch/leaf/leaf.py",
+                     "from demo.records.service import Service\n"
+                     "from demo.records.deep.other import Other\n"
+                     "from demo.records.deep.branch.leaf.local import Local\n"
+                     "class Leaf(Service, Other, Local): pass\n")
+            self.put(root, "tests/demo/records/deep/test_same.py", "class TestSame: pass\n")
+            self.put(root, "tests/demo/records/deep/branch/leaf/test_leaf.py",
+                     "class TestLeaf: pass\n")
+            report = self.report(root)
+            self.assertEqual((report["exit_code"],
+                              {job["name"]: job["status"] for job in report["tools"]
+                               if job["name"] in {"contract-folders", "test-placement"}}),
+                             (0, {"contract-folders": "passed", "test-placement": "passed"}),
+                             "Multiple local contracts did not allow mirrored targets")
+
+    def test_foreign_sibling_stubs_and_invalid_test_targets_remain_diagnostic(self) -> None:
+        with self.consumer() as root:
+            self.put(root, "src/demo/sibling/foreign.py",
+                     "from typing import Protocol\nclass Foreign(Protocol): pass\n")
+            self.put(root, "src/demo/records/deep/branch/implementation.py",
+                     "from demo.records.service import Service\n"
+                     "from demo.sibling.foreign import Foreign\n"
+                     "class Implementation(Service, Foreign): pass\n")
+            self.put(root, "src/demo/records/deep/branch/implementation.pyi",
+                     "from demo.records.service import Service\n"
+                     "from demo.sibling.foreign import Foreign\n"
+                     "class Implementation(Service, Foreign): ...\n")
+            self.put(root, "src/demo/records/deep/branch/unknown.py",
+                     "from demo.records.service import Service\n"
+                     "class Unknown(Service, Ghost): pass\n")
+            self.put(root, "src/demo/records/deep/branch/loose.py",
+                     "class Loose(object): pass\n")
+            self.put(root, "tests/demo/records/deep/test_implementation.py",
+                     "class TestImplementation: pass\n")
+            self.put(root, "tests/demo/records/deep/branch/test_unknown.py",
+                     "class TestUnknown: pass\n")
+            self.put(root, "tests/demo/records/deep/branch/test_loose.py",
+                     "class TestLoose: pass\n")
+            report = self.report(root)
+            self.assertEqual({(item["path"], item["rule"]) for item in report["diagnostics"]},
+                             {("src/demo/records/deep/branch/implementation.py",
+                               "CROSS_GROUP_CONTRACT"),
+                              ("src/demo/records/deep/branch/implementation.pyi",
+                               "CROSS_GROUP_CONTRACT"),
+                              ("src/demo/records/deep/branch/unknown.py",
+                               "UNRESOLVED_GROUP_OWNER"),
+                              ("src/demo/records/deep/branch/unknown.py",
+                               "UNRESOLVED_EXTERNAL_CONTRACT"),
+                              ("tests/demo/records/deep/test_implementation.py",
+                               "TEST_CLASS_PLACEMENT"),
+                              ("tests/demo/records/deep/branch/test_unknown.py",
+                               "TEST_TARGET_CONTRACT"),
+                              ("tests/demo/records/deep/branch/test_loose.py",
+                               "TEST_TARGET_CONTRACT")},
+                             "Foreign contracts or invalid test targets passed")
+
+    def test_generated_v1_keeps_competing_bases_and_single_test_owner(self) -> None:
+        with self.consumer() as root:
+            write_json(root / ".quard/architecture.generated.json", LEGACY_IDENTITY)
+            self.put(root, "src/demo/first/first.py",
+                     "from typing import Protocol\nclass First(Protocol): pass\n")
+            self.put(root, "src/demo/second/second.py",
+                     "from typing import Protocol\nclass Second(Protocol): pass\n")
+            self.put(root, "src/demo/first/double.py",
+                     "from demo.first.first import First\n"
+                     "from demo.second.second import Second\n"
+                     "class Double(First, Second): pass\n")
+            self.put(root, "tests/demo/first/test_double.py", "class TestDouble: pass\n")
+            report = self.report(root)
+            self.assertEqual({(item["path"], item["rule"]) for item in report["diagnostics"]
+                             if item["path"] in {"src/demo/first/double.py",
+                                                 "tests/demo/first/test_double.py"}},
+                             {("src/demo/first/double.py", "COMPETING_LOCAL_BASES"),
+                              ("tests/demo/first/test_double.py", "TEST_TARGET_CONTRACT")},
+                             "Generated v1 accepted competing bases or their test target")

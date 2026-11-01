@@ -415,9 +415,12 @@ violations baseline.
   exactly one discovered production `<Class>` declaration in the mirrored directory
   under `src/`; source/stub companions count as one target. Thus tests of contracts,
   implementations and envelopes mirror their production package, contract folder,
-  and envelope folder. The target must be a local contract or inherit one resolved
-  production contract. Test classes may inherit an external framework base without
-  declaring another contract solely for that base. Missing, ambiguous, misnamed,
+  and envelope folder. Reviewed and generated-v1 targets must be local contracts
+  or inherit one resolved production contract. Generated-v2 targets may inherit
+  multiple resolved production contracts, including same-directory and enclosing
+  contracts; unresolved or contractless targets still fail. Test classes may inherit
+  an external framework base without declaring another contract solely for that base.
+  Missing, ambiguous, misnamed,
   misplaced or contractless targets produce one-based class diagnostics. Top-level
   sync and async `test_*` functions in discovered test files are violations;
   methods and ordinary helper functions are allowed. This independent job retains
