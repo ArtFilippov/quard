@@ -1,6 +1,6 @@
 [project]
 name = "quard"
-version = "1.7.0"
+version = "1.8.0"
 description = "Pinned native Python analysis for uv/src projects"
 requires-python = ">=3.12"
 license = "MIT"
